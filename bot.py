@@ -81,27 +81,56 @@ cancelled_chats: set[int] = set()
 active_scrapes: dict[int, bool] = {}
 
 
-def cancel_scrape_for_chat(chat_id: int):
+def cancel_scrape_for_chat(chat_id: int | str):
     """Mark active scraping as cancelled for the given chat."""
-    cancelled_chats.add(chat_id)
-    active_scrapes[chat_id] = False
+    try:
+        cid = int(chat_id)
+        cancelled_chats.add(cid)
+        active_scrapes[cid] = False
+        logger.info(f"🛑 [CANCELLATION] Cancel flag registered for chat {cid}")
+    except Exception as e:
+        logger.error(f"Error setting cancel flag for {chat_id}: {e}")
 
 
-def is_scrape_cancelled(chat_id: int) -> bool:
+def is_scrape_cancelled(chat_id: int | str) -> bool:
     """Check if cancellation has been requested for this chat."""
-    return chat_id in cancelled_chats
+    try:
+        return int(chat_id) in cancelled_chats
+    except Exception:
+        return False
 
 
-def start_scrape_for_chat(chat_id: int):
+def start_scrape_for_chat(chat_id: int | str):
     """Register a scrape run for this chat."""
-    cancelled_chats.discard(chat_id)
-    active_scrapes[chat_id] = True
+    try:
+        cid = int(chat_id)
+        cancelled_chats.discard(cid)
+        active_scrapes[cid] = True
+        logger.info(f"🚀 [SCRAPE_START] Registered new active scrape for chat {cid}")
+    except Exception as e:
+        logger.error(f"Error starting scrape for {chat_id}: {e}")
 
 
-def end_scrape_for_chat(chat_id: int):
+def end_scrape_for_chat(chat_id: int | str):
     """Clean up scrape state when finished or aborted."""
-    cancelled_chats.discard(chat_id)
-    active_scrapes[chat_id] = False
+    try:
+        cid = int(chat_id)
+        cancelled_chats.discard(cid)
+        active_scrapes[cid] = False
+        logger.info(f"🏁 [SCRAPE_END] Cleaned up scrape state for chat {cid}")
+    except Exception as e:
+        logger.error(f"Error ending scrape for {chat_id}: {e}")
+
+
+async def cancellable_sleep(duration: float, chat_id: int | str, step: float = 0.2):
+    """Sleep for duration seconds while checking for cancellation every step seconds."""
+    elapsed = 0.0
+    while elapsed < duration:
+        if is_scrape_cancelled(chat_id):
+            return
+        sleep_time = min(step, duration - elapsed)
+        await asyncio.sleep(sleep_time)
+        elapsed += sleep_time
 
 
 # --- UI & Formatters ---
@@ -506,7 +535,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Immediately stop any active topic, model, or category scraping in this chat."""
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id if chat else None
+    if not chat_id:
+        return
+
+    logger.info(f"🛑 [/stop] Stop requested by user in chat {chat_id}")
     cancel_scrape_for_chat(chat_id)
     await update.effective_message.reply_text(
         "🛑 <b>Scraping stopped.</b>\n\n"
@@ -613,7 +647,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     break
                 await process_livecam_scrape(context.bot, chat_id, v)
-                await asyncio.sleep(POST_SEND_DELAY)
+                if is_scrape_cancelled(chat_id):
+                    break
+                await cancellable_sleep(POST_SEND_DELAY, chat_id)
         finally:
             end_scrape_for_chat(chat_id)
 
@@ -699,7 +735,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 break
             await process_topic_scrape(context.bot, chat_id, t["url"], user_id=user_id)
-            await asyncio.sleep(POST_SEND_DELAY)
+            if is_scrape_cancelled(chat_id):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, chat_id)
     finally:
         end_scrape_for_chat(chat_id)
 
@@ -1081,7 +1119,9 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                     )
                     break
                 await process_livecam_scrape(context.bot, chat_id, v)
-                await asyncio.sleep(POST_SEND_DELAY)
+                if is_scrape_cancelled(chat_id):
+                    break
+                await cancellable_sleep(POST_SEND_DELAY, chat_id)
         except Exception as e:
             await status.edit_text(f"❌ Error: {html.escape(str(e))}")
         finally:
@@ -1136,7 +1176,9 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                     )
                     break
                 await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
-                await asyncio.sleep(POST_SEND_DELAY)
+                if is_scrape_cancelled(chat_id):
+                    break
+                await cancellable_sleep(POST_SEND_DELAY, chat_id)
         except Exception as e:
             await status.edit_text(f"❌ Error: {html.escape(str(e))}")
         finally:
@@ -1153,11 +1195,17 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Filter and handle plain text messages containing links."""
+    """Filter and handle plain text messages containing links or control keywords."""
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
     logger.info(f"📩 [handle_message] Received text from Chat {update.effective_chat.id} (User: {update.effective_user.id if update.effective_user else None}): {text!r}")
+
+    # Allow users to stop simply by typing 'stop' or 'cancel' without slash
+    if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+        await stop_command(update, context)
+        return
+
     if text.startswith("http://") or text.startswith("https://") or "dropmms.com" in text or "livecamrips.to" in text:
         await handle_raw_url(update, context, text)
 
@@ -1292,7 +1340,7 @@ def main():
         sys.exit(1)
 
     print(f"🤖 Initializing {BOT_NAME} v{BOT_VERSION}...")
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).post_init(post_init).build()
 
     # Commands
     app.add_handler(CommandHandler("start", start_command))

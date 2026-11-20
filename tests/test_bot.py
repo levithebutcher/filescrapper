@@ -58,10 +58,14 @@ class TestBot(unittest.TestCase):
     def test_user_host_preference_db(self):
         """Test setting and getting user host preference in db."""
         test_uid = int(uuid.uuid4().int % 1000000000)
-        # Default should be vidara
+        # Default should be streamtape
+        self.assertEqual(db.get_user_host_preference(test_uid), "streamtape")
+
+        # Update to vidara
+        db.set_user_host_preference(test_uid, "vidara")
         self.assertEqual(db.get_user_host_preference(test_uid), "vidara")
 
-        # Update to streamtape
+        # Update back to streamtape
         db.set_user_host_preference(test_uid, "streamtape")
         self.assertEqual(db.get_user_host_preference(test_uid), "streamtape")
 
@@ -116,8 +120,25 @@ class TestBot(unittest.TestCase):
         cancel_scrape_for_chat(test_chat)
         self.assertTrue(is_scrape_cancelled(test_chat))
 
+        # String chat_id should also work
+        self.assertTrue(is_scrape_cancelled(str(test_chat)))
+
         end_scrape_for_chat(test_chat)
         self.assertFalse(is_scrape_cancelled(test_chat))
+
+    def test_cancellable_sleep(self):
+        """Test cancellable_sleep exits early when scrape is cancelled."""
+        import asyncio
+        import time
+        from bot import cancellable_sleep, start_scrape_for_chat, cancel_scrape_for_chat
+        test_chat = 55443322
+        start_scrape_for_chat(test_chat)
+        cancel_scrape_for_chat(test_chat)
+
+        t0 = time.time()
+        asyncio.run(cancellable_sleep(5.0, test_chat, step=0.1))
+        t1 = time.time()
+        self.assertLess(t1 - t0, 0.5)
 
     def test_group_links_by_host_priority_order(self):
         """Test that group_links_by_host orders providers strictly by PROVIDER_PRIORITY."""

@@ -73,16 +73,18 @@ def init_db():
             """
         )
 
-        # 5. User Host Preferences (e.g. vidara, streamtape, all)
+        # 5. User Host Preferences (e.g. streamtape, vidara, all - Default: streamtape)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_id INTEGER PRIMARY KEY,
-                preferred_host TEXT DEFAULT 'vidara',
+                preferred_host TEXT DEFAULT 'streamtape',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Auto-migrate any existing rows with legacy default 'vidara' to 'streamtape'
+        cursor.execute("UPDATE user_preferences SET preferred_host = 'streamtape' WHERE preferred_host = 'vidara'")
 
         conn.commit()
         logger.info("✅ Database initialized successfully at %s", DB_PATH)
@@ -246,18 +248,18 @@ def get_url_from_short_id(short_id: int) -> str | None:
 
 def get_user_host_preference(user_id: int) -> str:
     """
-    Get user's preferred streaming host (default: 'vidara').
-    Possible values: 'vidara', 'streamtape', 'streamfiles', 'doodstream', 'streamwish', 'lplaygo', 'all'
+    Get user's preferred streaming host (default: 'streamtape').
+    Possible values: 'streamtape', 'vidara', 'streamfiles', 'iplaygo', 'abstream', 'uqload', 'doodstream', 'streamwish', 'all'
     """
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT preferred_host FROM user_preferences WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            return row["preferred_host"] if row and row["preferred_host"] else "vidara"
+            return row["preferred_host"] if row and row["preferred_host"] else "streamtape"
     except Exception as e:
         logger.error(f"Error fetching user preference for {user_id}: {e}")
-        return "vidara"
+        return "streamtape"
 
 
 def set_user_host_preference(user_id: int, host: str) -> bool:
