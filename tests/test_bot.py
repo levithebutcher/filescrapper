@@ -119,6 +119,22 @@ class TestBot(unittest.TestCase):
         end_scrape_for_chat(test_chat)
         self.assertFalse(is_scrape_cancelled(test_chat))
 
+    def test_group_links_by_host_priority_order(self):
+        """Test that group_links_by_host orders providers strictly by PROVIDER_PRIORITY."""
+        links = [
+            "https://doodstream.com/d/dood1",
+            "https://streamfiles.net/sf1",
+            "https://vidara.to/v/vid1",
+            "https://streamtape.com/e/tape1",
+        ]
+        grouped = group_links_by_host(links)
+        badges = list(grouped.keys())
+        # First must be Streamtape, then Vidara, then Streamfiles, then Doodstream
+        self.assertEqual(badges[0], "🎬 Streamtape")
+        self.assertEqual(badges[1], "⚡ Vidara")
+        self.assertEqual(badges[2], "📥 Streamfiles")
+        self.assertEqual(badges[3], "🎥 Doodstream")
+
 
 if __name__ == "__main__":
     unittest.main()

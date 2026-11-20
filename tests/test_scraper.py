@@ -397,6 +397,127 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(topics[0]["title"], "Subforum Video 1")
         self.assertEqual(topics[0]["url"], "https://dropmms.com/topic/501-sub-video/")
 
+    def test_provider_priority_and_fallback(self):
+        """Test that PROVIDER_PRIORITY strictly picks Streamtape -> Vidara -> Streamfiles -> iPlayGo."""
+        from scraper import filter_links_by_preference, PROVIDER_PRIORITY
+
+        self.assertEqual(PROVIDER_PRIORITY[0], "streamtape")
+        self.assertEqual(PROVIDER_PRIORITY[1], "vidara")
+        self.assertEqual(PROVIDER_PRIORITY[2], "streamfiles")
+        self.assertEqual(PROVIDER_PRIORITY[3], "iplaygo")
+
+        # When streamtape and vidara are both present and user has no special pref (default streamtape)
+        links = [
+            "https://vidara.to/v/vid123",
+            "https://streamtape.com/e/tape123",
+            "https://streamfiles.net/sf123",
+        ]
+        badge, filtered, is_fallback = filter_links_by_preference(links, preferred_host="streamtape")
+        self.assertEqual(badge, "🎬 Streamtape")
+        self.assertEqual(filtered, ["https://streamtape.com/e/tape123"])
+        self.assertFalse(is_fallback)
+
+        # Smart fallback: preferred host (streamtape) is missing; should fall back to next priority (vidara)
+        links_no_tape = [
+            "https://streamfiles.net/sf123",
+            "https://vidara.to/v/vid123",
+            "https://doodstream.com/d/dood123",
+        ]
+        badge, filtered, is_fallback = filter_links_by_preference(links_no_tape, preferred_host="streamtape")
+        self.assertEqual(badge, "⚡ Vidara")
+        self.assertEqual(filtered, ["https://vidara.to/v/vid123"])
+        self.assertTrue(is_fallback)
+
+        # Fallback to streamfiles when streamtape and vidara are missing
+        links_only_sf = [
+            "https://doodstream.com/d/dood123",
+            "https://streamfiles.net/sf123",
+        ]
+        badge, filtered, is_fallback = filter_links_by_preference(links_only_sf, preferred_host="streamtape")
+        self.assertEqual(badge, "📥 Streamfiles")
+        self.assertEqual(filtered, ["https://streamfiles.net/sf123"])
+        self.assertTrue(is_fallback)
+
+    def test_slicing_and_ranges(self):
+        """Test parse_slicing_args and apply_slice for count, range, and last-N."""
+        from scraper import parse_slicing_args, apply_slice
+
+        # 1. Single count: 4
+        url, start, end, is_last = parse_slicing_args(["4"])
+        self.assertIsNone(url)
+        self.assertEqual((start, end, is_last), (1, 4, False))
+
+        # 2. Range: 1-5
+        url, start, end, is_last = parse_slicing_args(["1-5"])
+        self.assertIsNone(url)
+        self.assertEqual((start, end, is_last), (1, 5, False))
+
+        # 3. Range with words: 1 to 5
+        url, start, end, is_last = parse_slicing_args(["1", "to", "5"])
+        self.assertEqual((start, end, is_last), (1, 5, False))
+
+        # 4. Last 5
+        url, start, end, is_last = parse_slicing_args(["last", "5"])
+        self.assertEqual((start, end, is_last), (None, 5, True))
+
+        # 5. URL with count
+        url, start, end, is_last = parse_slicing_args(["https://dropmms.com/forum/2-general/", "4"])
+        self.assertEqual(url, "https://dropmms.com/forum/2-general/")
+        self.assertEqual((start, end, is_last), (1, 4, False))
+
+        # 6. Apply slice tests
+        items = list(range(1, 11))  # 1 to 10
+        self.assertEqual(apply_slice(items, 1, 4, False), [1, 2, 3, 4])
+        self.assertEqual(apply_slice(items, 1, 5, False), [1, 2, 3, 4, 5])
+        self.assertEqual(apply_slice(items, 6, 10, False), [6, 7, 8, 9, 10])
+        self.assertEqual(apply_slice(items, None, 5, True), [6, 7, 8, 9, 10])
+        self.assertEqual(apply_slice(items, None, 15, True), items)
+
+    def test_livecamrips_helpers(self):
+        """Test LiveCamRips URL detection, title cleaning, and card formatting."""
+        from scraper import (
+            is_livecam_url,
+            is_livecam_video_url,
+            is_livecam_model_url,
+            clean_livecam_title,
+            format_livecam_card,
+        )
+
+        model_url = "https://livecamrips.to/model/36773/GoddessAnna?sort=newest"
+        video_url = "https://livecamrips.to/video/16877744"
+
+        self.assertTrue(is_livecam_url(model_url))
+        self.assertTrue(is_livecam_url(video_url))
+        self.assertTrue(is_livecam_model_url(model_url))
+        self.assertFalse(is_livecam_model_url(video_url))
+        self.assertTrue(is_livecam_video_url(video_url))
+        self.assertFalse(is_livecam_video_url(model_url))
+
+        # Title cleaning: strip "Stripchat Recording", "Stripchat", "Recording"
+        self.assertEqual(clean_livecam_title("GoddessAnna - Stripchat Recording"), "GoddessAnna")
+        self.assertEqual(clean_livecam_title("GoddessAnna — Stripchat Recording"), "GoddessAnna")
+        self.assertEqual(clean_livecam_title("GoddessAnna - Stripchat - 2026-11-19 00:19"), "GoddessAnna")
+        self.assertEqual(clean_livecam_title("livecamrips.to GoddessAnna - Stripchat"), "GoddessAnna")
+
+        # Card formatting
+        details = {
+            "model_name": "GoddessAnna - Stripchat Recording",
+            "title": "GoddessAnna - Stripchat Recording",
+            "date": "19 Nov 2026, 00:19",
+            "duration": "10:34",
+            "platform": "Stripchat",
+            "video_url": "https://livecamrips.to/video/16877744",
+            "streaming_links": ["https://abstream.to/embed-kpmvtq4znbl6.html"],
+        }
+        card = format_livecam_card(details)
+        self.assertIn("<blockquote>📹 <b>GoddessAnna</b>", card)
+        self.assertNotIn("Stripchat Recording", card)
+        self.assertIn("📅 <b>Date:</b> 19 Nov 2026, 00:19", card)
+        self.assertIn("⏱️ <b>Duration:</b> 10:34", card)
+        self.assertIn("#GoddessAnna", card)
+        self.assertIn("<code>https://livecamrips.to/video/16877744</code>", card)
+        self.assertIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card)
+
 
 if __name__ == "__main__":
     unittest.main()

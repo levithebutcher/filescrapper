@@ -45,14 +45,24 @@ from config import (
     OWNER_ID,
 )
 from scraper import (
+    PROVIDER_PRIORITY,
     get_forum_topics,
     get_post_details,
     search_forum,
     is_forum_url,
     is_topic_url,
     get_host_display_name,
+    get_host_key,
     filter_links_by_preference,
     download_image_bytes,
+    is_livecam_url,
+    is_livecam_video_url,
+    is_livecam_model_url,
+    get_livecam_model_videos,
+    get_livecam_video_details,
+    format_livecam_card,
+    parse_slicing_args,
+    apply_slice,
 )
 import db
 
@@ -97,18 +107,30 @@ def end_scrape_for_chat(chat_id: int):
 # --- UI & Formatters ---
 
 def group_links_by_host(links: list[str]) -> dict[str, list[str]]:
-    """Group streaming links by provider badge name."""
+    """Group streaming links by provider badge name, sorted by PROVIDER_PRIORITY."""
     grouped = {}
+    host_keys = {}
     for link in links:
         badge = get_host_display_name(link)
+        h_key = get_host_key(link)
         if badge not in grouped:
             grouped[badge] = []
+            host_keys[badge] = h_key
         if link not in grouped[badge]:
             grouped[badge].append(link)
-    return grouped
+
+    def sort_order(item):
+        badge = item[0]
+        h_key = host_keys.get(badge, "")
+        try:
+            return PROVIDER_PRIORITY.index(h_key)
+        except ValueError:
+            return 999
+
+    return dict(sorted(grouped.items(), key=sort_order))
 
 
-def format_post_card(details: dict, user_pref: str = "vidara") -> str:
+def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     """
     Format single post details into a clean, minimal message.
     Uses Telegram blockquote for the title, filters links according to user preference,
@@ -136,7 +158,7 @@ def format_post_card(details: dict, user_pref: str = "vidara") -> str:
             for i, l in enumerate(h_links, 1):
                 caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
     else:
-        # Filter by preference with smart fallback
+        # Filter by preference with smart fallback following PROVIDER_PRIORITY
         host_badge, filtered_links, is_fallback = filter_links_by_preference(raw_links, user_pref)
 
         if is_fallback:
@@ -161,8 +183,11 @@ def format_post_card(details: dict, user_pref: str = "vidara") -> str:
 
 async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None):
     """Deliver a clean post card with downloaded thumbnail bytes and copyable link(s)."""
+    if is_scrape_cancelled(chat_id):
+        return
+
     target_uid = user_id if user_id else (chat_id if isinstance(chat_id, int) and chat_id > 0 else 0)
-    user_pref = db.get_user_host_preference(target_uid) if target_uid else "vidara"
+    user_pref = db.get_user_host_preference(target_uid) if target_uid else "streamtape"
     caption = format_post_card(details, user_pref)
 
     # Collect thumbnail candidates and download the first valid image into memory
@@ -172,12 +197,17 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
 
     image_bytes = None
     for cand_url in candidates[:8]:  # Try up to 8 candidates from post
+        if is_scrape_cancelled(chat_id):
+            return
         try:
             image_bytes = await asyncio.to_thread(download_image_bytes, cand_url)
             if image_bytes:
                 break
         except Exception:
             continue
+
+    if is_scrape_cancelled(chat_id):
+        return
 
     # 1. If image downloaded and caption fits within photo caption limit (1024 chars)
     if image_bytes and len(caption) <= 1024:
@@ -193,6 +223,8 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
             return
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
+            if is_scrape_cancelled(chat_id):
+                return
             try:
                 photo_file = io.BytesIO(image_bytes)
                 photo_file.name = "poster.jpg"
@@ -207,6 +239,9 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
                 pass
         except Exception as e:
             logger.warning(f"Thumbnail send failed: {e}")
+
+    if is_scrape_cancelled(chat_id):
+        return
 
     # 2. If image downloaded but caption is longer than 1024 chars, send photo first then text
     if image_bytes and len(caption) > 1024:
@@ -223,6 +258,9 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         except Exception as e:
             logger.warning(f"Detached photo send failed: {e}")
 
+    if is_scrape_cancelled(chat_id):
+        return
+
     # 3. Fallback to text message
     try:
         await bot.send_message(
@@ -233,6 +271,8 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         )
     except RetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
+        if is_scrape_cancelled(chat_id):
+            return
         await bot.send_message(
             chat_id=chat_id,
             text=caption,
@@ -243,17 +283,123 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         logger.error(f"Failed to send post card to {chat_id}: {e}")
 
 
+async def send_livecam_card(bot, chat_id: int | str, details: dict):
+    """Deliver a clean LiveCamRips card with uncropped HD thumbnail and copyable links."""
+    if is_scrape_cancelled(chat_id):
+        return
+
+    caption = format_livecam_card(details)
+    thumb_url = details.get("thumbnail")
+
+    image_bytes = None
+    if thumb_url:
+        try:
+            image_bytes = await asyncio.to_thread(download_image_bytes, thumb_url)
+        except Exception as e:
+            logger.debug(f"LiveCamRips thumbnail download note: {e}")
+
+    if is_scrape_cancelled(chat_id):
+        return
+
+    if image_bytes and len(caption) <= 1024:
+        try:
+            photo_file = io.BytesIO(image_bytes)
+            photo_file.name = "thumb.jpg"
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            if is_scrape_cancelled(chat_id):
+                return
+            try:
+                photo_file = io.BytesIO(image_bytes)
+                photo_file.name = "thumb.jpg"
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_file,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"LiveCamRips photo send failed: {e}")
+
+    if is_scrape_cancelled(chat_id):
+        return
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=False,
+        )
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after + 1)
+        if is_scrape_cancelled(chat_id):
+            return
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send LiveCamRips card: {e}")
+
+
+async def process_livecam_scrape(bot, chat_id: int | str, video_item: dict):
+    """Extract streaming links and deliver LiveCamRips card."""
+    if is_scrape_cancelled(chat_id):
+        return
+    try:
+        video_url = video_item.get("video_url") or video_item.get("url")
+        details = await asyncio.to_thread(get_livecam_video_details, video_url)
+        # Preserve model, duration, date from video_item if already parsed from model page
+        for k in ["duration", "platform", "model_name", "date"]:
+            if video_item.get(k) and not details.get(k):
+                details[k] = video_item[k]
+        if video_item.get("thumb") and not details.get("thumbnail"):
+            details["thumbnail"] = video_item["thumb"]
+        if video_item.get("duration"):
+            details["duration"] = video_item["duration"]
+
+        if is_scrape_cancelled(chat_id):
+            return
+
+        await send_livecam_card(bot, chat_id, details)
+    except Exception as e:
+        if is_scrape_cancelled(chat_id):
+            return
+        logger.error(f"Error in process_livecam_scrape: {e}")
+        safe_err = html.escape(str(e))
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ <b>Could not extract LiveCam video:</b>\n<code>{html.escape(video_item.get('video_url', ''))}</code>\n<i>Reason: {safe_err}</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 # --- Command Handlers ---
 
-def get_host_settings_keyboard(current_pref: str = "vidara") -> InlineKeyboardMarkup:
+def get_host_settings_keyboard(current_pref: str = "streamtape") -> InlineKeyboardMarkup:
     """Generate keyboard for selecting preferred streaming provider."""
     hosts = [
-        ("vidara", "⚡ Vidara"),
         ("streamtape", "🎬 Streamtape"),
+        ("vidara", "⚡ Vidara"),
         ("streamfiles", "📥 Streamfiles"),
+        ("iplaygo", "▶️ iPlayGo"),
+        ("abstream", "📺 ABStream"),
+        ("uqload", "⚡ Uqload"),
         ("doodstream", "🎥 Doodstream"),
         ("streamwish", "✨ Streamwish"),
-        ("lplaygo", "▶️ Lplaygo"),
         ("all", "🌐 All Providers"),
     ]
     buttons = []
@@ -273,14 +419,14 @@ async def sethost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Allow user to choose their preferred streaming provider."""
     user = update.effective_user
     uid = user.id if user else update.effective_chat.id
-    current_pref = db.get_user_host_preference(uid)
+    current_pref = db.get_user_host_preference(uid) or "streamtape"
 
     text = (
         "⚙️ <b>Streaming Player Preferences</b>\n\n"
-        f"Aapka current preferred player: <b>{current_pref.upper()}</b>\n\n"
-        "Apna pasandida player chuniye. Bot aapko <b>sirf usi player ke copyable links</b> dega.\n\n"
-        "<i>💡 Agar kisi post mein aapka selected player na hua, to bot automatically "
-        "dusra working link dega taaki video miss na ho.</i>"
+        f"Current preferred player: <b>{current_pref.upper()}</b>\n\n"
+        "Choose your preferred video player. The bot will deliver <b>copyable direct links for this provider</b>.\n\n"
+        "<i>💡 If a post does not contain your selected player, the bot automatically "
+        "falls back to the next best provider in priority order so you never miss a video.</i>"
     )
 
     await update.effective_message.reply_text(
@@ -296,15 +442,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"✨ <b>Welcome, {html.escape(user_name)}!</b>\n\n"
         f"<b>{BOT_NAME}</b> automatically extracts verified video streaming links "
-        "and monitors new forum uploads in real-time.\n\n"
+        "and monitors new forum and cam uploads in real-time.\n\n"
         "<b>⚡ Quick Commands:</b>\n"
-        "• <code>/today</code> — Today's fresh uploads\n"
+        "• <code>/today</code> — Today's fresh uploads (DropMMS & LiveCamRips)\n"
+        "• <code>/today 4</code> — Get first 4 uploads of today\n"
+        "• <code>/today 1-5</code> — Get uploads 1 to 5\n"
+        "• <code>/today last 5</code> — Get last 5 uploads\n"
         "• <code>/latest</code> — Latest forum releases\n"
-        "• <code>/sethost</code> — Set preferred video player (Vidara/Streamtape/etc.)\n"
+        "• <code>/sethost</code> — Set preferred video player (Streamtape/Vidara/etc.)\n"
         "• <code>/search &lt;name&gt;</code> — Find videos by keyword\n"
-        "• <code>/scrape &lt;url&gt;</code> — Extract any topic or category\n"
+        "• <code>/scrape &lt;url&gt;</code> — Extract any topic, category, or model\n"
+        "• <code>/stop</code> — Immediately cancel active extraction\n"
         "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
-        "<i>💡 Or paste any forum link directly in chat to extract instantly.</i>"
+        "<i>💡 Or paste any DropMMS or LiveCamRips link directly in chat to extract instantly.</i>"
     )
 
     buttons = [
@@ -334,10 +484,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 <b>Bot User Manual</b>\n\n"
         "<b>1️⃣ Instant Extraction:</b>\n"
-        "Send any post or category link directly in chat, or use:\n"
-        "<code>/scrape https://dropmms.com/topic/123-title/</code>\n\n"
-        "<b>2️⃣ Date-Wise Updates:</b>\n"
-        "• <code>/today</code> — View uploads from today\n"
+        "Send any post, model, or category link directly in chat, or use:\n"
+        "• <code>/scrape https://dropmms.com/topic/123-title/</code>\n"
+        "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>\n"
+        "• <code>/scrape https://livecamrips.to/video/16877744</code>\n\n"
+        "<b>2️⃣ Date-Wise & Sliced Updates:</b>\n"
+        "• <code>/today</code> — View all uploads from today\n"
+        "• <code>/today 4</code> — First 4 uploads from today\n"
+        "• <code>/today 1-5</code> — Uploads 1 through 5\n"
+        "• <code>/today last 5</code> — Last 5 uploads\n"
         "• <code>/latest</code> — Top 5 newest topics\n\n"
         "<b>3️⃣ Keyword Search:</b>\n"
         "• <code>/search sample video</code>\n\n"
@@ -350,62 +505,153 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Immediately stop any active topic or category scraping in this chat."""
+    """Immediately stop any active topic, model, or category scraping in this chat."""
     chat_id = update.effective_chat.id
-    if active_scrapes.get(chat_id, False):
-        cancel_scrape_for_chat(chat_id)
-        await update.effective_message.reply_text(
-            "🛑 <b>Stopping active scrape...</b>\n\n"
-            "Category extraction has been cancelled. Remaining posts will not be sent.",
-            parse_mode=ParseMode.HTML,
-        )
-    else:
-        await update.effective_message.reply_text(
-            "ℹ️ <b>No active scrape running right now.</b>",
-            parse_mode=ParseMode.HTML,
-        )
+    cancel_scrape_for_chat(chat_id)
+    await update.effective_message.reply_text(
+        "🛑 <b>Scraping stopped.</b>\n\n"
+        "Active extraction has been cancelled. Remaining posts will not be sent.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Fetch and deliver today's fresh uploads (Option 1: Live Date Cutoff).
-    Scans topics and strictly returns posts published within today / last 24 hours.
-    Usage:
+    Supports DropMMS forum categories and LiveCamRips model pages.
+    Supports post count, ranges, and last-N slicing:
       /today
-      /today <category_url>
+      /today 4
+      /today 1-5
+      /today last 5
+      /today <url>
+      /today <url> 4
+      /today <url> 1-5
+      /today <url> last 5
     """
     msg = update.effective_message
     user_id = update.effective_user.id if update.effective_user else None
+    chat_id = msg.chat_id
+
+    # Register scrape immediately so /stop or button cancels it without delay
+    start_scrape_for_chat(chat_id)
+
+    target_url, start_idx, end_idx, is_last_n = parse_slicing_args(context.args or [])
+    if not target_url:
+        target_url = DEFAULT_CATEGORY_URL
+    elif not target_url.startswith("http://") and not target_url.startswith("https://"):
+        target_url = f"https://{target_url}"
+
     status_msg = await msg.reply_text("📅 <i>Scanning today's uploads...</i>", parse_mode=ParseMode.HTML)
 
-    category_url = context.args[0].strip() if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
-    if category_url and not category_url.startswith("http://") and not category_url.startswith("https://"):
-        category_url = f"https://{category_url}"
+    # 1. LiveCamRips URL Handling
+    if is_livecam_url(target_url):
+        # 1A. Single video URL
+        if is_livecam_video_url(target_url):
+            await status_msg.edit_text("🔍 <i>Extracting LiveCam video streaming link...</i>", parse_mode=ParseMode.HTML)
+            try:
+                details = await asyncio.to_thread(get_livecam_video_details, target_url)
+                await send_livecam_card(context.bot, chat_id, details)
+            except Exception as e:
+                await status_msg.edit_text(f"❌ Error extracting LiveCam video: {html.escape(str(e))}")
+                return
+            finally:
+                end_scrape_for_chat(chat_id)
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            return
 
-    # If user passed a single topic URL (e.g. /today https://dropmms.com/topic/...)
-    if is_topic_url(category_url):
-        await status_msg.edit_text("🔍 <i>Extracting streaming links from topic...</i>", parse_mode=ParseMode.HTML)
-        await process_topic_scrape(context.bot, msg.chat_id, category_url, user_id=user_id)
+        # 1B. Model page URL
+        has_slice = (start_idx is not None) or (end_idx is not None) or is_last_n
+        only_today = not has_slice  # If user requested a slice (e.g. 4 or 1-5), fetch recent videos
+
+        try:
+            # Fetch up to 50 videos from model page (sorted newest first)
+            videos = await asyncio.to_thread(get_livecam_model_videos, target_url, only_today, 50)
+            if has_slice:
+                videos = apply_slice(videos, start_idx, end_idx, is_last_n)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Error fetching model page: {html.escape(str(e))}")
+            end_scrape_for_chat(chat_id)
+            return
+
+        if not videos:
+            end_scrape_for_chat(chat_id)
+            await status_msg.edit_text(
+                "📅 <b>No uploads found today for this model!</b>\n\n"
+                "<i>Older videos were skipped. Tip: Specify a count or range to view recent uploads:</i>\n"
+                f"<code>/today {html.escape(target_url)} 4</code>\n"
+                f"<code>/scrape {html.escape(target_url)} 1-5</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        await status_msg.edit_text(
+            f"📅 <b>Found {len(videos)} video(s)!</b>\n<i>Extracting details & streaming links...</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=stop_markup,
+        )
+
+        try:
+            for idx, v in enumerate(videos, start=1):
+                if is_scrape_cancelled(chat_id):
+                    logger.info(f"LiveCam scrape cancelled by user in chat {chat_id}")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🛑 <b>Scrape stopped!</b> Delivered {idx-1}/{len(videos)} videos.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                    break
+                await process_livecam_scrape(context.bot, chat_id, v)
+                await asyncio.sleep(POST_SEND_DELAY)
+        finally:
+            end_scrape_for_chat(chat_id)
+
         try:
             await status_msg.delete()
         except Exception:
             pass
         return
 
-    try:
-        topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 25, True)
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
+    # 2. DropMMS single topic URL
+    if is_topic_url(target_url):
+        await status_msg.edit_text("🔍 <i>Extracting streaming links from topic...</i>", parse_mode=ParseMode.HTML)
+        try:
+            await process_topic_scrape(context.bot, chat_id, target_url, user_id=user_id)
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
         return
 
+    # 3. DropMMS Forum Category
+    try:
+        # Fetch today's topics without artificial limit (stops when yesterday reached)
+        all_today_topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", 200, True)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
+        end_scrape_for_chat(chat_id)
+        return
+
+    # Apply slicing if specified
+    topics = apply_slice(all_today_topics, start_idx, end_idx, is_last_n)
+
     if not topics:
+        end_scrape_for_chat(chat_id)
         await status_msg.edit_text(
             "📅 <b>No new posts found today yet!</b>\n\n"
             "<i>No topics uploaded today in this category. Older posts were skipped.</i>\n\n"
             "💡 <i>Tip: Pass a specific category or topic link:</i>\n"
             "<code>/today https://dropmms.com/forum/2-general/</code>\n"
-            "<code>/today https://dropmms.com/topic/123-title/</code>\n\n"
-            "<i>Or paste any link directly in chat to extract all recent posts.</i>",
+            "<code>/scrape https://dropmms.com/forum/2-general/ 5</code>\n\n"
+            "<i>Or paste any link directly in chat to extract recent releases.</i>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -419,21 +665,20 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=stop_markup,
     )
 
-    start_scrape_for_chat(msg.chat_id)
     try:
         for idx, t in enumerate(topics, start=1):
-            if is_scrape_cancelled(msg.chat_id):
-                logger.info(f"Today scrape cancelled by user in chat {msg.chat_id}")
+            if is_scrape_cancelled(chat_id):
+                logger.info(f"Today scrape cancelled by user in chat {chat_id}")
                 await context.bot.send_message(
-                    chat_id=msg.chat_id,
+                    chat_id=chat_id,
                     text=f"🛑 <b>Today scrape stopped!</b> Sent {idx-1}/{len(topics)} posts.",
                     parse_mode=ParseMode.HTML,
                 )
                 break
-            await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
+            await process_topic_scrape(context.bot, chat_id, t["url"], user_id=user_id)
             await asyncio.sleep(POST_SEND_DELAY)
     finally:
-        end_scrape_for_chat(msg.chat_id)
+        end_scrape_for_chat(chat_id)
 
     try:
         await status_msg.delete()
@@ -705,11 +950,17 @@ async def auto_feed_loop(app: Application):
 # --- URL Processing & Button Callback Handlers ---
 
 async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int = None):
-    """Scrape and deliver single topic card."""
+    """Scrape and deliver single topic card with cancellation support."""
+    if is_scrape_cancelled(chat_id):
+        return
     try:
         details = await asyncio.to_thread(get_post_details, url)
+        if is_scrape_cancelled(chat_id):
+            return
         await send_post_card(bot, chat_id, details, user_id=user_id)
     except Exception as e:
+        if is_scrape_cancelled(chat_id):
+            return
         safe_err = html.escape(str(e))
         await bot.send_message(
             chat_id=chat_id,
@@ -719,46 +970,130 @@ async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int =
 
 
 async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /scrape <url> command."""
+    """Handle /scrape <url> [slice] command."""
     msg = update.effective_message
     if not context.args:
         await msg.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/scrape &lt;url&gt;</code>\n"
-            "Example: <code>/scrape https://dropmms.com/topic/123-title/</code>",
+            "ℹ️ <b>Usage:</b> <code>/scrape &lt;url&gt; [count or range]</code>\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>/scrape https://dropmms.com/topic/123-title/</code>\n"
+            "• <code>/scrape https://dropmms.com/forum/2-general/ 5</code>\n"
+            "• <code>/scrape https://dropmms.com/forum/2-general/ 1-5</code>\n"
+            "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>\n"
+            "• <code>/scrape https://livecamrips.to/video/16877744</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    target_url = context.args[0].strip()
-    await handle_raw_url(update, context, target_url)
+    raw_input = " ".join(context.args)
+    await handle_raw_url(update, context, raw_input)
 
 
-async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    """Process URLs pasted directly in chat."""
+async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text: str):
+    """Process URLs and slice options pasted directly in chat or via /scrape."""
     msg = update.effective_message
     user_id = update.effective_user.id if update.effective_user else None
-    url = url.strip()
+    chat_id = msg.chat_id
 
-    if not url.startswith("http://") and not url.startswith("https://"):
-        if url.startswith("dropmms.com") or url.startswith("www.dropmms.com"):
-            url = f"https://{url}"
+    tokens = raw_text.strip().split()
+    target_url, start_idx, end_idx, is_last_n = parse_slicing_args(tokens)
+    if not target_url:
+        return
+
+    if not target_url.startswith("http://") and not target_url.startswith("https://"):
+        if "dropmms.com" in target_url:
+            target_url = f"https://{target_url}"
+        elif "livecamrips.to" in target_url:
+            target_url = f"https://{target_url}"
         else:
             return
 
-    if is_topic_url(url):
-        status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
-        await process_topic_scrape(context.bot, msg.chat_id, url, user_id=user_id)
+    start_scrape_for_chat(chat_id)
+
+    # 1. LiveCamRips Single Video
+    if is_livecam_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting LiveCam video streaming link...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_livecam_video_details, target_url)
+            await send_livecam_card(context.bot, chat_id, details)
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting LiveCam video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
         try:
             await status.delete()
         except Exception:
             pass
-    elif is_forum_url(url):
+        return
+
+    # 2. LiveCamRips Model Page
+    if is_livecam_model_url(target_url):
+        status = await msg.reply_text("📂 <i>Scanning LiveCam model page...</i>", parse_mode=ParseMode.HTML)
+        try:
+            videos = await asyncio.to_thread(get_livecam_model_videos, target_url, False, 50)
+            if start_idx is not None or end_idx is not None or is_last_n:
+                videos = apply_slice(videos, start_idx, end_idx, is_last_n)
+            else:
+                videos = videos[:MAX_POSTS_PER_FORUM]
+
+            if not videos:
+                await status.edit_text("❌ No videos found on this model page.")
+                end_scrape_for_chat(chat_id)
+                return
+
+            stop_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+            ]])
+            await status.edit_text(f"✅ Found {len(videos)} video(s)! Extracting...", reply_markup=stop_markup)
+
+            for idx, v in enumerate(videos, start=1):
+                if is_scrape_cancelled(chat_id):
+                    logger.info(f"Model scrape cancelled by user in chat {chat_id}")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                    break
+                await process_livecam_scrape(context.bot, chat_id, v)
+                await asyncio.sleep(POST_SEND_DELAY)
+        except Exception as e:
+            await status.edit_text(f"❌ Error: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 3. DropMMS Single Topic
+    if is_topic_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
+        try:
+            await process_topic_scrape(context.bot, chat_id, target_url, user_id=user_id)
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 4. DropMMS Forum Category
+    if is_forum_url(target_url):
         status = await msg.reply_text("📂 <i>Scanning forum category...</i>", parse_mode=ParseMode.HTML)
         try:
-            # Full page scan (up to 25 posts) without date cutoff
-            topics = await asyncio.to_thread(get_forum_topics, url, "start_date", MAX_POSTS_PER_FORUM, False)
+            topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", 50, False)
+            if start_idx is not None or end_idx is not None or is_last_n:
+                topics = apply_slice(topics, start_idx, end_idx, is_last_n)
+            else:
+                topics = topics[:MAX_POSTS_PER_FORUM]
+
             if not topics:
                 await status.edit_text("❌ No topics found in this category.")
+                end_scrape_for_chat(chat_id)
                 return
 
             stop_markup = InlineKeyboardMarkup([[
@@ -766,38 +1101,38 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
             ]])
             await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...", reply_markup=stop_markup)
 
-            start_scrape_for_chat(msg.chat_id)
-            try:
-                for idx, t in enumerate(topics, start=1):
-                    if is_scrape_cancelled(msg.chat_id):
-                        logger.info(f"Category scrape cancelled by user in chat {msg.chat_id}")
-                        await context.bot.send_message(
-                            chat_id=msg.chat_id,
-                            text=f"🛑 <b>Scraping stopped!</b> Processed {idx-1}/{len(topics)} topics.",
-                            parse_mode=ParseMode.HTML,
-                        )
-                        break
-                    await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
-                    await asyncio.sleep(POST_SEND_DELAY)
-            finally:
-                end_scrape_for_chat(msg.chat_id)
-
-            try:
-                await status.delete()
-            except Exception:
-                pass
+            for idx, t in enumerate(topics, start=1):
+                if is_scrape_cancelled(chat_id):
+                    logger.info(f"Category scrape cancelled by user in chat {chat_id}")
+                    await context.bot.send_message(
+                        chat_id=msg.chat_id,
+                        text=f"🛑 <b>Scraping stopped!</b> Processed {idx-1}/{len(topics)} topics.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                    break
+                await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
+                await asyncio.sleep(POST_SEND_DELAY)
         except Exception as e:
             await status.edit_text(f"❌ Error: {html.escape(str(e))}")
-    else:
-        await msg.reply_text("❓ Please send a valid topic (<code>/topic/...</code>) or forum category (<code>/forum/...</code>) URL.", parse_mode=ParseMode.HTML)
+        finally:
+            end_scrape_for_chat(chat_id)
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    end_scrape_for_chat(chat_id)
+    await msg.reply_text("❓ Please send a valid DropMMS or LiveCamRips URL (video or category/model page).", parse_mode=ParseMode.HTML)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Filter and handle plain text messages."""
+    """Filter and handle plain text messages containing links."""
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
-    if text.startswith("http://") or text.startswith("https://"):
+    if text.startswith("http://") or text.startswith("https://") or "dropmms.com" in text or "livecamrips.to" in text:
         await handle_raw_url(update, context, text)
 
 
@@ -815,7 +1150,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         cancel_scrape_for_chat(chat_id)
         try:
             await query.edit_message_text(
-                "🛑 <b>Scrape stopped by user.</b>\nRemaining topics will not be processed.",
+                "🛑 <b>Scraping stopped by user.</b>\nRemaining topics will not be processed.",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -851,8 +1186,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await query.edit_message_text(
                 f"✅ <b>Preferred Player Updated to {display_label}!</b>\n\n"
-                "Ab se aapko har post mein sirf iske copyable links milenge (smart fallback ke saath).\n\n"
-                "Aap neeche se kabhi bhi change kar sakte hain:",
+                "All future posts will prioritize this video player (with automatic smart fallback).\n\n"
+                "You can change your selection anytime below:",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_host_settings_keyboard(new_pref),
             )
@@ -869,7 +1204,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         if target_url:
             await process_topic_scrape(context.bot, query.message.chat_id, target_url, user_id=query.from_user.id)
         else:
-            await query.message.reply_text("⚠️ Link expire ho gaya hai ya invalid hai. Kripya dobara search karein.")
+            await query.message.reply_text("⚠️ This link has expired or is invalid. Please search or extract again.")
     elif data.startswith("unlink_"):
         try:
             ch_id = int(data[7:])
@@ -884,11 +1219,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Exception while handling update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
-            # If Telegram complains about message not modified, ignore
             if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
                 return
             await update.effective_message.reply_text(
-                "⚠️ Bot par ek temporary error aaya. Kripya dobara prayas karein."
+                "⚠️ A temporary error occurred while processing your request. Please try again."
             )
         except Exception:
             pass

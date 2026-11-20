@@ -2,6 +2,7 @@
 
 import re
 import io
+import html
 import logging
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, quote_plus
@@ -67,27 +68,53 @@ def _is_streaming_link(url: str) -> bool:
         return False
 
 
+# Provider Priority Order (Highest -> Lowest)
+# User requested order: Streamtape -> Vidara -> Streamfiles -> iPlayGo/Lplaygo -> ABStream -> Uqload -> Streamcash -> Rest
+PROVIDER_PRIORITY = [
+    "streamtape",
+    "vidara",
+    "streamfiles",
+    "iplaygo",
+    "lplaygo",
+    "abstream",
+    "uqload",
+    "streamcash",
+    "doodstream",
+    "streamwish",
+    "filelions",
+    "dropload",
+    "mixdrop",
+    "streamruby",
+]
+
+
 def get_host_display_name(url: str) -> str:
     """Get clean emoji-badge display name for a streaming provider."""
     try:
         domain = urlparse(url).netloc.lower()
-        if "vidara" in domain:
-            return "⚡ Vidara"
-        elif "streamtape" in domain:
+        if "streamtape" in domain:
             return "🎬 Streamtape"
+        elif "vidara" in domain:
+            return "⚡ Vidara"
         elif "streamfiles" in domain:
             return "📥 Streamfiles"
+        elif "iplaygo" in domain or "lplaygo" in domain:
+            return "▶️ iPlayGo"
+        elif "abstream" in domain:
+            return "📺 ABStream"
+        elif "uqload" in domain:
+            return "⚡ Uqload"
+        elif "streamcash" in domain:
+            return "💰 Streamcash"
         elif "dood" in domain:
             return "🎥 Doodstream"
         elif "streamwish" in domain:
             return "✨ Streamwish"
-        elif "lplaygo" in domain:
-            return "▶️ Lplaygo"
         elif "filelions" in domain:
             return "🦁 Filelions"
         elif "dropload" in domain:
             return "📦 Dropload"
-        elif "mixdrop" in domain:
+        elif "mixdrop" in domain or "mdzsmutpcvykb" in domain:
             return "💧 Mixdrop"
         elif "streamruby" in domain:
             return "💎 Streamruby"
@@ -99,26 +126,34 @@ def get_host_display_name(url: str) -> str:
 
 
 def get_host_key(url: str) -> str:
-    """Extract standard key for a streaming provider (e.g. vidara, streamtape)."""
+    """Extract standard key for a streaming provider (e.g. streamtape, vidara)."""
     try:
         domain = urlparse(url).netloc.lower()
-        if "vidara" in domain:
-            return "vidara"
-        elif "streamtape" in domain:
+        if "streamtape" in domain:
             return "streamtape"
+        elif "vidara" in domain:
+            return "vidara"
         elif "streamfiles" in domain:
             return "streamfiles"
+        elif "iplaygo" in domain:
+            return "iplaygo"
+        elif "lplaygo" in domain:
+            return "iplaygo"
+        elif "abstream" in domain:
+            return "abstream"
+        elif "uqload" in domain:
+            return "uqload"
+        elif "streamcash" in domain:
+            return "streamcash"
         elif "dood" in domain:
             return "doodstream"
         elif "streamwish" in domain:
             return "streamwish"
-        elif "lplaygo" in domain:
-            return "lplaygo"
         elif "filelions" in domain:
             return "filelions"
         elif "dropload" in domain:
             return "dropload"
-        elif "mixdrop" in domain:
+        elif "mixdrop" in domain or "mdzsmutpcvykb" in domain:
             return "mixdrop"
         elif "streamruby" in domain:
             return "streamruby"
@@ -128,18 +163,21 @@ def get_host_key(url: str) -> str:
         return "other"
 
 
-def filter_links_by_preference(links: list[str], preferred_host: str = "vidara") -> tuple[str, list[str], bool]:
+def filter_links_by_preference(links: list[str], preferred_host: str = "streamtape") -> tuple[str, list[str], bool]:
     """
-    Filter streaming links according to user preference with smart fallback.
+    Filter streaming links according to user preference with smart fallback following PROVIDER_PRIORITY.
     Returns: (display_name, filtered_links, is_fallback)
     - If preferred_host == 'all': returns all links.
     - If preferred_host exists in links: returns only those links.
-    - If preferred_host NOT in links: falls back to the first available provider so user never misses the video.
+    - If preferred_host NOT in links: falls back to the highest available provider in PROVIDER_PRIORITY.
     """
     if not links:
         return "None", [], False
 
-    pref = preferred_host.lower().strip() if preferred_host else "vidara"
+    pref = preferred_host.lower().strip() if preferred_host else "streamtape"
+    if pref == "lplaygo":
+        pref = "iplaygo"
+
     if pref == "all":
         return "All Providers", links, False
 
@@ -159,7 +197,13 @@ def filter_links_by_preference(links: list[str], preferred_host: str = "vidara")
     if pref in grouped:
         return host_display_map[pref], grouped[pref], False
 
-    # 2. Smart Fallback: take the first available provider
+    # 2. Smart Fallback: iterate over PROVIDER_PRIORITY to pick the next highest available host
+    for priority_host in PROVIDER_PRIORITY:
+        p_key = "iplaygo" if priority_host == "lplaygo" else priority_host
+        if p_key in grouped:
+            return host_display_map[p_key], grouped[p_key], True
+
+    # 3. If none match PROVIDER_PRIORITY, take the first available provider
     first_key = next(iter(grouped))
     return host_display_map[first_key], grouped[first_key], True
 
@@ -898,3 +942,380 @@ def is_forum_url(url: str) -> bool:
         or u.rstrip("/") == "https://dropmms.com"
         or u.rstrip("/") == "http://dropmms.com"
     )
+
+
+# --- Slicing & Range Argument Helpers ---
+
+def parse_slicing_args(args: list[str]) -> tuple[str | None, int | None, int | None, bool]:
+    """
+    Parse target URL and user slice parameters from command arguments.
+    Supported patterns:
+      - Count: '4' or 'count 4' -> (start=1, end=4, is_last=False)
+      - Range: '1-5', '1 - 5', '1 to 5' -> (start=1, end=5, is_last=False)
+      - Last N: 'last 5' or 'last5' -> (start=None, end=5, is_last=True)
+    Returns: (target_url, start_idx, end_idx, is_last_n)
+      indices are 1-based. If not specified, start_idx=None, end_idx=None.
+    """
+    if not args:
+        return None, None, None, False
+
+    target_url = None
+    remaining = []
+
+    for arg in args:
+        a = arg.strip()
+        if re.match(r"^https?://", a, re.I) or "dropmms.com" in a.lower() or "livecamrips.to" in a.lower():
+            target_url = a
+        else:
+            remaining.append(a)
+
+    text = " ".join(remaining).strip().lower()
+    if not text:
+        return target_url, None, None, False
+
+    # Check for 'last N' or 'lastN'
+    m_last = re.search(r"last\s*(\d+)", text)
+    if m_last:
+        count = int(m_last.group(1))
+        return target_url, None, count, True
+
+    # Check for range 'X-Y' or 'X to Y' or 'X - Y'
+    m_range = re.search(r"(\d+)\s*(?:-|to)\s*(\d+)", text)
+    if m_range:
+        start_i = int(m_range.group(1))
+        end_i = int(m_range.group(2))
+        return target_url, start_i, end_i, False
+
+    # Check for single count 'N' or 'count N'
+    m_count = re.search(r"(?:count\s*)?(\d+)", text)
+    if m_count:
+        count = int(m_count.group(1))
+        return target_url, 1, count, False
+
+    return target_url, None, None, False
+
+
+def apply_slice(items: list, start_idx: int | None = None, end_idx: int | None = None, is_last_n: bool = False) -> list:
+    """Apply 1-based slicing, range, or last-N filtering to a list of items."""
+    if not items:
+        return []
+    if is_last_n and end_idx is not None and end_idx > 0:
+        return items[-end_idx:]
+    if start_idx is not None and end_idx is not None:
+        s = max(0, start_idx - 1)
+        e = max(s, end_idx)
+        return items[s:e]
+    if end_idx is not None and end_idx > 0:
+        return items[:end_idx]
+    return items
+
+
+# --- LiveCamRips Multi-Site Integration Helpers ---
+
+def is_livecam_url(url: str) -> bool:
+    """Check if URL belongs to livecamrips.to."""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.lower().strip()
+    return "livecamrips.to" in u
+
+
+def is_livecam_video_url(url: str) -> bool:
+    """Check if URL represents an individual livecamrips video."""
+    if not is_livecam_url(url):
+        return False
+    u = url.lower().strip()
+    return "/video/" in u
+
+
+def is_livecam_model_url(url: str) -> bool:
+    """Check if URL represents a livecamrips model page."""
+    if not is_livecam_url(url):
+        return False
+    u = url.lower().strip()
+    return "/model/" in u or "/models/" in u
+
+
+def clean_livecam_title(raw_title: str) -> str:
+    """
+    Clean LiveCamRips title by stripping '- Stripchat Recording', 'Stripchat', 'Recording', dates, etc.
+    Leaving the pure model name.
+    """
+    if not raw_title:
+        return "Model"
+    cleaned = raw_title
+    cleaned = re.sub(r"^livecamrips\.to\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"-\s*stripchat\s*recording", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"stripchat\s*recording", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"-\s*stripchat", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bstripchat\b", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\brecording\b", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\(\s*\d{1,2}\s+[a-zA-Z]+\s+\d{4}[^\)]*\)", "", cleaned)
+    cleaned = re.sub(r"-\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}", "", cleaned)
+    cleaned = re.sub(r"^[\s\-_–—]+|[\s\-_–—]+$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or "Model"
+
+
+def format_livecam_date(date_str: str | None) -> str:
+    """Format LiveCamRips date string (YYYY-MM-DD HH:MM) into clean readable date."""
+    if not date_str:
+        return "Recent"
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M")
+        return dt.strftime("%d %b %Y, %H:%M")
+    except Exception:
+        return date_str.strip()
+
+
+def is_livecam_today(date_str: str | None) -> bool:
+    """Check if LiveCamRips date falls within today (UTC or IST)."""
+    if not date_str:
+        return False
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        return dt.date() == now_utc.date() or dt.date() == now_ist.date()
+    except Exception:
+        return False
+
+
+def is_livecam_older_than_today(date_str: str | None) -> bool:
+    """Check if LiveCamRips date is older than today across timezones."""
+    if not date_str:
+        return False
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        min_today_date = min(now_utc.date(), now_ist.date())
+        return dt.date() < min_today_date
+    except Exception:
+        return False
+
+
+def get_livecam_model_videos(
+    model_url: str,
+    only_today: bool = False,
+    limit: int | None = None,
+) -> list[dict]:
+    """
+    Extract video items from a LiveCamRips model page in date-wise order (Newest -> Oldest).
+    If only_today=True, strictly filters for videos posted today and breaks on older videos.
+    """
+    target_url = model_url.strip()
+    if "sort=" not in target_url:
+        sep = "&" if "?" in target_url else "?"
+        target_url = f"{target_url}{sep}sort=newest"
+
+    soup = _fetch_soup(target_url)
+    videos = []
+
+    figures = soup.find_all("figure", class_=re.compile(r"\btm-video-item\b", re.I))
+    for fig in figures:
+        video_id = fig.get("video-id")
+        a_tag = fig.find("a", href=True)
+        video_url = urljoin(model_url, a_tag["href"].strip()) if a_tag else f"https://livecamrips.to/video/{video_id}"
+
+        img_tag = fig.find("img")
+        thumb = img_tag.get("src") if img_tag else None
+
+        dur_tag = fig.find("span", class_=re.compile(r"\btm-bg-dark\b", re.I))
+        duration = dur_tag.get_text(strip=True) if dur_tag else None
+
+        parent = fig.parent
+        date_str = None
+        model_name = None
+        platform = None
+
+        if parent:
+            date_span = parent.find("span", string=re.compile(r"\d{4}-\d{2}-\d{2}", re.I))
+            if date_span:
+                date_str = date_span.get_text(strip=True)
+
+            model_tag = parent.find("span", class_=re.compile(r"\btm-text-gray-light\b", re.I))
+            if model_tag:
+                model_name = model_tag.get_text(strip=True)
+
+            plat_a = parent.find("a", href=re.compile(r"/website/", re.I))
+            if plat_a:
+                platform = plat_a.get_text(strip=True)
+
+        if not model_name:
+            parts = [p for p in urlparse(model_url).path.split("/") if p]
+            if len(parts) >= 3 and parts[0] == "model":
+                model_name = parts[2]
+            else:
+                model_name = "Model"
+
+        model_name = clean_livecam_title(model_name)
+        date_display = format_livecam_date(date_str)
+
+        # Date-wise cutoff when filtering for today's uploads
+        if only_today and date_str:
+            if is_livecam_older_than_today(date_str):
+                logger.info(f"Hit LiveCamRips date cutoff at older video: {date_str}. Stopping scan.")
+                break
+            if not is_livecam_today(date_str):
+                continue
+
+        videos.append({
+            "video_id": video_id,
+            "video_url": video_url,
+            "url": video_url,
+            "thumb": thumb,
+            "thumbnail": thumb,
+            "duration": duration,
+            "raw_date": date_str,
+            "date": date_display,
+            "model_name": model_name,
+            "title": model_name,
+            "platform": platform or "Stripchat",
+        })
+
+        if limit and len(videos) >= limit:
+            break
+
+    return videos
+
+
+def get_livecam_video_details(video_url: str) -> dict:
+    """Fetch video details from LiveCamRips video page, including iframe streaming embeds."""
+    soup = _fetch_soup(video_url)
+
+    h1 = soup.find("h1")
+    raw_h1_text = h1.get_text(" ", strip=True) if h1 else ""
+
+    model_name = None
+    if h1:
+        model_a = h1.find("a", href=re.compile(r"/model/", re.I))
+        if model_a:
+            model_name = model_a.get_text(strip=True)
+
+    if not model_name:
+        model_name = clean_livecam_title(raw_h1_text)
+    model_name = clean_livecam_title(model_name)
+
+    # Date extraction (YYYY-MM-DD HH:MM)
+    date_match = re.search(r"\b(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\b", raw_h1_text or soup.get_text())
+    raw_date = date_match.group(1) if date_match else None
+    date_display = format_livecam_date(raw_date)
+
+    # Platform detection
+    low_text = (raw_h1_text + " " + soup.get_text()).lower()
+    if "chaturbate" in low_text:
+        platform = "Chaturbate"
+    elif "camsoda" in low_text:
+        platform = "CamSoda"
+    elif "bongacams" in low_text:
+        platform = "BongaCams"
+    elif "stripchat" in low_text:
+        platform = "Stripchat"
+    else:
+        platform = "Stripchat"
+
+    # Streaming links / iframe embeds
+    streaming_links = []
+    seen_links = set()
+    for tag in soup.find_all(["iframe", "embed", "source"], src=True):
+        src = tag["src"].strip()
+        full_src = urljoin(video_url, src)
+        if full_src not in seen_links:
+            seen_links.add(full_src)
+            streaming_links.append(full_src)
+
+    # Additional streaming links from page
+    more_links = _extract_streaming_links_from_html(soup, video_url)
+    for ml in more_links:
+        if ml not in seen_links:
+            seen_links.add(ml)
+            streaming_links.append(ml)
+
+    # High resolution thumbnail
+    v_match = re.search(r"/video/(\d+)", video_url)
+    video_id = v_match.group(1) if v_match else None
+    thumbnail = None
+    if video_id:
+        thumbnail = f"https://images.livecamrips.to/{video_id[:4]}/{video_id}.png"
+
+    if not thumbnail:
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            thumbnail = og_img["content"].strip()
+
+    return {
+        "model_name": model_name,
+        "title": model_name,
+        "clean_title": model_name,
+        "date": date_display,
+        "raw_date": raw_date,
+        "duration": None,
+        "platform": platform,
+        "tags": [model_name, platform],
+        "thumbnail": thumbnail,
+        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "streaming_links": streaming_links,
+        "video_url": video_url,
+        "is_livecam": True,
+    }
+
+
+def format_livecam_card(details: dict) -> str:
+    """
+    Format LiveCamRips video card with Telegram blockquote and copyable links.
+    Layout:
+    <blockquote>📹 <b>{model_name}</b>
+    📅 <b>Date:</b> {date_str}
+    ⏱️ <b>Duration:</b> {duration}
+    🏷️ #{model_name} #{platform}</blockquote>
+
+    🌐 <b>Video Page:</b>
+    🔗 <code>{video_url}</code>
+
+    🍿 <b>Streaming Link:</b>
+    🔗 <code>{streaming_link}</code>
+    """
+    model_name = html.escape(clean_livecam_title(details.get("model_name") or details.get("title") or "Model"))
+    date_str = html.escape(details.get("date") or "Recent")
+    duration = html.escape(details.get("duration") or "")
+    platform = html.escape(details.get("platform") or "Stripchat")
+    video_url = html.escape(details.get("video_url") or "")
+    streaming_links = details.get("streaming_links") or []
+
+    tag_model = re.sub(r"[^\w]", "", model_name)
+    tag_platform = re.sub(r"[^\w]", "", platform)
+    tags_line = f"#{tag_model}"
+    if tag_platform and tag_platform.lower() != tag_model.lower():
+        tags_line += f" #{tag_platform}"
+
+    raw_text = f"{details.get('title', '')} {details.get('duration', '')}"
+    for q in ["1080p", "720p", "4k", "hd"]:
+        if q in raw_text.lower() and f"#{q}" not in tags_line.lower():
+            tags_line += f" #{q.upper() if q in ['hd', '4k'] else q}"
+
+    lines = [
+        "<blockquote>"
+        f"📹 <b>{model_name}</b>\n"
+        f"📅 <b>Date:</b> {date_str}"
+    ]
+    if duration:
+        lines.append(f"⏱️ <b>Duration:</b> {duration}")
+    lines.append(f"🏷️ {tags_line}</blockquote>")
+
+    if video_url:
+        lines.append(f"\n🌐 <b>Video Page:</b>\n🔗 <code>{video_url}</code>")
+
+    if streaming_links:
+        if len(streaming_links) == 1:
+            lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{html.escape(streaming_links[0])}</code>")
+        else:
+            lines.append("\n🍿 <b>Streaming Links:</b>")
+            for i, l in enumerate(streaming_links, 1):
+                badge = get_host_display_name(l)
+                lines.append(f"{i}. {badge}: <code>{html.escape(l)}</code>")
+    else:
+        lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{video_url}</code>")
+
+    return "\n".join(lines)
+

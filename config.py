@@ -31,10 +31,14 @@ if _custom_domains:
     STREAMING_DOMAINS = [d.strip().lower() for d in _custom_domains.split(",") if d.strip()]
 else:
     STREAMING_DOMAINS = [
-        "vidara.to",
         "streamtape.com",
+        "vidara.to",
         "streamfiles.net",
         "lplaygo.com",
+        "abstream.to",
+        "uqload.com",
+        "uqload.vc",
+        "streamcash.to",
         "doodstream.com",
         "dood.",
         "streamwish",
