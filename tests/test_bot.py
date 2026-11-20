@@ -5,7 +5,7 @@ Unit tests for bot message formatting, UI buttons, and database integration.
 
 import uuid
 import unittest
-from bot import format_post_card, build_streaming_buttons
+from bot import format_post_card, group_links_by_host
 from scraper import get_host_display_name
 import db
 
@@ -15,34 +15,39 @@ class TestBot(unittest.TestCase):
     def setUpClass(cls):
         db.init_db()
 
-    def test_build_streaming_buttons(self):
-        """Test streaming button grid generation."""
+    def test_group_links_by_host(self):
+        """Test grouping of links by streaming provider."""
         links = [
-            "https://vidara.to/v/abc123",
-            "https://streamtape.com/e/tape456",
-            "https://streamfiles.net/sf789",
+            "https://vidara.to/v/part1",
+            "https://vidara.to/v/part2",
+            "https://streamtape.com/e/tape1",
         ]
-        markup = build_streaming_buttons(links)
-        self.assertIsNotNone(markup.inline_keyboard)
-        # Verify 2 buttons in row 1, 1 button in row 2
-        self.assertEqual(len(markup.inline_keyboard), 2)
-        self.assertEqual(len(markup.inline_keyboard[0]), 2)
-        self.assertEqual(len(markup.inline_keyboard[1]), 1)
+        grouped = group_links_by_host(links)
+        self.assertIn("⚡ Vidara", grouped)
+        self.assertIn("🎬 Streamtape", grouped)
+        self.assertEqual(len(grouped["⚡ Vidara"]), 2)
+        self.assertEqual(len(grouped["🎬 Streamtape"]), 1)
 
     def test_format_post_card(self):
-        """Test formatting of post details card."""
+        """Test formatting of post details card with copyable multi-line code boxes."""
         details = {
             "title": "Sample Movie <4K>",
             "post_url": "https://dropmms.com/topic/123-movie/",
             "tags": ["4K", "1080P"],
-            "streaming_links": ["https://vidara.to/v/123"],
+            "streaming_links": [
+                "https://vidara.to/v/part1",
+                "https://vidara.to/v/part2",
+                "https://streamtape.com/e/tape1",
+            ],
             "thumbnail": "https://dropmms.com/thumb.jpg",
         }
         caption, markup = format_post_card(details)
         self.assertIn("Sample Movie &lt;4K&gt;", caption)
         self.assertIn("#4K", caption)
         self.assertIn("View Forum Thread", caption)
-        self.assertEqual(len(markup.inline_keyboard), 1)
+        self.assertIn("<pre><code>https://vidara.to/v/part1\nhttps://vidara.to/v/part2</code></pre>", caption)
+        self.assertIn("All Links (Batch Copy All):", caption)
+        self.assertIsNone(markup)
 
     def test_database_channel_linking(self):
         """Test channel registration, retrieval, and removal in SQLite."""

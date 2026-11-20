@@ -65,53 +65,68 @@ db.init_db()
 
 # --- UI & Formatters ---
 
-def build_streaming_buttons(streaming_links: list[str]) -> InlineKeyboardMarkup:
-    """Build a minimal, clean grid of streaming provider buttons (2 per row)."""
-    buttons = []
-    row = []
-    for link in streaming_links:
+def group_links_by_host(links: list[str]) -> dict[str, list[str]]:
+    """Group streaming links by provider badge name."""
+    grouped = {}
+    for link in links:
         badge = get_host_display_name(link)
-        row.append(InlineKeyboardButton(text=badge, url=link))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
+        if badge not in grouped:
+            grouped[badge] = []
+        if link not in grouped[badge]:
+            grouped[badge].append(link)
+    return grouped
 
 
-def format_post_card(details: dict) -> tuple[str, InlineKeyboardMarkup]:
-    """Format single post details into a premium minimal text card and button markup."""
+def format_post_card(details: dict) -> tuple[str, InlineKeyboardMarkup | None]:
+    """
+    Format single post details into a clean, 1-tap copyable text card.
+    Uses multi-line <pre><code> boxes so users can tap any provider box
+    to copy all links for that specific host at once (or all links at once).
+    """
     title = html.escape(details.get("title", "Untitled Video"))
     post_url = html.escape(details.get("post_url", ""))
     tags = details.get("tags", [])
     links = details.get("streaming_links", [])
 
-    caption_lines = [f"🎬 <b>{title}</b>\n"]
+    caption_lines = [f"🎬 <b>{title}</b>"]
 
     if tags:
         tag_str = " ".join([f"<code>#{html.escape(t)}</code>" for t in tags[:5]])
-        caption_lines.append(f"🏷️ {tag_str}\n")
+        caption_lines.append(f"🏷️ {tag_str}")
 
     if post_url:
         caption_lines.append(f"🌐 <a href='{post_url}'>View Forum Thread</a>")
 
     if not links:
         caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
+    else:
+        grouped = group_links_by_host(links)
+        caption_lines.append("\n🍿 <b>Streaming Links (Tap box to copy):</b>")
+
+        for host_badge, host_links in grouped.items():
+            count_label = f" ({len(host_links)})" if len(host_links) > 1 else ""
+            caption_lines.append(f"\n{host_badge}{count_label}:")
+            escaped_links = "\n".join([html.escape(l) for l in host_links])
+            caption_lines.append(f"<pre><code>{escaped_links}</code></pre>")
+
+        # Master Batch Copy block (if multiple providers or multiple links)
+        if len(grouped) > 1 or len(links) > 1:
+            caption_lines.append("\n📋 <b>All Links (Batch Copy All):</b>")
+            all_escaped = "\n".join([html.escape(l) for l in links])
+            caption_lines.append(f"<pre><code>{all_escaped}</code></pre>")
 
     caption = "\n".join(caption_lines)
-    markup = build_streaming_buttons(links)
-    return caption, markup
+    return caption, None
 
 
 # --- Post Sender Engine ---
 
 async def send_post_card(bot, chat_id: int | str, details: dict):
-    """Deliver a premium post card with thumbnail and streaming buttons."""
+    """Deliver a premium post card with thumbnail and copyable link blocks."""
     caption, markup = format_post_card(details)
     thumbnail = details.get("thumbnail")
 
-    # Send with Photo if available and caption fits Telegram's 1024 char limit
+    # If thumbnail exists and caption fits within photo caption limit (1024 chars)
     if thumbnail and len(caption) <= 1024:
         try:
             await bot.send_photo(
@@ -136,16 +151,29 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"Thumbnail send failed, falling back to message: {e}")
+            logger.warning(f"Thumbnail send failed: {e}")
 
-    # Fallback to rich HTML message
+    # If caption > 1024 chars but thumbnail exists, send photo first with title, then full link card
+    if thumbnail and len(caption) > 1024:
+        try:
+            short_caption = f"🎬 <b>{html.escape(details.get('title', 'Video'))}</b>"
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=thumbnail,
+                caption=short_caption,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+    # Send text message card
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
-            disable_web_page_preview=False,
+            disable_web_page_preview=True,
         )
     except RetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
@@ -154,7 +182,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
             text=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
-            disable_web_page_preview=False,
+            disable_web_page_preview=True,
         )
     except Exception as e:
         logger.error(f"Failed to send post card to {chat_id}: {e}")
