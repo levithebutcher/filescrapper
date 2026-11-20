@@ -333,9 +333,7 @@ def get_forum_topics(
     seen = set()
 
     # Search for topic row elements (IPS Community rows)
-    row_elements = soup.find_all("li", class_=re.compile("ipsDataItem|cForumRow", re.I))
-    if not row_elements:
-        row_elements = soup.find_all("div", class_=re.compile("ipsDataItem|cForumRow", re.I))
+    row_elements = soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
 
     for row in row_elements:
         # Find the topic title link in the row
@@ -406,19 +404,38 @@ def get_forum_topics(
         if len(topics) >= limit:
             break
 
-    # Fallback if specific row elements were not found
-    if not topics and not only_today:
+    # Fallback: scan all links with /topic/ if specific row elements were not found
+    if not topics:
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
-            if "/topic/" in href:
+            if "/topic/" in href or "index.php?/topic/" in href:
                 full_url = urljoin(forum_url, href)
                 clean_url = _clean_topic_url(full_url)
-                if clean_url not in seen:
-                    seen.add(clean_url)
-                    t_title = a.get_text(strip=True) or "Untitled Post"
-                    topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
-                    if len(topics) >= limit:
-                        break
+                if clean_url in seen:
+                    continue
+
+                parent = a.find_parent(["li", "div", "tr", "article", "p"])
+                date_str = None
+                time_text = None
+                if parent:
+                    time_tag = parent.find("time")
+                    if time_tag:
+                        date_str = time_tag.get("datetime") or time_tag.get("title")
+                        time_text = time_tag.get_text(strip=True)
+
+                if only_today and (date_str or time_text):
+                    is_today, is_older = _is_posted_today(date_str, time_text)
+                    if not is_today:
+                        continue
+
+                t_title = a.get_text(strip=True)
+                if not t_title or t_title.lower() in ["read more", "view", "page", "next", "prev", "last"]:
+                    continue
+
+                seen.add(clean_url)
+                topics.append({"title": t_title, "url": clean_url, "date": date_str, "views": None})
+                if len(topics) >= limit:
+                    break
 
     # If this is a category/parent forum that lists subforums, traverse into subforums
     if not topics:
