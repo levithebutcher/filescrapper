@@ -115,6 +115,8 @@ class TestScraper(unittest.TestCase):
         self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/uploads/blank.gif"))
         self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/images/spacer.png"))
         self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/theme/site_logo.png"))
+        self.assertFalse(_is_valid_thumbnail_url("https://i.t.net.ar/images/cerrar.png"))
+        self.assertFalse(_is_valid_thumbnail_url("https://example.com/close.png"))
         self.assertFalse(_is_valid_thumbnail_url("data:image/svg+xml;base64,..."))
         self.assertFalse(_is_valid_thumbnail_url(""))
 
@@ -300,6 +302,8 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(_is_posted_today(None, "Just now"), (True, False))
         self.assertEqual(_is_posted_today(None, "Today at 10:30"), (True, False))
         self.assertEqual(_is_posted_today(None, "Yesterday at 10:30 PM"), (False, True))
+        self.assertEqual(_is_posted_today(None, "Yesterday at 9:43"), (False, True))
+        self.assertEqual(_is_posted_today(None, None, full_row_text="Started by User, Yesterday at 9:43 PM"), (False, True))
         self.assertEqual(_is_posted_today(None, "3 days ago"), (False, True))
         self.assertEqual(_is_posted_today(None, "2d"), (False, True))
 

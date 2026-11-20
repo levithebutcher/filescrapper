@@ -220,9 +220,9 @@ def _clean_topic_url(url: str) -> str:
     return clean
 
 
-def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool, bool]:
+def _is_posted_today(date_str: str | None, time_text: str | None, full_row_text: str | None = None) -> tuple[bool, bool]:
     """
-    Check if a post timestamp or relative text indicates it was posted today (within last 24-26h).
+    Check if a post timestamp, relative text, or row text indicates it was posted today (within last 24-26h).
     Returns: (is_today: bool, is_definitely_older: bool)
     - is_today: Confirmed to be uploaded today / within ~26h across timezones.
     - is_definitely_older: Confirmed older (yesterday or earlier).
@@ -231,57 +231,34 @@ def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool,
     today_utc_date = now_utc.date()
     today_utc_str = now_utc.strftime("%Y-%m-%d")
 
-    # Local & IST fallback (UTC+5:30) for users / Indian forum hosting
     now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
     today_ist_date = now_ist.date()
-    today_ist_str = now_ist.strftime("%Y-%m-%d")
 
-    valid_today_dates = {today_utc_str, today_ist_str}
-    today_days = {str(now_utc.day), f"{now_utc.day:02d}", str(now_ist.day), f"{now_ist.day:02d}"}
-    today_months_short = {now_utc.strftime("%b").lower(), now_ist.strftime("%b").lower()}
-    today_months_long = {now_utc.strftime("%B").lower(), now_ist.strftime("%B").lower()}
+    tt = str(time_text or "")
+    fr = str(full_row_text or "")
+    combined = f"{tt} {fr}".lower().strip()
 
-    # 1. Inspect relative time text (e.g. "3 hours ago", "5h", "20m", "Today at 12:45", "Nov 20")
-    if time_text:
-        t = str(time_text).lower().strip()
+    # 1. ABSOLUTE VETO: If text explicitly says 'yesterday', 'day ago', 'days ago', 'week', etc.
+    if any(w in combined for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
+        return False, True
 
-        # Direct today indicators
-        if any(w in t for w in ["today", "just now", "moment"]):
+    # 2. Direct today indicators
+    if any(w in combined for w in ["today", "just now", "moment"]):
+        return True, False
+
+    # 3. Relative hours/mins/seconds regex (e.g. "2h", "2 hr", "2 hours", "20m", "20 min", "45s")
+    if re.search(r"\b\d+\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs)\b(\s*ago)?", combined):
+        if not re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined):
             return True, False
 
-        # Definite older indicators
-        if any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
-            return False, True
+    # Relative days/weeks/years regex (e.g. "2d", "3w")
+    if re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined):
+        return False, True
 
-        # Relative hours/mins/seconds regex (e.g. "2h", "2 hr", "2 hours", "20m", "20 min", "45s")
-        if re.search(r"\b\d+\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)\b(\s*ago)?", t):
-            # Guard against days: "2d", "2 days"
-            if not re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", t):
-                return True, False
-
-        # Relative days/weeks/years regex (e.g. "2d", "3w")
-        if re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", t):
-            return False, True
-
-        # Check calendar dates in text (e.g. "Nov 20", "20 Nov", "November 20")
-        all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-        for m in today_months_short | today_months_long:
-            if m in t:
-                for d in today_days:
-                    if re.search(rf"\b{d}\b", t):
-                        return True, False
-                # Mentioned this month but different day -> older
-                return False, True
-
-        # If any other month is mentioned (e.g. "Oct 15") -> definitely older
-        if any(m in t for m in all_months):
-            return False, True
-
-    # 2. Inspect date_str from <time datetime="..."> or title attribute
+    # 4. Check date_str from <time datetime="..."> or title attribute
     if date_str:
         s = str(date_str).strip()
-        # Direct date prefix check (e.g. "2026-11-20T...")
-        if any(s.startswith(td) for td in valid_today_dates):
+        if s.startswith(today_utc_str):
             return True, False
 
         # Attempt ISO 8601 parsing
@@ -291,14 +268,30 @@ def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool,
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             dt_utc = dt.astimezone(timezone.utc)
-            dt_ist = dt.astimezone(timezone(timedelta(hours=5, minutes=30)))
 
-            if dt_utc.date() == today_utc_date or dt_ist.date() == today_ist_date:
-                return True, False
-            elif dt_utc.date() < today_utc_date and dt_ist.date() < today_ist_date:
+            # If UTC date is earlier than today in UTC, it's definitely older
+            if dt_utc.date() < today_utc_date:
                 return False, True
+            elif dt_utc.date() == today_utc_date:
+                return True, False
         except Exception:
             pass
+
+    # 5. Check calendar dates in text (e.g. "Nov 20", "20 Nov", "November 20")
+    today_days = {str(now_utc.day), f"{now_utc.day:02d}", str(now_ist.day), f"{now_ist.day:02d}"}
+    today_months = {now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()}
+    for m in today_months:
+        if m in combined:
+            for d in today_days:
+                if re.search(rf"\b{d}\b", combined):
+                    return True, False
+            # Mentioned current month but different day -> older
+            return False, True
+
+    # If any other month is mentioned (e.g. "Oct 15") -> definitely older
+    all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    if any(m in combined for m in all_months):
+        return False, True
 
     return False, False
 
@@ -364,25 +357,30 @@ def get_forum_topics(
         if is_pinned and only_today:
             continue
 
-        # Extract publication timestamp from <time datetime="..."> and relative text
+        # Extract publication timestamp from the topic creation container (NOT last poster!)
         date_str = None
         time_text = None
-        meta_elem = row.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I))
-        time_tag = meta_elem.find("time") if meta_elem else None
-        if not time_tag:
-            time_tag = row.find("time")
 
+        main_elem = row.find(class_=re.compile(r"ipsDataItem_main|cForumRow_main", re.I)) or row
+        meta_elem = main_elem.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I)) or main_elem
+
+        time_tag = meta_elem.find("time")
         if time_tag:
             date_str = time_tag.get("datetime") or time_tag.get("title")
             time_text = time_tag.get_text(strip=True)
-        elif meta_elem:
-            time_text = meta_elem.get_text(strip=True)
+
+        # Full text of creation container (e.g. "Started by Levi, Yesterday at 9:43 PM")
+        row_text = meta_elem.get_text(" ", strip=True)
 
         # Apply Option 1 Live Date Cutoff when requested via /today
         if only_today:
-            is_today, is_older = _is_posted_today(date_str, time_text)
+            is_today, is_older = _is_posted_today(date_str, time_text, full_row_text=row_text)
+            if is_older:
+                # Stop scanning as soon as we reach yesterday's uploads!
+                logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' ({row_text}). Stopping scan.")
+                break
             if not is_today:
-                # Skip any topic that is not confirmed today
+                # Skip unconfirmed
                 continue
 
         seen.add(clean_url)
@@ -404,38 +402,19 @@ def get_forum_topics(
         if len(topics) >= limit:
             break
 
-    # Fallback: scan all links with /topic/ if specific row elements were not found
-    if not topics:
+    # Fallback: scan all links with /topic/ if specific row elements were not found (only when only_today is False)
+    if not topics and not only_today:
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
             if "/topic/" in href or "index.php?/topic/" in href:
                 full_url = urljoin(forum_url, href)
                 clean_url = _clean_topic_url(full_url)
-                if clean_url in seen:
-                    continue
-
-                parent = a.find_parent(["li", "div", "tr", "article", "p"])
-                date_str = None
-                time_text = None
-                if parent:
-                    time_tag = parent.find("time")
-                    if time_tag:
-                        date_str = time_tag.get("datetime") or time_tag.get("title")
-                        time_text = time_tag.get_text(strip=True)
-
-                if only_today and (date_str or time_text):
-                    is_today, is_older = _is_posted_today(date_str, time_text)
-                    if not is_today:
-                        continue
-
-                t_title = a.get_text(strip=True)
-                if not t_title or t_title.lower() in ["read more", "view", "page", "next", "prev", "last"]:
-                    continue
-
-                seen.add(clean_url)
-                topics.append({"title": t_title, "url": clean_url, "date": date_str, "views": None})
-                if len(topics) >= limit:
-                    break
+                if clean_url not in seen:
+                    seen.add(clean_url)
+                    t_title = a.get_text(strip=True) or "Untitled Post"
+                    topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
+                    if len(topics) >= limit:
+                        break
 
     # If this is a category/parent forum that lists subforums, traverse into subforums
     if not topics:
@@ -570,6 +549,13 @@ def _is_valid_thumbnail_url(url: str) -> bool:
         "star.png",
         "icon_",
         "favicon",
+        "cerrar",
+        "close.png",
+        "close.gif",
+        "btn_close",
+        "i.t.net.ar",
+        "ad_banner",
+        "ad_overlay",
     ]
     if any(b in lower for b in blacklisted):
         return False
@@ -792,13 +778,17 @@ def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
                 if _is_valid_thumbnail_url(c) and any(c.lower().split("?")[0].endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
                     return urljoin(viewer_url, c)
 
-        # Check common image host IDs
-        for img_id in ["main-image", "image", "show_image", "img_obj"]:
-            img_tag = soup.find("img", id=img_id)
-            if img_tag and img_tag.get("src"):
-                return urljoin(viewer_url, img_tag["src"].strip())
+        # Check common image host classes / IDs (imagetwist, imagehaha, postimg, pixhost)
+        main_img = (
+            soup.find("img", class_=re.compile(r"\b(pic|img|centred|main-image|main_image)\b", re.I))
+            or soup.find("img", id=re.compile(r"^(main-image|image|show_image|img_obj|pic)$", re.I))
+        )
+        if main_img and main_img.get("src"):
+            src = main_img["src"].strip()
+            if _is_valid_thumbnail_url(src):
+                return urljoin(viewer_url, src)
 
-        # Check any img tag with direct image extension
+        # Check any img tag with direct image extension, strictly filtering blacklisted items
         for img in soup.find_all("img", src=True):
             src = img["src"].strip()
             if any(src.lower().split("?")[0].endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
