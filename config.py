@@ -47,8 +47,8 @@ else:
 # Message clean title max length
 MAX_TITLE_LENGTH = int(os.getenv("MAX_TITLE_LENGTH", "120"))
 
-# Max posts to fetch per forum page
-MAX_POSTS_PER_FORUM = int(os.getenv("MAX_POSTS_PER_FORUM", "15"))
+# Max posts to fetch per forum page (DropMMS has 24-25 posts per page)
+MAX_POSTS_PER_FORUM = int(os.getenv("MAX_POSTS_PER_FORUM", "25"))
 
 # Telegram flood wait protection delay (seconds)
 POST_SEND_DELAY = float(os.getenv("POST_SEND_DELAY", "1.5"))

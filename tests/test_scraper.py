@@ -157,6 +157,101 @@ class TestScraper(unittest.TestCase):
         badge, links, is_fallback = filter_links_by_preference(sample_links, "all")
         self.assertEqual(len(links), 3)
 
+    def test_is_valid_image_bytes(self):
+        """Test strict validation of image magic bytes vs HTML error pages."""
+        from scraper import is_valid_image_bytes
+
+        # Valid JPEG
+        jpeg_data = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 1000
+        self.assertTrue(is_valid_image_bytes(jpeg_data))
+
+        # Valid PNG
+        png_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\x00" * 1000
+        self.assertTrue(is_valid_image_bytes(png_data))
+
+        # Valid WebP
+        webp_data = b"RIFF\x00\x00\x04\x00WEBPVP8 " + b"\x00" * 1000
+        self.assertTrue(is_valid_image_bytes(webp_data))
+
+        # Reject HTML page (the cause of Image_process_failed)
+        html_data = b"<!DOCTYPE html><html><head><title>Viewer</title></head><body>Error 404</body></html>" + b" " * 1000
+        self.assertFalse(is_valid_image_bytes(html_data))
+
+        # Reject short/empty data
+        self.assertFalse(is_valid_image_bytes(b""))
+        self.assertFalse(is_valid_image_bytes(None))
+        self.assertFalse(is_valid_image_bytes(b"\xff\xd8\xff"))  # too short (<512 bytes)
+
+    def test_is_posted_today(self):
+        """Test Option 1 Live Date Cutoff logic."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import _is_posted_today
+
+        now_utc = datetime.now(timezone.utc)
+        today_iso = now_utc.strftime("%Y-%m-%dT12:00:00Z")
+        yesterday_dt = now_utc - timedelta(days=1)
+        yesterday_iso = yesterday_dt.strftime("%Y-%m-%dT12:00:00Z")
+
+        # Today ISO timestamp
+        is_today, is_older = _is_posted_today(today_iso, None)
+        self.assertTrue(is_today)
+        self.assertFalse(is_older)
+
+        # Yesterday ISO timestamp -> triggers cutoff
+        is_today, is_older = _is_posted_today(yesterday_iso, None)
+        self.assertFalse(is_today)
+        self.assertTrue(is_older)
+
+        # Relative time strings
+        self.assertEqual(_is_posted_today(None, "2 hours ago"), (True, False))
+        self.assertEqual(_is_posted_today(None, "Just now"), (True, False))
+        self.assertEqual(_is_posted_today(None, "Yesterday at 10:30 PM"), (False, True))
+        self.assertEqual(_is_posted_today(None, "3 days ago"), (False, True))
+
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_date_cutoff(self, mock_fetch_soup):
+        """Test that only_today=True stops scanning immediately on older topics."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import get_forum_topics
+
+        now_utc = datetime.now(timezone.utc)
+        today_iso = now_utc.strftime("%Y-%m-%dT08:00:00Z")
+        yesterday_iso = (now_utc - timedelta(days=1)).strftime("%Y-%m-%dT08:00:00Z")
+
+        html = f"""
+        <html>
+            <body>
+                <li class="ipsDataItem">
+                    <a href="/topic/101-today-post-1/">Today Video 1</a>
+                    <time datetime="{today_iso}">2 hours ago</time>
+                </li>
+                <li class="ipsDataItem">
+                    <a href="/topic/102-today-post-2/">Today Video 2</a>
+                    <time datetime="{today_iso}">5 hours ago</time>
+                </li>
+                <li class="ipsDataItem">
+                    <a href="/topic/103-yesterday-post/">Yesterday Video</a>
+                    <time datetime="{yesterday_iso}">Yesterday at 11 PM</time>
+                </li>
+                <li class="ipsDataItem">
+                    <a href="/topic/104-older-post/">Older Video</a>
+                    <time datetime="{yesterday_iso}">2 days ago</time>
+                </li>
+            </body>
+        </html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+
+        # Mode A: only_today=True (Live Date Cutoff) -> should stop after 2 today posts!
+        today_topics = get_forum_topics("https://dropmms.com/forum/2-test/", limit=25, only_today=True)
+        self.assertEqual(len(today_topics), 2)
+        self.assertEqual(today_topics[0]["title"], "Today Video 1")
+        self.assertEqual(today_topics[1]["title"], "Today Video 2")
+
+        # Mode B: only_today=False (Normal Page Scan) -> should return all 4 posts up to limit
+        all_topics = get_forum_topics("https://dropmms.com/forum/2-test/", limit=25, only_today=False)
+        self.assertEqual(len(all_topics), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

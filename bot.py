@@ -143,7 +143,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         candidates = [details["thumbnail"]]
 
     image_bytes = None
-    for cand_url in candidates[:5]:  # Try top 5 candidates from post
+    for cand_url in candidates[:8]:  # Try up to 8 candidates from post
         try:
             image_bytes = await asyncio.to_thread(download_image_bytes, cand_url)
             if image_bytes:
@@ -185,7 +185,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         try:
             photo_file = io.BytesIO(image_bytes)
             photo_file.name = "poster.jpg"
-            short_caption = f"🎬 <b>{html.escape(details.get('title', 'Video'))}</b>"
+            short_caption = f"<blockquote>🎬 <b>{html.escape(details.get('title', 'Video'))}</b></blockquote>"
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_file,
@@ -318,49 +318,50 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fetch and display today's uploads."""
+    """
+    Fetch and deliver today's fresh uploads (Option 1: Live Date Cutoff).
+    Scans topics in descending chronological order and stops scanning as soon as a post
+    from yesterday or earlier is encountered.
+    Stateless: operates purely on live HTML metadata without any database storage.
+    Usage:
+      /today
+      /today <category_url>
+    """
     msg = update.effective_message
-    status_msg = await msg.reply_text("🔍 <i>Fetching today's uploads...</i>", parse_mode=ParseMode.HTML)
+    user_id = update.effective_user.id if update.effective_user else None
+    status_msg = await msg.reply_text("📅 <i>Scanning today's uploads...</i>", parse_mode=ParseMode.HTML)
 
-    category_url = context.args[0] if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
+    category_url = context.args[0].strip() if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
 
     try:
-        topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 20)
+        # only_today=True: Option 1 Live Date Cutoff activated!
+        topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 25, True)
     except Exception as e:
         await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
         return
 
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    today_topics = []
-
-    for t in topics:
-        t_date = t.get("date")
-        # Match today's date prefix YYYY-MM-DD
-        if t_date and t_date.startswith(today_str):
-            today_topics.append(t)
-
-    # If no strict date match or date missing, show the top 5 freshest topics
-    display_topics = today_topics if today_topics else topics[:5]
-    date_header = today_str if today_topics else "Latest Today"
-
-    text = f"📅 <b>Uploads Feed ({date_header}):</b>\n\n"
-    buttons = []
-
-    for idx, t in enumerate(display_topics, start=1):
-        clean_t = html.escape(t["title"])
-        text += f"{idx}. <b>{clean_t}</b>\n"
-        # Store in URL cache to strictly respect Telegram's 64-byte callback_data limit
-        short_id = db.get_or_create_short_id(t["url"])
-        btn = InlineKeyboardButton(f"🎬 View #{idx}", callback_data=f"sc_{short_id}")
-        buttons.append([btn])
-
-    text += "\n<i>Tap any button below to extract streaming links directly:</i>"
+    if not topics:
+        await status_msg.edit_text(
+            "📅 <b>No new posts found today yet!</b>\n\n"
+            "<i>No topics uploaded today in this category. Older posts were skipped because /today strictly delivers today's fresh drops.</i>\n\n"
+            "💡 <i>To scrape all recent posts regardless of date, paste the category link directly without /today.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
 
     await status_msg.edit_text(
-        text,
+        f"📅 <b>Found {len(topics)} fresh upload(s) from today!</b>\n<i>Extracting links...</i>",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
     )
+
+    for t in topics:
+        await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
+        await asyncio.sleep(POST_SEND_DELAY)
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
 
 
 async def latest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -674,7 +675,8 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
     elif is_forum_url(url):
         status = await msg.reply_text("📂 <i>Scanning forum category...</i>", parse_mode=ParseMode.HTML)
         try:
-            topics = await asyncio.to_thread(get_forum_topics, url, "start_date", MAX_POSTS_PER_FORUM)
+            # Full page scan (up to 25 posts) without date cutoff
+            topics = await asyncio.to_thread(get_forum_topics, url, "start_date", MAX_POSTS_PER_FORUM, False)
             if not topics:
                 await status.edit_text("❌ No topics found in this category.")
                 return
@@ -683,6 +685,10 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
             for t in topics:
                 await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
                 await asyncio.sleep(POST_SEND_DELAY)
+            try:
+                await status.delete()
+            except Exception:
+                pass
         except Exception as e:
             await status.edit_text(f"❌ Error: {html.escape(str(e))}")
     else:

@@ -2,7 +2,7 @@
 
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, quote_plus
 import requests
 from requests.adapters import HTTPAdapter
@@ -213,13 +213,78 @@ def _clean_topic_url(url: str) -> str:
     return clean
 
 
-def get_forum_topics(forum_url: str, sort_by: str = "start_date", limit: int = 15) -> list[dict]:
+def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool, bool]:
+    """
+    Check if a post timestamp or relative text indicates it was posted today.
+    Returns: (is_today: bool, is_definitely_older: bool)
+    - is_today: Confirmed to be uploaded today.
+    - is_definitely_older: Confirmed older (yesterday or earlier).
+      Triggers an immediate break in the category loop (Option 1: Live Date Cutoff).
+    """
+    now_utc = datetime.now(timezone.utc)
+    today_utc_date = now_utc.date()
+    today_utc_str = now_utc.strftime("%Y-%m-%d")
+
+    # Local & IST fallback (UTC+5:30) for users / Indian forum hosting
+    now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    today_ist_date = now_ist.date()
+    today_ist_str = now_ist.strftime("%Y-%m-%d")
+
+    valid_today_dates = {today_utc_str, today_ist_str}
+
+    # 1. Inspect date_str from <time datetime="..."> or title attribute
+    if date_str:
+        s = str(date_str).strip()
+        # Direct date prefix check (e.g. "2026-11-20T...")
+        if any(s.startswith(td) for td in valid_today_dates):
+            return True, False
+
+        # Attempt ISO 8601 parsing
+        try:
+            cleaned_iso = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(cleaned_iso)
+            dt_date = dt.astimezone(timezone.utc).date()
+            if dt_date == today_utc_date or dt_date == today_ist_date:
+                return True, False
+            elif dt_date < today_utc_date and dt_date < today_ist_date:
+                return False, True
+        except Exception:
+            pass
+
+    # 2. Inspect relative time text (e.g. "3 hours ago", "Today at 12:45", "Yesterday at 18:20")
+    if time_text:
+        t = str(time_text).lower().strip()
+        # Check today patterns
+        if any(w in t for w in ["today", "hour", "hr", "min", "sec", "just now", "moment"]):
+            return True, False
+        # Check older patterns
+        if any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
+            return False, True
+        # Check month abbreviations (e.g. "18 nov", "nov 18")
+        months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        if any(m in t for m in months) and not any(td in t for td in valid_today_dates):
+            return False, True
+
+    return False, False
+
+
+def get_forum_topics(
+    forum_url: str,
+    sort_by: str = "start_date",
+    limit: int = 25,
+    only_today: bool = False,
+) -> list[dict]:
     """
     Fetch structured topics from a forum category with date-sorting and metadata.
     sort_by options:
       - 'start_date': Sort by topic creation/upload date (Newest uploads first)
       - 'views': Sort by popularity/views
       - 'updated': Sort by last activity
+    only_today:
+      - If True: Option 1 Live Date Cutoff. Scans topics in descending chronological order
+        and immediately stops scanning as soon as a post from yesterday or earlier is encountered.
+        Returns only today's fresh posts without needing any database storage.
+      - If False: Scrapes up to `limit` posts across the full page (default: 25).
     """
     separator = "&" if "?" in forum_url else "?"
     if sort_by == "start_date":
@@ -247,17 +312,28 @@ def get_forum_topics(forum_url: str, sort_by: str = "start_date", limit: int = 1
         clean_url = _clean_topic_url(full_url)
         if clean_url in seen:
             continue
-        seen.add(clean_url)
 
-        title = link_elem.get_text(strip=True) or "Untitled Post"
-
-        # Extract publication timestamp from <time datetime="...">
+        # Extract publication timestamp from <time datetime="..."> and relative text
         date_str = None
+        time_text = None
         time_tag = row.find("time")
-        if time_tag and time_tag.get("datetime"):
-            date_str = time_tag["datetime"]
-        elif time_tag and time_tag.get("title"):
-            date_str = time_tag["title"]
+        if time_tag:
+            date_str = time_tag.get("datetime") or time_tag.get("title")
+            time_text = time_tag.get_text(strip=True)
+
+        # Apply Option 1 Live Date Cutoff when requested via /today
+        if only_today:
+            is_today, is_older = _is_posted_today(date_str, time_text)
+            if is_older:
+                # Chronological descending order means all subsequent topics are also older.
+                logger.info(f"Live date cutoff: Topic '{clean_url}' is older ({date_str or time_text}). Stopping scan.")
+                break
+            if not is_today:
+                # If cannot verify as today, skip this topic
+                continue
+
+        seen.add(clean_url)
+        title = link_elem.get_text(strip=True) or "Untitled Post"
 
         # Extract views count
         views_str = None
@@ -276,7 +352,7 @@ def get_forum_topics(forum_url: str, sort_by: str = "start_date", limit: int = 1
             break
 
     # Fallback if specific row elements were not found
-    if not topics:
+    if not topics and not only_today:
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
             if "/topic/" in href:
@@ -393,8 +469,8 @@ def _is_valid_thumbnail_url(url: str) -> bool:
 def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[str]:
     """
     Extract all valid image URLs from a forum topic.
-    Scans post content, image hosts, attachment links, and metadata.
-    Returns ordered list of candidates with the main poster first.
+    Scans post content, image tags, image hosts, attachment links, and metadata.
+    Returns ordered list of candidates with direct poster/screenshots prioritized first.
     """
     candidates = []
     seen = set()
@@ -416,17 +492,7 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
         content_areas = [soup]
 
     for area in content_areas:
-        # 1A. Check direct image links and popular image hosts
-        for a in area.find_all("a", href=True):
-            href = a["href"].strip()
-            lower_href = href.lower().split("?")[0]
-            if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]):
-                add_candidate(href)
-            # Popular forum image hosting direct mirrors
-            elif any(ih in lower_href for ih in ["pixhost", "postimg", "imgbox", "imagebam", "ibb.co", "picbaron", "turboimagehost", "imx.to"]):
-                add_candidate(href)
-
-        # 1B. Check all img tags (lazy-load attributes prioritized over src)
+        # 1A. PRIORITY 1: Check all <img> tags inside post content (where posters & screenshots are embedded)
         for img in area.find_all("img"):
             src = (
                 img.get("data-src")
@@ -440,17 +506,31 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
             if src:
                 add_candidate(src)
 
-    # 2. Regex fallback over page HTML for full image URLs
-    img_regex = re.compile(r'https?://[^\s<>"\'{}|\\^`]+?\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
-    for m in img_regex.finditer(str(soup)):
-        raw_url = m.group(0)
-        add_candidate(raw_url)
+        # 1B. PRIORITY 2: Check <a> links that explicitly end with image file extensions
+        for a in area.find_all("a", href=True):
+            href = a["href"].strip()
+            lower_href = href.lower().split("?")[0]
+            if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]):
+                add_candidate(href)
 
-    # 3. Fallback to OpenGraph / Twitter meta images
+        # 1C. PRIORITY 3: Check popular image host viewer links in <a> (postimg, pixhost, imgbox, etc.)
+        for a in area.find_all("a", href=True):
+            href = a["href"].strip()
+            lower_href = href.lower().split("?")[0]
+            if any(ih in lower_href for ih in ["pixhost", "postimg", "imgbox", "imagebam", "ibb.co", "picbaron", "turboimagehost", "imx.to"]):
+                add_candidate(href)
+
+    # 2. OpenGraph / Twitter meta images
     for meta_name in [("property", "og:image"), ("name", "og:image"), ("name", "twitter:image")]:
         tag = soup.find("meta", attrs={meta_name[0]: meta_name[1]})
         if tag and tag.get("content"):
             add_candidate(tag["content"])
+
+    # 3. Regex fallback over page HTML for direct image URLs (.jpg, .png, .webp)
+    img_regex = re.compile(r'https?://[^\s<>"\'{}|\\^`]+?\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
+    for m in img_regex.finditer(str(soup)):
+        raw_url = m.group(0)
+        add_candidate(raw_url)
 
     return candidates
 
@@ -461,20 +541,92 @@ def _extract_thumbnail(soup: BeautifulSoup, post_url: str) -> str | None:
     return candidates[0] if candidates else None
 
 
+def is_valid_image_bytes(data: bytes) -> bool:
+    """
+    Strictly verify that data contains valid image magic bytes.
+    Rejects HTML documents, error pages, and corrupted data.
+    """
+    if not data or len(data) < 512:
+        return False
+    # Strictly reject HTML / XML / text
+    prefix = data[:32].strip()
+    if prefix.startswith(b"<") or b"<!doc" in prefix.lower() or b"<html" in prefix.lower():
+        return False
+    # JPEG magic bytes: FF D8 FF
+    if data[:3] == b"\xff\xd8\xff":
+        return True
+    # PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    # WebP: starts with 'RIFF' and bytes 8..12 are 'WEBP'
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        return True
+    # GIF: GIF87a or GIF89a
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    # BMP: BM
+    if data[:2] == b"BM":
+        return True
+    return False
+
+
+def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
+    """
+    Extract direct image URL from an image host viewer webpage (postimg, pixhost, etc.).
+    """
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+        # Check OpenGraph / Twitter meta image
+        for meta_attr in [("property", "og:image"), ("name", "og:image"), ("name", "twitter:image")]:
+            tag = soup.find("meta", attrs={meta_attr[0]: meta_attr[1]})
+            if tag and tag.get("content"):
+                c = tag["content"].strip()
+                if _is_valid_thumbnail_url(c) and any(c.lower().split("?")[0].endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                    return urljoin(viewer_url, c)
+
+        # Check common image host IDs
+        for img_id in ["main-image", "image", "show_image", "img_obj"]:
+            img_tag = soup.find("img", id=img_id)
+            if img_tag and img_tag.get("src"):
+                return urljoin(viewer_url, img_tag["src"].strip())
+
+        # Check any img tag with direct image extension
+        for img in soup.find_all("img", src=True):
+            src = img["src"].strip()
+            if any(src.lower().split("?")[0].endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                if _is_valid_thumbnail_url(src):
+                    return urljoin(viewer_url, src)
+    except Exception:
+        pass
+    return None
+
+
 def download_image_bytes(image_url: str) -> bytes | None:
     """
     Download image into memory using the bot's configured requests session.
-    Bypasses hotlinking protection / 403 Forbidden on Telegram crawler.
+    Verifies image magic bytes to ensure Telegram never throws Image_process_failed.
+    If image_url is an HTML viewer page, automatically resolves and downloads the real image.
     """
     if not image_url or not isinstance(image_url, str):
         return None
     try:
         resp = _session.get(image_url, timeout=12)
-        if resp.status_code == 200:
-            content_type = resp.headers.get("Content-Type", "").lower()
-            # Verify response is a real image (>1KB) and not an HTML error page
-            if (("image" in content_type) or (len(resp.content) > 2048)) and len(resp.content) > 1024:
-                return resp.content
+        if resp.status_code != 200 or not resp.content:
+            return None
+
+        # 1. Direct image check via magic bytes
+        if is_valid_image_bytes(resp.content):
+            return resp.content
+
+        # 2. If response is HTML, it might be an image host viewer page (postimg, pixhost, etc.)
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type or resp.content[:1] == b"<":
+            direct_img_url = _resolve_image_viewer_url(image_url, resp.text)
+            if direct_img_url and direct_img_url != image_url:
+                direct_resp = _session.get(direct_img_url, timeout=12)
+                if direct_resp.status_code == 200 and is_valid_image_bytes(direct_resp.content):
+                    return direct_resp.content
+
     except Exception as e:
         logger.warning(f"Could not download thumbnail bytes from {image_url}: {e}")
     return None
