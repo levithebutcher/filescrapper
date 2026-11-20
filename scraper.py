@@ -1,9 +1,11 @@
 # scraper.py
 
 import re
+import io
 import logging
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, quote_plus
+from PIL import Image
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -437,7 +439,7 @@ def _is_valid_thumbnail_url(url: str) -> bool:
     if not lower.startswith("http://") and not lower.startswith("https://"):
         return False
 
-    # Discard blank GIFs, spacer images, transparent SVGs, default site logos
+    # Discard blank GIFs, spacer images, avatars, user badges, reaction emojis, site logos
     blacklisted = [
         "blank.gif",
         "blank.png",
@@ -449,8 +451,14 @@ def _is_valid_thumbnail_url(url: str) -> bool:
         "default_og",
         "default_avatar",
         "avatar",
+        "userphoto",
+        "ipsuserphoto",
+        "profile",
+        "member",
         "emoticons",
         "smile",
+        "reaction",
+        "react",
         "site_logo",
         "logo.png",
         "logo.jpg",
@@ -460,6 +468,12 @@ def _is_valid_thumbnail_url(url: str) -> bool:
         "svg+xml",
         "attachment-icon",
         "theme_logo",
+        "badge",
+        "rank",
+        "signature",
+        "star.png",
+        "icon_",
+        "favicon",
     ]
     if any(b in lower for b in blacklisted):
         return False
@@ -469,8 +483,8 @@ def _is_valid_thumbnail_url(url: str) -> bool:
 def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[str]:
     """
     Extract all valid image URLs from a forum topic.
-    Scans post content, image tags, image hosts, attachment links, and metadata.
-    Returns ordered list of candidates with direct poster/screenshots prioritized first.
+    Strictly focuses on the first post's commentContent (the actual post body created by author)
+    and completely excludes author avatars, user badges, signatures, reactions, and forum chrome.
     """
     candidates = []
     seen = set()
@@ -483,54 +497,64 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
             seen.add(full)
             candidates.append(full)
 
-    # 1. Search in all post content bodies (handles multiple posts / comments)
-    content_areas = soup.find_all(
-        ["div", "article", "section"],
-        class_=re.compile(r"cPost_contentWrap|commentContent|ipsType_richText|ipsType_normal|cPost", re.I)
-    )
-    if not content_areas:
-        content_areas = [soup]
+    # 1. Target specifically the FIRST post on the page (the topic starter's post)
+    main_post = soup.find(["article", "div"], class_=re.compile(r"\bcPost\b", re.I))
+    if not main_post:
+        main_post = soup
 
-    for area in content_areas:
-        # 1A. PRIORITY 1: Check all <img> tags inside post content (where posters & screenshots are embedded)
-        for img in area.find_all("img"):
-            src = (
-                img.get("data-src")
-                or img.get("data-original")
-                or img.get("data-lazy-src")
-                or img.get("data-url")
-                or img.get("data-highres")
-                or img.get("data-image")
-                or img.get("src")
-            )
-            if src:
-                add_candidate(src)
+    # 2. Extract strictly from data-role="commentContent" (the actual post body)
+    post_body = main_post.find("div", attrs={"data-role": "commentContent"})
+    if not post_body:
+        post_body = main_post.find("div", class_=re.compile(r"commentContent|ipsType_richText", re.I))
+    if not post_body:
+        post_body = main_post
 
-        # 1B. PRIORITY 2: Check <a> links that explicitly end with image file extensions
-        for a in area.find_all("a", href=True):
-            href = a["href"].strip()
-            lower_href = href.lower().split("?")[0]
-            if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]):
-                add_candidate(href)
+    # 2A. PRIORITY 1: Invision Community embedded images (class ipsImage)
+    for img in post_body.find_all("img", class_=re.compile(r"ipsImage", re.I)):
+        src = (
+            img.get("data-highres")
+            or img.get("data-src")
+            or img.get("data-original")
+            or img.get("data-lazy-src")
+            or img.get("data-image")
+            or img.get("src")
+        )
+        if src:
+            add_candidate(src)
 
-        # 1C. PRIORITY 3: Check popular image host viewer links in <a> (postimg, pixhost, imgbox, etc.)
-        for a in area.find_all("a", href=True):
-            href = a["href"].strip()
-            lower_href = href.lower().split("?")[0]
-            if any(ih in lower_href for ih in ["pixhost", "postimg", "imgbox", "imagebam", "ibb.co", "picbaron", "turboimagehost", "imx.to"]):
-                add_candidate(href)
+    # 2B. PRIORITY 2: Attachment links
+    for a in post_body.find_all("a", class_=re.compile(r"ipsAttachLink", re.I)):
+        if a.get("href"):
+            add_candidate(a["href"])
 
-    # 2. OpenGraph / Twitter meta images
-    for meta_name in [("property", "og:image"), ("name", "og:image"), ("name", "twitter:image")]:
-        tag = soup.find("meta", attrs={meta_name[0]: meta_name[1]})
-        if tag and tag.get("content"):
-            add_candidate(tag["content"])
+    # 2C. PRIORITY 3: Popular forum image hosting direct & viewer links in <a>
+    for a in post_body.find_all("a", href=True):
+        href = a["href"].strip()
+        lower_href = href.lower().split("?")[0]
+        if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]):
+            add_candidate(href)
+        elif any(ih in lower_href for ih in ["postimg", "pixhost", "imgbox", "imagebam", "ibb.co", "turboimagehost", "imx.to", "picbaron"]):
+            add_candidate(href)
 
-    # 3. Regex fallback over page HTML for direct image URLs (.jpg, .png, .webp)
-    img_regex = re.compile(r'https?://[^\s<>"\'{}|\\^`]+?\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
-    for m in img_regex.finditer(str(soup)):
-        raw_url = m.group(0)
-        add_candidate(raw_url)
+    # 2D. PRIORITY 4: General <img> tags within post body
+    for img in post_body.find_all("img"):
+        src = (
+            img.get("data-highres")
+            or img.get("data-src")
+            or img.get("data-original")
+            or img.get("data-lazy-src")
+            or img.get("data-image")
+            or img.get("src")
+        )
+        if src:
+            add_candidate(src)
+
+    # 3. Fallback: if absolutely NO images inside post body, check OpenGraph
+    if not candidates:
+        for meta_name in [("property", "og:image"), ("name", "og:image"), ("name", "twitter:image")]:
+            tag = soup.find("meta", attrs={meta_name[0]: meta_name[1]})
+            if tag and tag.get("content"):
+                add_candidate(tag["content"])
 
     return candidates
 
@@ -570,6 +594,26 @@ def is_valid_image_bytes(data: bytes) -> bool:
     return False
 
 
+def is_valid_thumbnail_image(data: bytes, min_width: int = 180, min_height: int = 180) -> bool:
+    """
+    Verify with Pillow that downloaded data is a valid image with resolution
+    suitable for a movie poster or screenshot (rejects tiny avatars, icons, badges).
+    """
+    if not data or len(data) < 512:
+        return False
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            w, h = im.size
+            # Posters and screenshots are substantially larger than user avatars (usually 50x50 to 100x100)
+            if w < min_width and h < min_height:
+                logger.info(f"Rejected candidate image ({w}x{h} px): below minimum thumbnail dimensions.")
+                return False
+            return True
+    except Exception as e:
+        logger.debug(f"Pillow could not parse image dimensions: {e}")
+        return True  # If Pillow fails for rare format, fallback to magic bytes check
+
+
 def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
     """
     Extract direct image URL from an image host viewer webpage (postimg, pixhost, etc.).
@@ -604,7 +648,8 @@ def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
 def download_image_bytes(image_url: str) -> bytes | None:
     """
     Download image into memory using the bot's configured requests session.
-    Verifies image magic bytes to ensure Telegram never throws Image_process_failed.
+    Verifies image magic bytes AND image dimensions with Pillow to ensure
+    tiny avatars / icons are filtered out and Telegram never throws Image_process_failed.
     If image_url is an HTML viewer page, automatically resolves and downloads the real image.
     """
     if not image_url or not isinstance(image_url, str):
@@ -614,9 +659,13 @@ def download_image_bytes(image_url: str) -> bytes | None:
         if resp.status_code != 200 or not resp.content:
             return None
 
-        # 1. Direct image check via magic bytes
+        # 1. Direct image check via magic bytes and Pillow dimension verification
         if is_valid_image_bytes(resp.content):
-            return resp.content
+            if is_valid_thumbnail_image(resp.content):
+                return resp.content
+            else:
+                logger.info(f"Skipping candidate {image_url}: failed dimension verification (likely avatar/icon).")
+                return None
 
         # 2. If response is HTML, it might be an image host viewer page (postimg, pixhost, etc.)
         content_type = resp.headers.get("Content-Type", "").lower()
@@ -625,7 +674,8 @@ def download_image_bytes(image_url: str) -> bytes | None:
             if direct_img_url and direct_img_url != image_url:
                 direct_resp = _session.get(direct_img_url, timeout=12)
                 if direct_resp.status_code == 200 and is_valid_image_bytes(direct_resp.content):
-                    return direct_resp.content
+                    if is_valid_thumbnail_image(direct_resp.content):
+                        return direct_resp.content
 
     except Exception as e:
         logger.warning(f"Could not download thumbnail bytes from {image_url}: {e}")

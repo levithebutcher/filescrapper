@@ -157,6 +157,49 @@ class TestScraper(unittest.TestCase):
         badge, links, is_fallback = filter_links_by_preference(sample_links, "all")
         self.assertEqual(len(links), 3)
 
+    @patch("scraper._fetch_soup")
+    def test_exclude_author_avatar_and_prioritize_poster(self, mock_fetch_soup):
+        """Test that author avatar in cAuthorPane is excluded and post body image is chosen."""
+        html = """
+        <html>
+            <body>
+                <article class="cPost">
+                    <aside class="cAuthorPane">
+                        <img class="ipsUserPhoto" src="https://dropmms.com/uploads/avatar_author.jpg" />
+                    </aside>
+                    <div class="cPost_contentWrap">
+                        <div data-role="commentContent">
+                            <img class="ipsImage" src="https://dropmms.com/uploads/movie_poster_real.jpg" />
+                            <a href="https://vidara.to/v/test123">Vidara</a>
+                        </div>
+                    </div>
+                </article>
+            </body>
+        </html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+        details = get_post_details("https://dropmms.com/topic/999-poster-test/")
+        self.assertEqual(details["thumbnail"], "https://dropmms.com/uploads/movie_poster_real.jpg")
+        self.assertNotIn("https://dropmms.com/uploads/avatar_author.jpg", details["thumbnail_candidates"])
+
+    def test_is_valid_thumbnail_image_pillow(self):
+        """Test Pillow dimension verification rejects tiny avatars and accepts large posters."""
+        from PIL import Image
+        import io
+        from scraper import is_valid_thumbnail_image
+
+        # Tiny avatar (64x64) -> rejected
+        im_small = Image.new("RGB", (64, 64), color="red")
+        buf_small = io.BytesIO()
+        im_small.save(buf_small, format="JPEG")
+        self.assertFalse(is_valid_thumbnail_image(buf_small.getvalue()))
+
+        # Large movie poster (600x900) -> accepted
+        im_large = Image.new("RGB", (600, 900), color="blue")
+        buf_large = io.BytesIO()
+        im_large.save(buf_large, format="JPEG")
+        self.assertTrue(is_valid_thumbnail_image(buf_large.getvalue()))
+
     def test_is_valid_image_bytes(self):
         """Test strict validation of image magic bytes vs HTML error pages."""
         from scraper import is_valid_image_bytes

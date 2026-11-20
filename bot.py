@@ -16,6 +16,7 @@ from telegram import (
     InlineKeyboardMarkup,
     ChatMember,
     ChatMemberUpdated,
+    MenuButtonCommands,
 )
 from telegram.constants import ChatMemberStatus, ChatType, ParseMode
 from telegram.error import RetryAfter, BadRequest, TelegramError
@@ -286,7 +287,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("⚙️ Preferred Player", callback_data="cb_sethost"),
+            InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search"),
+        ],
+        [
             InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
+            InlineKeyboardButton("📖 User Guide", callback_data="cb_help"),
         ],
     ]
 
@@ -717,6 +722,19 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await today_command(update, context)
     elif data == "cb_latest":
         await latest_command(update, context)
+    elif data == "cb_search":
+        await query.message.reply_text(
+            "🔍 <b>How to Search Videos:</b>\n\n"
+            "Use the <code>/search</code> command followed by a movie title or keyword:\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>/search 1080p</code>\n"
+            "• <code>/search action</code>\n"
+            "• <code>/search sample</code>\n\n"
+            "<i>Just type /search &lt;keyword&gt; to search instantly!</i>",
+            parse_mode=ParseMode.HTML,
+        )
+    elif data == "cb_help":
+        await help_command(update, context)
     elif data == "cb_domains":
         await domains_command(update, context)
     elif data == "cb_channel_help":
@@ -792,7 +810,12 @@ async def post_init(application: Application):
     ]
     try:
         await application.bot.set_my_commands(commands)
-        logger.info("✅ Telegram Bot Commands registered.")
+        # Enable native Telegram command menu button at bottom-left of chat input
+        try:
+            await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception as e_menu:
+            logger.debug(f"Menu button set note: {e_menu}")
+        logger.info("✅ Telegram Bot Commands & Menu Button registered.")
     except Exception as e:
         logger.warning(f"Could not register commands with BotFather: {e}")
 
