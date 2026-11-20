@@ -390,59 +390,93 @@ def _is_valid_thumbnail_url(url: str) -> bool:
     return True
 
 
-def _extract_thumbnail(soup: BeautifulSoup, post_url: str) -> str | None:
+def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[str]:
     """
-    Extract best thumbnail image from post content or metadata.
-    Prioritizes real content poster images over site-wide logos or blank spacer GIFs.
+    Extract all valid image URLs from a forum topic.
+    Scans post content, image hosts, attachment links, and metadata.
+    Returns ordered list of candidates with the main poster first.
     """
-    # 1. Search post content body FIRST (where real video poster is located)
-    content_container = (
-        soup.find("div", class_="cPost_contentWrap")
-        or soup.find("div", attrs={"data-role": "commentContent"})
-        or soup.find("div", class_="ipsType_richText")
-        or soup.find("article")
-        or soup
+    candidates = []
+    seen = set()
+
+    def add_candidate(url: str):
+        if not url or not isinstance(url, str):
+            return
+        full = urljoin(post_url, url.strip())
+        if _is_valid_thumbnail_url(full) and full not in seen:
+            seen.add(full)
+            candidates.append(full)
+
+    # 1. Search in all post content bodies (handles multiple posts / comments)
+    content_areas = soup.find_all(
+        ["div", "article", "section"],
+        class_=re.compile(r"cPost_contentWrap|commentContent|ipsType_richText|ipsType_normal|cPost", re.I)
     )
+    if not content_areas:
+        content_areas = [soup]
 
-    # 1A. Direct image attachment links (e.g. IPS ipsAttachLink_image)
-    for a in content_container.find_all("a", href=True):
-        href = a["href"].strip()
-        full_href = urljoin(post_url, href)
-        lower_href = full_href.lower().split("?")[0]
-        if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-            if _is_valid_thumbnail_url(full_href):
-                return full_href
+    for area in content_areas:
+        # 1A. Check direct image links and popular image hosts
+        for a in area.find_all("a", href=True):
+            href = a["href"].strip()
+            lower_href = href.lower().split("?")[0]
+            if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]):
+                add_candidate(href)
+            # Popular forum image hosting direct mirrors
+            elif any(ih in lower_href for ih in ["pixhost", "postimg", "imgbox", "imagebam", "ibb.co", "picbaron", "turboimagehost", "imx.to"]):
+                add_candidate(href)
 
-    # 1B. Image tags: check lazy-load attributes (data-src) BEFORE src (which is often blank.gif)
-    for img in content_container.find_all("img"):
-        src = (
-            img.get("data-src")
-            or img.get("data-original")
-            or img.get("data-lazy-src")
-            or img.get("data-url")
-            or img.get("data-image")
-            or img.get("src")
-        )
-        if not src:
-            continue
-        full_img_url = urljoin(post_url, src.strip())
-        if _is_valid_thumbnail_url(full_img_url):
-            return full_img_url
+        # 1B. Check all img tags (lazy-load attributes prioritized over src)
+        for img in area.find_all("img"):
+            src = (
+                img.get("data-src")
+                or img.get("data-original")
+                or img.get("data-lazy-src")
+                or img.get("data-url")
+                or img.get("data-highres")
+                or img.get("data-image")
+                or img.get("src")
+            )
+            if src:
+                add_candidate(src)
 
-    # 2. Fallback to OpenGraph image (only if it is a real post image, not default logo)
-    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"})
-    if og_img and og_img.get("content"):
-        content = urljoin(post_url, og_img["content"].strip())
-        if _is_valid_thumbnail_url(content):
-            return content
+    # 2. Regex fallback over page HTML for full image URLs
+    img_regex = re.compile(r'https?://[^\s<>"\'{}|\\^`]+?\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
+    for m in img_regex.finditer(str(soup)):
+        raw_url = m.group(0)
+        add_candidate(raw_url)
 
-    # 3. Fallback to Twitter image
-    tw_img = soup.find("meta", attrs={"name": "twitter:image"})
-    if tw_img and tw_img.get("content"):
-        content = urljoin(post_url, tw_img["content"].strip())
-        if _is_valid_thumbnail_url(content):
-            return content
+    # 3. Fallback to OpenGraph / Twitter meta images
+    for meta_name in [("property", "og:image"), ("name", "og:image"), ("name", "twitter:image")]:
+        tag = soup.find("meta", attrs={meta_name[0]: meta_name[1]})
+        if tag and tag.get("content"):
+            add_candidate(tag["content"])
 
+    return candidates
+
+
+def _extract_thumbnail(soup: BeautifulSoup, post_url: str) -> str | None:
+    """Extract best thumbnail candidate URL."""
+    candidates = _extract_all_image_candidates(soup, post_url)
+    return candidates[0] if candidates else None
+
+
+def download_image_bytes(image_url: str) -> bytes | None:
+    """
+    Download image into memory using the bot's configured requests session.
+    Bypasses hotlinking protection / 403 Forbidden on Telegram crawler.
+    """
+    if not image_url or not isinstance(image_url, str):
+        return None
+    try:
+        resp = _session.get(image_url, timeout=12)
+        if resp.status_code == 200:
+            content_type = resp.headers.get("Content-Type", "").lower()
+            # Verify response is a real image (>1KB) and not an HTML error page
+            if (("image" in content_type) or (len(resp.content) > 2048)) and len(resp.content) > 1024:
+                return resp.content
+    except Exception as e:
+        logger.warning(f"Could not download thumbnail bytes from {image_url}: {e}")
     return None
 
 
@@ -466,7 +500,8 @@ def get_post_details(post_url: str) -> dict:
         title = "Untitled Post"
 
     clean_title, tags = extract_tags_and_quality(title)
-    thumbnail = _extract_thumbnail(soup, post_url)
+    thumbnail_candidates = _extract_all_image_candidates(soup, post_url)
+    thumbnail = thumbnail_candidates[0] if thumbnail_candidates else None
     streaming_links = _extract_streaming_links_from_html(soup, post_url)
 
     return {
@@ -474,6 +509,7 @@ def get_post_details(post_url: str) -> dict:
         "clean_title": clean_title,
         "tags": tags,
         "thumbnail": thumbnail,
+        "thumbnail_candidates": thumbnail_candidates,
         "streaming_links": streaming_links,
         "post_url": post_url,
     }

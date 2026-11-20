@@ -57,7 +57,7 @@ class TestBot(unittest.TestCase):
 
     def test_user_host_preference_db(self):
         """Test setting and getting user host preference in db."""
-        test_uid = 99887766
+        test_uid = int(uuid.uuid4().int % 1000000000)
         # Default should be vidara
         self.assertEqual(db.get_user_host_preference(test_uid), "vidara")
 

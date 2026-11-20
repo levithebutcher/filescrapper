@@ -2,6 +2,7 @@
 
 import sys
 import html
+import io
 import time
 import asyncio
 import logging
@@ -50,6 +51,7 @@ from scraper import (
     is_topic_url,
     get_host_display_name,
     filter_links_by_preference,
+    download_image_bytes,
 )
 import db
 
@@ -130,18 +132,33 @@ def format_post_card(details: dict, user_pref: str = "vidara") -> str:
 # --- Post Sender Engine ---
 
 async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None):
-    """Deliver a clean post card with thumbnail and preferred copyable link(s)."""
+    """Deliver a clean post card with downloaded thumbnail bytes and copyable link(s)."""
     target_uid = user_id if user_id else (chat_id if isinstance(chat_id, int) and chat_id > 0 else 0)
     user_pref = db.get_user_host_preference(target_uid) if target_uid else "vidara"
     caption = format_post_card(details, user_pref)
-    thumbnail = details.get("thumbnail")
 
-    # If thumbnail exists and caption fits within photo caption limit (1024 chars)
-    if thumbnail and len(caption) <= 1024:
+    # Collect thumbnail candidates and download the first valid image into memory
+    candidates = details.get("thumbnail_candidates", [])
+    if not candidates and details.get("thumbnail"):
+        candidates = [details["thumbnail"]]
+
+    image_bytes = None
+    for cand_url in candidates[:5]:  # Try top 5 candidates from post
         try:
+            image_bytes = await asyncio.to_thread(download_image_bytes, cand_url)
+            if image_bytes:
+                break
+        except Exception:
+            continue
+
+    # 1. If image downloaded and caption fits within photo caption limit (1024 chars)
+    if image_bytes and len(caption) <= 1024:
+        try:
+            photo_file = io.BytesIO(image_bytes)
+            photo_file.name = "poster.jpg"
             await bot.send_photo(
                 chat_id=chat_id,
-                photo=thumbnail,
+                photo=photo_file,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
             )
@@ -149,9 +166,11 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
             try:
+                photo_file = io.BytesIO(image_bytes)
+                photo_file.name = "poster.jpg"
                 await bot.send_photo(
                     chat_id=chat_id,
-                    photo=thumbnail,
+                    photo=photo_file,
                     caption=caption,
                     parse_mode=ParseMode.HTML,
                 )
@@ -161,7 +180,22 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         except Exception as e:
             logger.warning(f"Thumbnail send failed: {e}")
 
-    # Fallback to text message if no thumbnail, caption > 1024 chars, or image failed
+    # 2. If image downloaded but caption is longer than 1024 chars, send photo first then text
+    if image_bytes and len(caption) > 1024:
+        try:
+            photo_file = io.BytesIO(image_bytes)
+            photo_file.name = "poster.jpg"
+            short_caption = f"🎬 <b>{html.escape(details.get('title', 'Video'))}</b>"
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=short_caption,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.warning(f"Detached photo send failed: {e}")
+
+    # 3. Fallback to text message
     try:
         await bot.send_message(
             chat_id=chat_id,
