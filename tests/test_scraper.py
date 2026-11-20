@@ -60,10 +60,19 @@ class TestScraper(unittest.TestCase):
         cleaned_page = _clean_topic_url(url_page)
         self.assertEqual(cleaned_page, "https://dropmms.com/topic/123-sample-title/")
 
+        # Test index.php query style URLs
+        url_idx = "https://dropmms.com/index.php?/topic/123-sample-title/&page=2#comment"
+        cleaned_idx = _clean_topic_url(url_idx)
+        self.assertEqual(cleaned_idx, "https://dropmms.com/index.php?/topic/123-sample-title/")
+
     def test_is_forum_url(self):
         """Test detection of forum/category URLs."""
         self.assertTrue(is_forum_url("https://dropmms.com/forum/2-general-discussion/"))
         self.assertTrue(is_forum_url("https://dropmms.com/forums/forum-name/"))
+        self.assertTrue(is_forum_url("https://dropmms.com/category/1-movies/"))
+        self.assertTrue(is_forum_url("https://dropmms.com/categories/1-movies/"))
+        self.assertTrue(is_forum_url("https://dropmms.com/"))
+        self.assertTrue(is_forum_url("https://dropmms.com"))
         self.assertTrue(is_forum_url("https://dropmms.com/index.php"))
         self.assertFalse(is_forum_url("https://dropmms.com/topic/456-sample/"))
         self.assertFalse(is_forum_url(""))
@@ -72,7 +81,10 @@ class TestScraper(unittest.TestCase):
         """Test detection of single topic/post URLs."""
         self.assertTrue(is_topic_url("https://dropmms.com/topic/123-sample-title/"))
         self.assertTrue(is_topic_url("https://dropmms.com/TOPIC/123-SAMPLE/"))
+        self.assertTrue(is_topic_url("https://dropmms.com/index.php?/topic/123-sample/"))
+        self.assertTrue(is_topic_url("https://dropmms.com/topics/topic/123-sample/"))
         self.assertFalse(is_topic_url("https://dropmms.com/forum/2-general/"))
+        self.assertFalse(is_topic_url("https://dropmms.com/category/1-movies/"))
         self.assertFalse(is_topic_url(""))
 
     def test_extract_streaming_links_from_html(self):
@@ -282,9 +294,21 @@ class TestScraper(unittest.TestCase):
 
         # Relative time strings
         self.assertEqual(_is_posted_today(None, "2 hours ago"), (True, False))
+        self.assertEqual(_is_posted_today(None, "5h"), (True, False))
+        self.assertEqual(_is_posted_today(None, "5h ago"), (True, False))
+        self.assertEqual(_is_posted_today(None, "25m"), (True, False))
         self.assertEqual(_is_posted_today(None, "Just now"), (True, False))
+        self.assertEqual(_is_posted_today(None, "Today at 10:30"), (True, False))
         self.assertEqual(_is_posted_today(None, "Yesterday at 10:30 PM"), (False, True))
         self.assertEqual(_is_posted_today(None, "3 days ago"), (False, True))
+        self.assertEqual(_is_posted_today(None, "2d"), (False, True))
+
+        # Month and Day formatting
+        now_month_b = now_utc.strftime("%b")
+        now_day = now_utc.day
+        self.assertEqual(_is_posted_today(None, f"{now_month_b} {now_day}"), (True, False))
+        self.assertEqual(_is_posted_today(None, f"{now_day} {now_month_b}"), (True, False))
+        self.assertEqual(_is_posted_today(None, "Oct 15"), (False, True))
 
     @patch("scraper._fetch_soup")
     def test_get_forum_topics_date_cutoff(self, mock_fetch_soup):
@@ -333,6 +357,41 @@ class TestScraper(unittest.TestCase):
         # Mode B: only_today=False (Normal Page Scan) -> should return all 5 posts up to limit
         all_topics = get_forum_topics("https://dropmms.com/forum/2-test/", limit=25, only_today=False)
         self.assertEqual(len(all_topics), 5)
+
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_subforums(self, mock_fetch_soup):
+        """Test category page that lists subforums traverses into subforums."""
+        from scraper import get_forum_topics
+
+        parent_html = """
+        <html>
+            <body>
+                <li class="cForumRow">
+                    <a href="/forum/10-subforum-a/">Subforum A</a>
+                </li>
+            </body>
+        </html>
+        """
+        child_html = """
+        <html>
+            <body>
+                <li class="ipsDataItem">
+                    <div class="ipsDataItem_main">
+                        <h4 class="ipsDataItem_title"><a href="/topic/501-sub-video/">Subforum Video 1</a></h4>
+                    </div>
+                </li>
+            </body>
+        </html>
+        """
+        mock_fetch_soup.side_effect = [
+            BeautifulSoup(parent_html, "html.parser"),
+            BeautifulSoup(child_html, "html.parser"),
+        ]
+
+        topics = get_forum_topics("https://dropmms.com/category/1-parent/", limit=25, only_today=False)
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]["title"], "Subforum Video 1")
+        self.assertEqual(topics[0]["url"], "https://dropmms.com/topic/501-sub-video/")
 
 
 if __name__ == "__main__":

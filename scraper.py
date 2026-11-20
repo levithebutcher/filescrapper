@@ -208,7 +208,12 @@ def _fetch_soup(url: str) -> BeautifulSoup:
 
 def _clean_topic_url(url: str) -> str:
     """Sanitize topic URL by removing query strings, fragments, and pagination."""
-    clean = url.split("?")[0].split("#")[0].strip()
+    if "index.php?/" in url:
+        clean = url.split("#")[0].strip()
+        parts = clean.split("&")
+        clean = parts[0].strip()
+    else:
+        clean = url.split("?")[0].split("#")[0].strip()
     clean = re.sub(r"/page/\d+/?$", "/", clean)
     if not clean.endswith("/"):
         clean += "/"
@@ -232,20 +237,44 @@ def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool,
     today_ist_str = now_ist.strftime("%Y-%m-%d")
 
     valid_today_dates = {today_utc_str, today_ist_str}
+    today_days = {str(now_utc.day), f"{now_utc.day:02d}", str(now_ist.day), f"{now_ist.day:02d}"}
+    today_months_short = {now_utc.strftime("%b").lower(), now_ist.strftime("%b").lower()}
+    today_months_long = {now_utc.strftime("%B").lower(), now_ist.strftime("%B").lower()}
 
-    # 1. Inspect relative time text (e.g. "3 hours ago", "Started 20 minutes ago", "Today at 12:45")
+    # 1. Inspect relative time text (e.g. "3 hours ago", "5h", "20m", "Today at 12:45", "Nov 20")
     if time_text:
         t = str(time_text).lower().strip()
-        # Today indicators
-        if any(w in t for w in ["today", "hour", "hr", "min", "sec", "just now", "moment"]):
-            if not any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
-                return True, False
-        # Older indicators
+
+        # Direct today indicators
+        if any(w in t for w in ["today", "just now", "moment"]):
+            return True, False
+
+        # Definite older indicators
         if any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
             return False, True
-        # Check month abbreviations (e.g. "18 nov", "nov 18")
-        months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-        if any(m in t for m in months) and not any(td in t for td in valid_today_dates):
+
+        # Relative hours/mins/seconds regex (e.g. "2h", "2 hr", "2 hours", "20m", "20 min", "45s")
+        if re.search(r"\b\d+\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)\b(\s*ago)?", t):
+            # Guard against days: "2d", "2 days"
+            if not re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", t):
+                return True, False
+
+        # Relative days/weeks/years regex (e.g. "2d", "3w")
+        if re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", t):
+            return False, True
+
+        # Check calendar dates in text (e.g. "Nov 20", "20 Nov", "November 20")
+        all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        for m in today_months_short | today_months_long:
+            if m in t:
+                for d in today_days:
+                    if re.search(rf"\b{d}\b", t):
+                        return True, False
+                # Mentioned this month but different day -> older
+                return False, True
+
+        # If any other month is mentioned (e.g. "Oct 15") -> definitely older
+        if any(m in t for m in all_months):
             return False, True
 
     # 2. Inspect date_str from <time datetime="..."> or title attribute
@@ -309,7 +338,16 @@ def get_forum_topics(
         row_elements = soup.find_all("div", class_=re.compile("ipsDataItem|cForumRow", re.I))
 
     for row in row_elements:
-        link_elem = row.find("a", href=re.compile(r"/topic/\d+", re.I))
+        # Find the topic title link in the row
+        title_container = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
+        if title_container:
+            link_elem = title_container.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+        else:
+            link_elem = None
+
+        if not link_elem:
+            link_elem = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+
         if not link_elem:
             continue
 
@@ -331,10 +369,16 @@ def get_forum_topics(
         # Extract publication timestamp from <time datetime="..."> and relative text
         date_str = None
         time_text = None
-        time_tag = row.find("time")
+        meta_elem = row.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I))
+        time_tag = meta_elem.find("time") if meta_elem else None
+        if not time_tag:
+            time_tag = row.find("time")
+
         if time_tag:
             date_str = time_tag.get("datetime") or time_tag.get("title")
             time_text = time_tag.get_text(strip=True)
+        elif meta_elem:
+            time_text = meta_elem.get_text(strip=True)
 
         # Apply Option 1 Live Date Cutoff when requested via /today
         if only_today:
@@ -375,6 +419,32 @@ def get_forum_topics(
                     topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
                     if len(topics) >= limit:
                         break
+
+    # If this is a category/parent forum that lists subforums, traverse into subforums
+    if not topics:
+        subforum_links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if re.search(r"/forum/\d+|/forums/forum/\d+", href, re.I):
+                sf_url = urljoin(forum_url, href)
+                clean_sf = sf_url.split("?")[0].split("#")[0].rstrip("/") + "/"
+                clean_forum = forum_url.split("?")[0].split("#")[0].rstrip("/") + "/"
+                if clean_sf not in subforum_links and clean_sf != clean_forum:
+                    subforum_links.append(clean_sf)
+
+        for sf_url in subforum_links[:3]:
+            try:
+                sub_topics = get_forum_topics(sf_url, sort_by=sort_by, limit=limit - len(topics), only_today=only_today)
+                for st in sub_topics:
+                    if st["url"] not in seen:
+                        seen.add(st["url"])
+                        topics.append(st)
+                        if len(topics) >= limit:
+                            break
+                if len(topics) >= limit:
+                    break
+            except Exception as e:
+                logger.debug(f"Could not scrape subforum {sf_url}: {e}")
 
     return topics
 
@@ -795,16 +865,29 @@ def get_post_details(post_url: str) -> dict:
     }
 
 
-def is_forum_url(url: str) -> bool:
-    """Check if URL represents a forum category page."""
-    if not url or not isinstance(url, str):
-        return False
-    u = url.strip().lower()
-    return "/forum/" in u or "/forums/" in u or "/forum-" in u or u.rstrip("/").endswith("index.php")
-
-
 def is_topic_url(url: str) -> bool:
     """Check if URL represents an individual topic/post."""
     if not url or not isinstance(url, str):
         return False
-    return "/topic/" in url.strip().lower()
+    u = url.strip().lower()
+    return "/topic/" in u or "/topics/topic/" in u or "/topic-" in u or "index.php?/topic/" in u
+
+
+def is_forum_url(url: str) -> bool:
+    """Check if URL represents a forum category page, category listing, or forum index."""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.strip().lower()
+    if is_topic_url(u):
+        return False
+    return (
+        "/forum/" in u
+        or "/forums/" in u
+        or "/forum-" in u
+        or "/category/" in u
+        or "/categories/" in u
+        or u.rstrip("/").endswith("index.php")
+        or u.rstrip("/") == BASE_URL.lower()
+        or u.rstrip("/") == "https://dropmms.com"
+        or u.rstrip("/") == "http://dropmms.com"
+    )

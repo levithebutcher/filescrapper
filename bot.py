@@ -379,6 +379,18 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await msg.reply_text("📅 <i>Scanning today's uploads...</i>", parse_mode=ParseMode.HTML)
 
     category_url = context.args[0].strip() if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
+    if category_url and not category_url.startswith("http://") and not category_url.startswith("https://"):
+        category_url = f"https://{category_url}"
+
+    # If user passed a single topic URL (e.g. /today https://dropmms.com/topic/...)
+    if is_topic_url(category_url):
+        await status_msg.edit_text("🔍 <i>Extracting streaming links from topic...</i>", parse_mode=ParseMode.HTML)
+        await process_topic_scrape(context.bot, msg.chat_id, category_url, user_id=user_id)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        return
 
     try:
         topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 25, True)
@@ -389,10 +401,11 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not topics:
         await status_msg.edit_text(
             "📅 <b>No new posts found today yet!</b>\n\n"
-            "<i>No topics uploaded today in this category.</i>\n\n"
-            "💡 <i>Tip: Pass a specific category link to check today's drops:</i>\n"
-            "<code>/today https://dropmms.com/forum/2-general/</code>\n\n"
-            "<i>Or paste any category link directly to fetch all recent posts.</i>",
+            "<i>No topics uploaded today in this category. Older posts were skipped.</i>\n\n"
+            "💡 <i>Tip: Pass a specific category or topic link:</i>\n"
+            "<code>/today https://dropmms.com/forum/2-general/</code>\n"
+            "<code>/today https://dropmms.com/topic/123-title/</code>\n\n"
+            "<i>Or paste any link directly in chat to extract all recent posts.</i>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -727,7 +740,10 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
     url = url.strip()
 
     if not url.startswith("http://") and not url.startswith("https://"):
-        return
+        if url.startswith("dropmms.com") or url.startswith("www.dropmms.com"):
+            url = f"https://{url}"
+        else:
+            return
 
     if is_topic_url(url):
         status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
