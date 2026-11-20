@@ -11,6 +11,21 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
+
+# Cloudflare anti-bot bypass libraries
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    cffi_requests = None
+    HAS_CURL_CFFI = False
+
+try:
+    import cloudscraper
+    HAS_CLOUDSCRAPER = True
+except ImportError:
+    cloudscraper = None
+    HAS_CLOUDSCRAPER = False
 from config import (
     STREAMING_DOMAINS,
     BASE_URL,
@@ -228,11 +243,85 @@ def extract_tags_and_quality(title: str) -> tuple[str, list[str]]:
     return title, tags
 
 
+def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
+    """
+    Intelligent multi-tier HTTP fetcher:
+    - Bypasses Cloudflare anti-bot 403 on Google Colab / datacenter IPs using curl_cffi
+      with Chrome 124 TLS and HTTP/2 browser fingerprint impersonation.
+    - Falls back to cloudscraper if curl_cffi is unavailable or fails.
+    - Uses robust requests.Session for standard sites with connection pooling.
+    """
+    is_cf_target = "livecamrips.to" in url.lower()
+
+    # Priority 1: curl_cffi for Cloudflare-protected domains (livecamrips.to)
+    if is_cf_target and HAS_CURL_CFFI:
+        try:
+            resp = cffi_requests.get(
+                url,
+                impersonate="chrome124",
+                timeout=timeout,
+                headers=HEADERS,
+                proxies=PROXIES if PROXIES else None,
+            )
+            if resp.status_code < 400:
+                return resp
+        except Exception as e:
+            logger.debug(f"curl_cffi fetch note for {url}: {e}")
+
+    # Priority 2: cloudscraper
+    if is_cf_target and HAS_CLOUDSCRAPER:
+        try:
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.get(
+                url,
+                timeout=timeout,
+                headers=HEADERS,
+                proxies=PROXIES if PROXIES else None,
+            )
+            if resp.status_code < 400:
+                return resp
+        except Exception as e:
+            logger.debug(f"cloudscraper fetch note for {url}: {e}")
+
+    # Priority 3: Standard requests.Session
+    resp = _session.get(url, timeout=timeout)
+    if resp.status_code == 403 and (HAS_CURL_CFFI or HAS_CLOUDSCRAPER):
+        # Auto-retry with curl_cffi if standard requests encountered 403 Forbidden
+        if HAS_CURL_CFFI:
+            try:
+                cffi_resp = cffi_requests.get(
+                    url,
+                    impersonate="chrome124",
+                    timeout=timeout,
+                    headers=HEADERS,
+                    proxies=PROXIES if PROXIES else None,
+                )
+                if cffi_resp.status_code < 400:
+                    return cffi_resp
+            except Exception:
+                pass
+        if HAS_CLOUDSCRAPER:
+            try:
+                scraper = cloudscraper.create_scraper()
+                cs_resp = scraper.get(
+                    url,
+                    timeout=timeout,
+                    headers=HEADERS,
+                    proxies=PROXIES if PROXIES else None,
+                )
+                if cs_resp.status_code < 400:
+                    return cs_resp
+            except Exception:
+                pass
+
+    resp.raise_for_status()
+    return resp
+
+
 def _fetch_soup(url: str) -> BeautifulSoup:
     """Safely fetch URL and return parsed BeautifulSoup object."""
     try:
-        resp = _session.get(url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
+        resp = _fetch_url(url, timeout=REQUEST_TIMEOUT)
         return BeautifulSoup(resp.text, "html.parser")
     except requests.exceptions.Timeout as e:
         logger.error(f"Timeout while fetching {url}: {e}")
@@ -845,7 +934,7 @@ def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
 
 def download_image_bytes(image_url: str) -> bytes | None:
     """
-    Download image into memory using the bot's configured requests session.
+    Download image into memory using intelligent multi-tier fetcher.
     Verifies image magic bytes AND image dimensions with Pillow to ensure
     tiny avatars / icons are filtered out and Telegram never throws Image_process_failed.
     If image_url is an HTML viewer page, automatically resolves and downloads the real image.
@@ -854,7 +943,7 @@ def download_image_bytes(image_url: str) -> bytes | None:
     if not image_url or not isinstance(image_url, str):
         return None
     try:
-        resp = _session.get(image_url, timeout=12)
+        resp = _fetch_url(image_url, timeout=12)
         if resp.status_code != 200 or not resp.content:
             return None
 
@@ -871,7 +960,7 @@ def download_image_bytes(image_url: str) -> bytes | None:
         if "text/html" in content_type or resp.content[:1] == b"<":
             direct_img_url = _resolve_image_viewer_url(image_url, resp.text)
             if direct_img_url and direct_img_url != image_url:
-                direct_resp = _session.get(direct_img_url, timeout=12)
+                direct_resp = _fetch_url(direct_img_url, timeout=12)
                 if direct_resp.status_code == 200 and is_valid_image_bytes(direct_resp.content):
                     if is_valid_thumbnail_image(direct_resp.content):
                         return optimize_image_for_telegram(direct_resp.content)
