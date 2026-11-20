@@ -5,23 +5,29 @@ import html
 import time
 import asyncio
 import logging
-import platform
-from datetime import datetime
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
 from telegram import (
     Update,
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ChatMember,
+    ChatMemberUpdated,
 )
+from telegram.constants import ChatMemberStatus, ChatType, ParseMode
 from telegram.error import RetryAfter, BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     filters,
     ContextTypes,
 )
+
 from config import (
     BOT_NAME,
     BOT_VERSION,
@@ -32,14 +38,19 @@ from config import (
     MAX_POSTS_PER_FORUM,
     REQUEST_TIMEOUT,
     BASE_URL,
-    PROXIES,
+    DEFAULT_CATEGORY_URL,
+    FEED_CHECK_INTERVAL,
+    OWNER_ID,
 )
 from scraper import (
-    get_post_links_from_forum,
+    get_forum_topics,
     get_post_details,
+    search_forum,
     is_forum_url,
     is_topic_url,
+    get_host_display_name,
 )
+import db
 
 # Logging configuration
 logging.basicConfig(
@@ -48,437 +59,542 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Track start time for uptime metric
-BOT_START_TIME = time.time()
+# Initialize database
+db.init_db()
 
 
-def get_uptime_str() -> str:
-    """Uptime ko human-readable format mein return karein."""
-    uptime_seconds = int(time.time() - BOT_START_TIME)
-    days, rem = divmod(uptime_seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, seconds = divmod(rem, 60)
-    if days > 0:
-        return f"{days}d {hours}h {minutes}m {seconds}s"
-    if hours > 0:
-        return f"{hours}h {minutes}m {seconds}s"
-    if minutes > 0:
-        return f"{minutes}m {seconds}s"
-    return f"{seconds}s"
+# --- UI & Formatters ---
+
+def build_streaming_buttons(streaming_links: list[str]) -> InlineKeyboardMarkup:
+    """Build a minimal, clean grid of streaming provider buttons (2 per row)."""
+    buttons = []
+    row = []
+    for link in streaming_links:
+        badge = get_host_display_name(link)
+        row.append(InlineKeyboardButton(text=badge, url=link))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)
 
 
-def format_post_message(details: dict) -> str:
-    """
-    Ek post ke details ko safe HTML message text mein badlein.
-    html.escape() use karke Telegram HTML parse crash se bachata hai.
-    """
-    safe_title = html.escape(details.get("title", "Untitled"))
-    safe_post_url = html.escape(details.get("post_url", ""))
-
-    text = f"📌 <b>{safe_title}</b>\n\n"
-    if safe_post_url:
-        text += f"🔗 <a href='{safe_post_url}'>Original Post Link</a>\n\n"
-
+def format_post_card(details: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Format single post details into a premium minimal text card and button markup."""
+    title = html.escape(details.get("title", "Untitled Video"))
+    post_url = html.escape(details.get("post_url", ""))
+    tags = details.get("tags", [])
     links = details.get("streaming_links", [])
-    if links:
-        text += f"🎬 <b>Streaming Links ({len(links)}):</b>\n"
-        for link in links:
-            safe_link = html.escape(link)
-            text += f"• <a href='{safe_link}'>{safe_link}</a>\n"
-    else:
-        text += "❌ <i>Koi streaming link nahi mila is post mein.</i>\n"
 
-    return text
+    caption_lines = [f"🎬 <b>{title}</b>\n"]
 
+    if tags:
+        tag_str = " ".join([f"<code>#{html.escape(t)}</code>" for t in tags[:5]])
+        caption_lines.append(f"🏷️ {tag_str}\n")
 
-async def _safe_reply_text(update: Update, text: str):
-    """
-    Long message ko split karke safely send karein (Telegram 4096 char limit).
-    """
-    max_len = 4000
-    msg = update.effective_message
-    if not msg:
-        return
+    if post_url:
+        caption_lines.append(f"🌐 <a href='{post_url}'>View Forum Thread</a>")
 
-    if len(text) <= max_len:
-        try:
-            await msg.reply_text(
-                text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except RetryAfter as e:
-            logger.warning(f"Flood wait: sleeping {e.retry_after}s")
-            await asyncio.sleep(e.retry_after + 1)
-            await msg.reply_text(
-                text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except Exception as e:
-            logger.error(f"Error in _safe_reply_text: {e}")
-        return
+    if not links:
+        caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
 
-    # Split into chunks by line
-    parts = []
-    current_part = ""
-    for line in text.split("\n"):
-        if len(current_part) + len(line) + 1 > max_len:
-            parts.append(current_part)
-            current_part = line + "\n"
-        else:
-            current_part += line + "\n"
-    if current_part:
-        parts.append(current_part)
-
-    for part in parts:
-        try:
-            await msg.reply_text(
-                part,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except RetryAfter as e:
-            await asyncio.sleep(e.retry_after + 1)
-            await msg.reply_text(
-                part,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except Exception as e:
-            logger.error(f"Error sending split part: {e}")
-        await asyncio.sleep(0.5)
+    caption = "\n".join(caption_lines)
+    markup = build_streaming_buttons(links)
+    return caption, markup
 
 
-async def send_post_details(update: Update, context: ContextTypes.DEFAULT_TYPE, post_url: str):
-    """
-    Ek post ka detail fetch karke bhejein (image + formatted links).
-    Non-blocking execution (asyncio.to_thread).
-    """
-    msg = update.effective_message
-    try:
-        details = await asyncio.to_thread(get_post_details, post_url)
-    except Exception as e:
-        logger.warning(f"Error fetching post {post_url}: {e}")
-        safe_err = html.escape(str(e))
-        if msg:
-            await msg.reply_text(
-                f"⚠️ <b>Post fetch nahi ho saka:</b>\n<code>{html.escape(post_url)}</code>\n<i>Wajah: {safe_err}</i>",
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        return
+# --- Post Sender Engine ---
 
-    caption = format_post_message(details)
+async def send_post_card(bot, chat_id: int | str, details: dict):
+    """Deliver a premium post card with thumbnail and streaming buttons."""
+    caption, markup = format_post_card(details)
     thumbnail = details.get("thumbnail")
 
-    # Telegram photo caption limit is 1024 characters
-    if thumbnail and len(caption) <= 1024 and msg:
+    # Send with Photo if available and caption fits Telegram's 1024 char limit
+    if thumbnail and len(caption) <= 1024:
         try:
-            await msg.reply_photo(
+            await bot.send_photo(
+                chat_id=chat_id,
                 photo=thumbnail,
                 caption=caption,
-                parse_mode="HTML",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
             )
             return
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
             try:
-                await msg.reply_photo(
+                await bot.send_photo(
+                    chat_id=chat_id,
                     photo=thumbnail,
                     caption=caption,
-                    parse_mode="HTML",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
                 )
                 return
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"Failed to send thumbnail, falling back to text: {e}")
+            logger.warning(f"Thumbnail send failed, falling back to message: {e}")
 
-    # Fallback to text message if no thumbnail, caption > 1024 chars, or image sending failed
-    await _safe_reply_text(update, caption)
+    # Fallback to rich HTML message
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+            disable_web_page_preview=False,
+        )
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after + 1)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+            disable_web_page_preview=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send post card to {chat_id}: {e}")
 
 
-def get_start_keyboard() -> InlineKeyboardMarkup:
-    """Main menu inline buttons."""
-    buttons = [
-        [
-            InlineKeyboardButton("📖 Help Guide", callback_data="cb_help"),
-            InlineKeyboardButton("🌐 Domains", callback_data="cb_domains"),
-        ],
-        [
-            InlineKeyboardButton("📊 Bot Status", callback_data="cb_status"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="cb_settings"),
-        ],
-        [
-            InlineKeyboardButton("ℹ️ About", callback_data="cb_about"),
-            InlineKeyboardButton("⭐ GitHub Repo", url=REPO_URL),
-        ],
-    ]
-    return InlineKeyboardMarkup(buttons)
-
+# --- Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler with interactive keyboard."""
-    welcome_text = (
-        f"👋 <b>Namaste! Welcome to {BOT_NAME} (v{BOT_VERSION})</b>\n\n"
-        "Main aapke liye forum pages aur post links scan karke verified "
-        "<b>streaming video links</b> (Vidara, Streamtape, Streamfiles, etc.) extract karta hoon.\n\n"
-        "<b>⚡ Quick Start:</b>\n"
-        "• Kisi bhi <b>Post ka link</b> ya <b>Forum ka link</b> direct chat mein bhejein.\n"
-        "• Ya <code>/scrape &lt;url&gt;</code> command ka use karein.\n\n"
-        "Neeche diye gaye buttons ya commands menu ka upyog karein:"
+    """Minimal, elegant greeting."""
+    user_name = update.effective_user.first_name if update.effective_user else "Friend"
+    text = (
+        f"✨ <b>Welcome, {html.escape(user_name)}!</b>\n\n"
+        f"<b>{BOT_NAME}</b> automatically extracts verified video streaming links "
+        "and monitors new forum uploads in real-time.\n\n"
+        "<b>⚡ Quick Commands:</b>\n"
+        "• <code>/today</code> — Today's fresh uploads\n"
+        "• <code>/latest</code> — Latest forum releases\n"
+        "• <code>/search &lt;name&gt;</code> — Find videos by keyword\n"
+        "• <code>/scrape &lt;url&gt;</code> — Extract any topic or category\n"
+        "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
+        "<i>💡 Or paste any forum link directly in chat to extract instantly.</i>"
     )
-    msg = update.effective_message
-    if msg:
-        await msg.reply_text(
-            welcome_text,
-            parse_mode="HTML",
-            reply_markup=get_start_keyboard(),
-        )
+
+    buttons = [
+        [
+            InlineKeyboardButton("📅 Today's Drops", callback_data="cb_today"),
+            InlineKeyboardButton("⚡ Latest Posts", callback_data="cb_latest"),
+        ],
+        [
+            InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
+            InlineKeyboardButton("🌐 Domains", callback_data="cb_domains"),
+        ],
+    ]
+
+    await update.effective_message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help command handler with detailed examples."""
-    help_text = (
-        "📖 <b>File & Streaming Scraper - User Guide</b>\n\n"
-        "<b>1️⃣ Single Post Extract:</b>\n"
-        "Kisi bhi specific post/topic ka link bhejein:\n"
-        "<code>https://dropmms.com/topic/12345-sample-video/</code>\n"
-        "➡️ Bot turant uska Title, Thumbnail aur Streaming links nikaal kar bhejega.\n\n"
-        "<b>2️⃣ Forum / Category Scrape:</b>\n"
-        "Category page ka link bhejein:\n"
-        "<code>https://dropmms.com/forum/2-sample-category/</code>\n"
-        "➡️ Bot category ke saare posts dhoondh kar har post ke links baari-baari bhejega.\n\n"
-        "<b>🛠️ Available Commands:</b>\n"
-        "• <code>/start</code> - Main menu & welcome\n"
-        "• <code>/help</code> - Yeh madad sandesh\n"
-        "• <code>/scrape &lt;url&gt;</code> - Link scan aur extract karein\n"
-        "• <code>/domains</code> - Supported video hosts ki list\n"
-        "• <code>/ping</code> - Bot speed aur latency check\n"
-        "• <code>/status</code> - Uptime aur system health\n"
-        "• <code>/settings</code> - Current limits & configs\n"
-        "• <code>/about</code> - Version aur source code info\n\n"
-        "<i>💡 Tip: Aap bina kisi command ke bhi direct link paste kar sakte hain!</i>"
+    """Clean usage guide."""
+    text = (
+        "📖 <b>Bot User Manual</b>\n\n"
+        "<b>1️⃣ Instant Extraction:</b>\n"
+        "Send any post or category link directly in chat, or use:\n"
+        "<code>/scrape https://dropmms.com/topic/123-title/</code>\n\n"
+        "<b>2️⃣ Date-Wise Updates:</b>\n"
+        "• <code>/today</code> — View uploads from today\n"
+        "• <code>/latest</code> — Top 5 newest topics\n\n"
+        "<b>3️⃣ Keyword Search:</b>\n"
+        "• <code>/search sample video</code>\n\n"
+        "<b>4️⃣ 24/7 Channel Auto-Poster:</b>\n"
+        "1. Add this bot to your Telegram Channel as <b>Administrator</b>.\n"
+        "2. The bot will automatically link the channel and broadcast new drops every 15 minutes!\n"
+        "3. Or use <code>/setchannel &lt;category_url&gt;</code> inside the channel."
     )
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fetch and display today's uploads."""
     msg = update.effective_message
-    if msg:
+    status_msg = await msg.reply_text("🔍 <i>Fetching today's uploads...</i>", parse_mode=ParseMode.HTML)
+
+    category_url = context.args[0] if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
+
+    try:
+        topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 20)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
+        return
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_topics = []
+
+    for t in topics:
+        t_date = t.get("date")
+        # Match today's date prefix YYYY-MM-DD
+        if t_date and t_date.startswith(today_str):
+            today_topics.append(t)
+
+    # If no strict date match or date missing, show the top 5 freshest topics
+    display_topics = today_topics if today_topics else topics[:5]
+    date_header = today_str if today_topics else "Latest Today"
+
+    text = f"📅 <b>Uploads Feed ({date_header}):</b>\n\n"
+    buttons = []
+
+    for idx, t in enumerate(display_topics, start=1):
+        clean_t = html.escape(t["title"])
+        text += f"{idx}. <b>{clean_t}</b>\n"
+        # Create an inline button to scrape/view this post
+        btn = InlineKeyboardButton(f"🎬 View #{idx}", callback_data=f"sc_{t['url']}")
+        buttons.append([btn])
+
+    text += "\n<i>Tap any button below to extract streaming links directly:</i>"
+
+    await status_msg.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+async def latest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fetch latest 5 posts."""
+    msg = update.effective_message
+    status_msg = await msg.reply_text("⚡ <i>Fetching latest forum releases...</i>", parse_mode=ParseMode.HTML)
+
+    category_url = context.args[0] if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
+
+    try:
+        topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 6)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error: {html.escape(str(e))}")
+        return
+
+    if not topics:
+        await status_msg.edit_text("❌ No topics found in this category.")
+        return
+
+    text = "⚡ <b>Latest Forum Drops:</b>\n\n"
+    buttons = []
+    for idx, t in enumerate(topics, start=1):
+        clean_t = html.escape(t["title"])
+        text += f"{idx}. <b>{clean_t}</b>\n"
+        btn = InlineKeyboardButton(f"🎬 Get Links #{idx}", callback_data=f"sc_{t['url']}")
+        buttons.append([btn])
+
+    await status_msg.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search the forum by keyword."""
+    msg = update.effective_message
+    if not context.args:
         await msg.reply_text(
-            help_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+            "ℹ️ <b>Usage:</b> <code>/search &lt;keyword&gt;</code>\n"
+            "Example: <code>/search 1080p video</code>",
+            parse_mode=ParseMode.HTML,
         )
+        return
+
+    query = " ".join(context.args).strip()
+    status_msg = await msg.reply_text(f"🔍 <i>Searching for '{html.escape(query)}'...</i>", parse_mode=ParseMode.HTML)
+
+    try:
+        results = await asyncio.to_thread(search_forum, query, 5)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+        return
+
+    if not results:
+        await status_msg.edit_text(f"❌ No matching videos found for <b>{html.escape(query)}</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    text = f"🔎 <b>Search Results for '{html.escape(query)}':</b>\n\n"
+    buttons = []
+    for idx, r in enumerate(results, start=1):
+        text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
+        btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{r['url']}")
+        buttons.append([btn])
+
+    await status_msg.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 async def domains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List supported streaming domains."""
-    domains_list = "\n".join([f"• <code>{d}</code>" for d in STREAMING_DOMAINS])
+    """List supported streaming providers."""
+    badges = [get_host_display_name(f"https://{d}/") for d in STREAMING_DOMAINS]
     text = (
-        f"🌐 <b>Supported Streaming Hosts ({len(STREAMING_DOMAINS)}):</b>\n\n"
-        f"{domains_list}\n\n"
-        "<i>💡 Sirf inhi hosts ke links filter karke extract kiye jaate hain. "
-        "Naye domains add karne ke liye <code>.env</code> mein <code>STREAMING_DOMAINS</code> update karein.</i>"
+        f"🌐 <b>Supported Streaming Providers ({len(STREAMING_DOMAINS)}):</b>\n\n"
+        + "\n".join([f"• {b}" for b in badges])
+        + "\n\n<i>Direct video links from these providers are automatically captured.</i>"
     )
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+# --- Channel & Auto-Feed Management ---
+
+async def setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Connect a Channel or Supergroup for automatic broadcasts.
+    Can be run directly in the channel or in private chat.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
     msg = update.effective_message
-    if msg:
-        await msg.reply_text(text, parse_mode="HTML")
 
+    target_category = context.args[0] if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
 
-async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ping command to test responsiveness and latency."""
-    msg = update.effective_message
-    if not msg:
-        return
-    start = time.perf_counter()
-    sent_msg = await msg.reply_text("🏓 <i>Pinging...</i>", parse_mode="HTML")
-    latency_ms = (time.perf_counter() - start) * 1000
-    await sent_msg.edit_text(
-        f"🏓 <b>Pong!</b>\n⚡ Latency: <code>{latency_ms:.2f} ms</code>\n⏱️ Uptime: <code>{get_uptime_str()}</code>",
-        parse_mode="HTML",
-    )
-
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """System and bot status handler."""
-    msg = update.effective_message
-    if not msg:
-        return
-    status_text = (
-        f"📊 <b>{BOT_NAME} Status & Metrics:</b>\n\n"
-        f"• <b>Version:</b> <code>v{BOT_VERSION}</code>\n"
-        f"• <b>Status:</b> 🟢 <code>Online & Running</code>\n"
-        f"• <b>Uptime:</b> <code>{get_uptime_str()}</code>\n"
-        f"• <b>Python:</b> <code>{platform.python_version()}</code>\n"
-        f"• <b>Platform:</b> <code>{platform.system()} {platform.release()}</code>\n"
-        f"• <b>Max Posts/Forum:</b> <code>{MAX_POSTS_PER_FORUM}</code>\n"
-        f"• <b>Post Send Delay:</b> <code>{POST_SEND_DELAY}s</code>\n"
-        f"• <b>Request Timeout:</b> <code>{REQUEST_TIMEOUT}s</code>\n"
-        f"• <b>Active Domains:</b> <code>{len(STREAMING_DOMAINS)} hosts</code>\n"
-    )
-    await msg.reply_text(status_text, parse_mode="HTML")
-
-
-async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show current bot settings."""
-    msg = update.effective_message
-    if not msg:
-        return
-    proxy_status = "Enabled" if PROXIES else "Disabled (Direct)"
-    settings_text = (
-        "⚙️ <b>Current Bot Configuration:</b>\n\n"
-        f"• <b>Target Base URL:</b> <code>{BASE_URL}</code>\n"
-        f"• <b>Max Posts per Forum:</b> <code>{MAX_POSTS_PER_FORUM}</code>\n"
-        f"• <b>Post Delay (Flood Protection):</b> <code>{POST_SEND_DELAY}s</code>\n"
-        f"• <b>HTTP Timeout:</b> <code>{REQUEST_TIMEOUT}s</code>\n"
-        f"• <b>Proxy Support:</b> <code>{proxy_status}</code>\n"
-        f"• <b>Supported Streaming Hosts:</b> <code>{len(STREAMING_DOMAINS)}</code>\n\n"
-        "<i>Aap in values ko <code>.env</code> file ke dwara customize kar sakte hain.</i>"
-    )
-    await msg.reply_text(settings_text, parse_mode="HTML")
-
-
-async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """About command handler."""
-    msg = update.effective_message
-    if not msg:
-        return
-    about_text = (
-        f"🤖 <b>{BOT_NAME}</b>\n"
-        f"• <b>Version:</b> <code>v{BOT_VERSION}</code>\n"
-        "• <b>Language:</b> Python 3.10+\n"
-        "• <b>Framework:</b> python-telegram-bot (v22+)\n"
-        "• <b>Parser:</b> BeautifulSoup4 & Requests\n"
-        f"• <b>Repository:</b> <a href='{REPO_URL}'>GitHub Source</a>\n"
-        "• <b>License:</b> MIT\n\n"
-        "Yeh bot forums aur websites se direct streaming video links "
-        "extract karne ke liye banaya gaya hai."
-    )
-    await msg.reply_text(
-        about_text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel operation handler."""
-    msg = update.effective_message
-    if msg:
-        await msg.reply_text("✅ Koi active long-running operation nahi hai jise cancel kiya jaye.")
-
-
-async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    """Core logic to process either a post URL or forum URL."""
-    msg = update.effective_message
-    if not msg:
+    # Case A: Command run inside a channel or supergroup
+    if chat.type in [ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP]:
+        success = db.add_or_update_channel(
+            channel_id=chat.id,
+            title=chat.title or "Connected Channel",
+            username=chat.username,
+            category_url=target_category,
+            added_by=user.id if user else None,
+        )
+        if success:
+            await msg.reply_text(
+                "✅ <b>Channel Linked Successfully!</b>\n\n"
+                f"📢 <b>Channel:</b> {html.escape(chat.title)}\n"
+                f"🎯 <b>Monitoring:</b> <code>{html.escape(target_category)}</code>\n"
+                "⏱️ <b>Auto-Feed:</b> Active (New drops will post here automatically)",
+                parse_mode=ParseMode.HTML,
+            )
         return
 
-    url = url.strip()
-    if not url.startswith("http://") and not url.startswith("https://"):
+    # Case B: Command run in private chat: /setchannel <channel_id_or_@username> [category_url]
+    if not context.args:
         await msg.reply_text(
-            "⚠️ Kripya ek valid URL bhejein (jo <code>http://</code> ya <code>https://</code> se shuru hota ho).\n\n"
-            "Example:\n<code>/scrape https://dropmms.com/topic/12345-title/</code>",
-            parse_mode="HTML",
+            "ℹ️ <b>How to Link a Channel:</b>\n\n"
+            "<b>Method 1 (Easiest):</b>\n"
+            "Add this bot to your Telegram Channel as <b>Administrator</b> with 'Post Messages' rights. "
+            "It will auto-link immediately!\n\n"
+            "<b>Method 2:</b>\n"
+            "Send this command inside the channel:\n"
+            "<code>/setchannel</code>\n\n"
+            "<b>Method 3:</b>\n"
+            "From this chat, pass the channel username/ID:\n"
+            "<code>/setchannel @mychannel https://dropmms.com/forum/2-general/</code>",
+            parse_mode=ParseMode.HTML,
         )
         return
 
+    target_channel_id = context.args[0]
+    custom_cat = context.args[1] if len(context.args) > 1 else DEFAULT_CATEGORY_URL
+
     try:
-        # Case 1: Topic / Post Link
-        if is_topic_url(url):
-            status_msg = await msg.reply_text("🔍 <i>Post scan kiya ja raha hai...</i>", parse_mode="HTML")
-            await send_post_details(update, context, url)
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-
-        # Case 2: Forum / Category Page
-        elif is_forum_url(url):
-            status_msg = await msg.reply_text(
-                "🔍 <i>Forum page scan ho raha hai, post links dhoondh raha hoon...</i>",
-                parse_mode="HTML",
-            )
-
-            post_links = await asyncio.to_thread(get_post_links_from_forum, url)
-
-            if not post_links:
-                try:
-                    await status_msg.edit_text("❌ Is forum page par koi topic/post nahi mila.")
-                except BadRequest:
-                    pass
-                return
-
-            total = len(post_links)
-            try:
-                await status_msg.edit_text(
-                    f"✅ <b>{total} posts mile!</b> Ab streaming links extract kiye ja rahe hain...",
-                    parse_mode="HTML",
-                )
-            except BadRequest:
-                pass
-
-            for i, post_url in enumerate(post_links, start=1):
-                await send_post_details(update, context, post_url)
-                if i < total:
-                    await asyncio.sleep(POST_SEND_DELAY)
-
-        # Case 3: Other link format
-        else:
-            await msg.reply_text(
-                "❓ Yeh link pehchan mein nahi aaya.\n"
-                "Kripya forum category (<code>/forum/...</code>) ya direct post (<code>/topic/...</code>) ka link bhejein.",
-                parse_mode="HTML",
-            )
-
-    except Exception as e:
-        logger.exception(f"Error handling URL: {url}")
-        safe_err = html.escape(str(e))
+        chat_info = await context.bot.get_chat(target_channel_id)
+        db.add_or_update_channel(
+            channel_id=chat_info.id,
+            title=chat_info.title,
+            username=chat_info.username,
+            category_url=custom_cat,
+            added_by=user.id,
+        )
         await msg.reply_text(
-            f"❌ <b>Error aaya:</b>\n<code>{safe_err}</code>",
-            parse_mode="HTML",
+            f"✅ <b>Linked to Channel:</b> {html.escape(chat_info.title)}\n"
+            f"🎯 <b>Category:</b> <code>{html.escape(custom_cat)}</code>\n"
+            "🚀 Auto-feed activated!",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        await msg.reply_text(f"❌ Failed to connect channel: {html.escape(str(e))}\nMake sure the bot is an Admin in the channel!")
+
+
+async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View all active auto-feed channels."""
+    channels = db.get_all_active_channels()
+    if not channels:
+        await update.effective_message.reply_text(
+            "📢 <b>No active channels linked yet.</b>\n\n"
+            "Add the bot as Admin to your channel or use <code>/setchannel</code> to start auto-posting.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    text = f"📢 <b>Connected Broadcast Channels ({len(channels)}):</b>\n\n"
+    buttons = []
+    for c in channels:
+        title = html.escape(c["title"] or str(c["channel_id"]))
+        cat = html.escape(c["category_url"] or DEFAULT_CATEGORY_URL)
+        text += f"• <b>{title}</b>\n  └ Category: <code>{cat}</code>\n"
+        btn = InlineKeyboardButton(f"❌ Unlink {title}", callback_data=f"unlink_{c['channel_id']}")
+        buttons.append([btn])
+
+    await update.effective_message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def chat_member_updated(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Automatic Channel Linking:
+    Triggered when the bot is added as an administrator to any channel.
+    """
+    result = update.my_chat_member
+    if not result:
+        return
+
+    chat = result.chat
+    new_member = result.new_chat_member
+
+    # When bot is promoted to administrator in a channel or group
+    if new_member.status in [ChatMemberStatus.ADMINISTRATOR]:
+        db.add_or_update_channel(
+            channel_id=chat.id,
+            title=chat.title or "Auto Channel",
+            username=chat.username,
+            category_url=DEFAULT_CATEGORY_URL,
+            added_by=result.from_user.id if result.from_user else None,
+        )
+        logger.info(f"✅ Auto-linked channel: {chat.title} ({chat.id})")
+
+        # Send greeting in channel if we have permission
+        try:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text=(
+                    f"🎉 <b>{BOT_NAME} Activated!</b>\n\n"
+                    "This channel is now auto-linked. New streaming video releases will automatically be posted here.\n\n"
+                    f"🎯 <b>Monitored Category:</b> <code>{html.escape(DEFAULT_CATEGORY_URL)}</code>"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.warning(f"Could not send welcome message to channel: {e}")
+
+    # When bot is removed from channel
+    elif new_member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+        db.remove_channel(chat.id)
+        logger.info(f"Channel unlinked (bot removed): {chat.title} ({chat.id})")
+
+
+# --- Background Auto-Feed Engine ---
+
+async def auto_feed_loop(app: Application):
+    """
+    Background worker: monitors linked channels' categories and broadcasts new drops.
+    Runs continuously without requiring external scheduler libraries.
+    """
+    logger.info("🚀 Background Auto-Feed Engine started.")
+    await asyncio.sleep(10)  # Initial grace delay on startup
+
+    while True:
+        try:
+            channels = db.get_all_active_channels()
+            if channels:
+                for channel in channels:
+                    channel_id = channel["channel_id"]
+                    cat_url = channel.get("category_url") or DEFAULT_CATEGORY_URL
+
+                    try:
+                        topics = await asyncio.to_thread(get_forum_topics, cat_url, "start_date", 10)
+                        # Process oldest unseen first to maintain chronological order
+                        for t in reversed(topics):
+                            t_url = t["url"]
+                            if not db.is_post_seen(t_url):
+                                details = await asyncio.to_thread(get_post_details, t_url)
+                                await send_post_card(app.bot, channel_id, details)
+                                db.mark_post_seen(t_url, details.get("title", ""))
+                                await asyncio.sleep(POST_SEND_DELAY)
+                    except Exception as err:
+                        logger.warning(f"Auto-feed error for channel {channel_id}: {err}")
+
+        except Exception as e:
+            logger.error(f"Unexpected error in auto_feed_loop: {e}")
+
+        await asyncio.sleep(FEED_CHECK_INTERVAL)
+
+
+# --- URL Processing & Button Callback Handlers ---
+
+async def process_topic_scrape(bot, chat_id: int | str, url: str):
+    """Scrape and deliver single topic card."""
+    try:
+        details = await asyncio.to_thread(get_post_details, url)
+        await send_post_card(bot, chat_id, details)
+    except Exception as e:
+        safe_err = html.escape(str(e))
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ <b>Could not extract:</b>\n<code>{html.escape(url)}</code>\n<i>Reason: {safe_err}</i>",
+            parse_mode=ParseMode.HTML,
         )
 
 
 async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Scrape command handler (/scrape <url>)."""
+    """Handle /scrape <url> command."""
     msg = update.effective_message
-    if not msg:
-        return
-
-    if not context.args or len(context.args) == 0:
+    if not context.args:
         await msg.reply_text(
-            "ℹ️ <b>Kripya command ke saath URL bhejein:</b>\n\n"
-            "<b>Usage:</b>\n"
-            "<code>/scrape https://dropmms.com/topic/12345-sample/</code>\n"
-            "<code>/scrape https://dropmms.com/forum/2-sample/</code>\n\n"
-            "<i>💡 Tip: Aap seedhe link bhi chat mein bhej sakte hain bina /scrape likhe.</i>",
-            parse_mode="HTML",
+            "ℹ️ <b>Usage:</b> <code>/scrape &lt;url&gt;</code>\n"
+            "Example: <code>/scrape https://dropmms.com/topic/123-title/</code>",
+            parse_mode=ParseMode.HTML,
         )
         return
 
     target_url = context.args[0].strip()
-    await process_url(update, context, target_url)
+    await handle_raw_url(update, context, target_url)
+
+
+async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Process URLs pasted directly in chat."""
+    msg = update.effective_message
+    url = url.strip()
+
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return
+
+    if is_topic_url(url):
+        status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
+        await process_topic_scrape(context.bot, msg.chat_id, url)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+    elif is_forum_url(url):
+        status = await msg.reply_text("📂 <i>Scanning forum category...</i>", parse_mode=ParseMode.HTML)
+        try:
+            topics = await asyncio.to_thread(get_forum_topics, url, "start_date", MAX_POSTS_PER_FORUM)
+            if not topics:
+                await status.edit_text("❌ No topics found in this category.")
+                return
+
+            await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...")
+            for t in topics:
+                await process_topic_scrape(context.bot, msg.chat_id, t["url"])
+                await asyncio.sleep(POST_SEND_DELAY)
+        except Exception as e:
+            await status.edit_text(f"❌ Error: {html.escape(str(e))}")
+    else:
+        await msg.reply_text("❓ Please send a valid topic (<code>/topic/...</code>) or forum category (<code>/forum/...</code>) URL.", parse_mode=ParseMode.HTML)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User plain text message (URL) handler."""
+    """Filter and handle plain text messages."""
     if not update.message or not update.message.text:
         return
-
     text = update.message.text.strip()
-    # Check if text is a URL
     if text.startswith("http://") or text.startswith("https://"):
-        await process_url(update, context, text)
-    else:
-        await update.message.reply_text(
-            "❓ <b>Samajh nahi aaya!</b>\n\n"
-            "Mujhe ek valid URL bhejein (jaise <code>https://...</code>) ya <code>/help</code> dabayein.",
-            parse_mode="HTML",
-        )
+        await handle_raw_url(update, context, text)
 
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline keyboard button callback handler."""
+    """Handle interactive button taps."""
     query = update.callback_query
     if not query:
         return
@@ -486,86 +602,77 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     data = query.data
 
-    if data == "cb_help":
-        await help_command(update, context)
+    if data == "cb_today":
+        await today_command(update, context)
+    elif data == "cb_latest":
+        await latest_command(update, context)
     elif data == "cb_domains":
         await domains_command(update, context)
-    elif data == "cb_status":
-        await status_command(update, context)
-    elif data == "cb_settings":
-        await settings_command(update, context)
-    elif data == "cb_about":
-        await about_command(update, context)
+    elif data == "cb_channel_help":
+        await setchannel_command(update, context)
+    elif data.startswith("sc_"):
+        target_url = data[3:]
+        await process_topic_scrape(context.bot, query.message.chat_id, target_url)
+    elif data.startswith("unlink_"):
+        ch_id = int(data.split("_")[1])
+        db.remove_channel(ch_id)
+        await query.edit_message_text(f"✅ Channel {ch_id} has been unlinked.")
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Global error handler for telegram bot exceptions."""
-    logger.error("Exception while handling an update:", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
-        try:
-            await update.effective_message.reply_text(
-                "⚠️ Bot par ek unexpected error aaya. Kripya thodi der baad dobara prayas karein."
-            )
-        except Exception:
-            pass
-
+# --- Post Init & Main Runner ---
 
 async def post_init(application: Application):
-    """Register bot commands in Telegram UI command menu on startup."""
+    """Register slash commands in Telegram menu and launch background auto-feed."""
     commands = [
-        BotCommand("start", "Start the bot & show main menu"),
-        BotCommand("help", "How to use this bot & examples"),
-        BotCommand("scrape", "Extract streaming links from a URL"),
-        BotCommand("domains", "List supported video streaming hosts"),
-        BotCommand("ping", "Check bot latency & responsiveness"),
-        BotCommand("status", "Show bot status & system info"),
-        BotCommand("settings", "View current scraping configuration"),
-        BotCommand("about", "About this bot & source code"),
-        BotCommand("cancel", "Cancel active operations"),
+        BotCommand("start", "Start the bot & main menu"),
+        BotCommand("today", "Today's fresh uploads"),
+        BotCommand("latest", "Latest releases from forum"),
+        BotCommand("search", "Search videos by keyword"),
+        BotCommand("scrape", "Extract links from URL"),
+        BotCommand("domains", "Supported streaming hosts"),
+        BotCommand("setchannel", "Link channel for auto-feed"),
+        BotCommand("channels", "View connected channels"),
+        BotCommand("help", "Help & instructions"),
     ]
     try:
         await application.bot.set_my_commands(commands)
-        logger.info("✅ Telegram Bot Commands successfully registered with BotFather API!")
+        logger.info("✅ Telegram Bot Commands registered.")
     except Exception as e:
-        logger.warning(f"Could not register bot commands with Telegram: {e}")
+        logger.warning(f"Could not register commands with BotFather: {e}")
+
+    # Launch background auto-feed loop
+    asyncio.create_task(auto_feed_loop(application))
 
 
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
-        print("\n" + "=" * 60)
-        print("❌ ERROR: BOT_TOKEN set nahi hai!")
-        print("Kripya `.env` file mein apna Telegram Bot Token daalein:")
-        print("BOT_TOKEN=your_token_here")
-        print("=" * 60 + "\n")
+        print("❌ ERROR: BOT_TOKEN not configured in .env file!")
         sys.exit(1)
 
     print(f"🤖 Initializing {BOT_NAME} v{BOT_VERSION}...")
-    print(f"🔑 Token prefix: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:] if len(BOT_TOKEN) > 15 else ''}")
-
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Command Handlers
+    # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("today", today_command))
+    app.add_handler(CommandHandler("latest", latest_command))
+    app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("scrape", scrape_command))
-    app.add_handler(CommandHandler("extract", scrape_command))  # alias
     app.add_handler(CommandHandler("domains", domains_command))
-    app.add_handler(CommandHandler("ping", ping_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("about", about_command))
-    app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("setchannel", setchannel_command))
+    app.add_handler(CommandHandler("channels", channels_command))
 
-    # Callback Query Handler for Buttons
+    # Automatic Channel Link Handler (when bot is added as Admin)
+    app.add_handler(ChatMemberHandler(chat_member_updated, ChatMemberHandler.MY_CHAT_MEMBER))
+
+    # Button Callbacks
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # Text message handler (URLs or fallback)
+    # Plain text links
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Global Error Handler
-    app.add_error_handler(error_handler)
-
-    logger.info("✅ Bot successfully initialized and polling started...")
+    logger.info("✅ Bot initialized and listening for updates...")
     print("🚀 Bot is LIVE! Press Ctrl+C to stop.")
     app.run_polling()
 

@@ -7,16 +7,25 @@ load_dotenv()
 
 # Bot Information
 BOT_NAME = "FileScrapper Bot"
-BOT_VERSION = "1.2.0"
+BOT_VERSION = "2.0.0"
 REPO_URL = "https://github.com/levithebutcher/filescrapper"
 
-# Telegram Bot Token (BotFather se prapt karein)
+# Telegram Bot Token (from @BotFather)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# Optional Bot Owner Telegram ID
+# Bot Owner Telegram ID (optional, for admin commands)
 OWNER_ID = os.getenv("OWNER_ID", "").strip()
 
-# Streaming domains ki list (sirf inhi links ko extract karenge)
+# Target website base URL
+BASE_URL = os.getenv("BASE_URL", "https://dropmms.com").strip().rstrip("/")
+
+# Default Category URL to monitor for auto-feed if not specified
+DEFAULT_CATEGORY_URL = os.getenv("DEFAULT_CATEGORY_URL", f"{BASE_URL}/forum/2-general/").strip()
+
+# Auto-feed background check interval in seconds (default: 900s = 15 minutes)
+FEED_CHECK_INTERVAL = int(os.getenv("FEED_CHECK_INTERVAL", "900"))
+
+# Streaming domains list
 _custom_domains = os.getenv("STREAMING_DOMAINS")
 if _custom_domains:
     STREAMING_DOMAINS = [d.strip().lower() for d in _custom_domains.split(",") if d.strip()]
@@ -35,22 +44,19 @@ else:
         "streamruby",
     ]
 
-# Target website ka base URL
-BASE_URL = os.getenv("BASE_URL", "https://dropmms.com").strip()
-
-# Message clean rakhne ke liye title ki max length
+# Message clean title max length
 MAX_TITLE_LENGTH = int(os.getenv("MAX_TITLE_LENGTH", "120"))
 
-# Ek forum page se maximum kitne posts nikaalne hain (Telegram spam/rate-limit se bachne ke liye)
+# Max posts to fetch per forum page
 MAX_POSTS_PER_FORUM = int(os.getenv("MAX_POSTS_PER_FORUM", "15"))
 
-# Telegram flood wait se bachne ke liye har post ke beech delay (seconds)
+# Telegram flood wait protection delay (seconds)
 POST_SEND_DELAY = float(os.getenv("POST_SEND_DELAY", "1.5"))
 
 # HTTP Request Timeout (seconds)
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
 
-# Optional Proxy support (agar ISP ya network par site blocked ho to proxy use karein)
+# Proxy configuration
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip()
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "").strip()
 PROXIES = {}

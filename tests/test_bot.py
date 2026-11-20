@@ -1,60 +1,76 @@
 # tests/test_bot.py
 """
-Unit tests for bot message formatting, utility functions, and structure.
+Unit tests for bot message formatting, UI buttons, and database integration.
 """
 
 import unittest
-from bot import format_post_message, get_uptime_str, get_start_keyboard
-from config import STREAMING_DOMAINS, BOT_VERSION
+from bot import format_post_card, build_streaming_buttons
+from scraper import get_host_display_name
+import db
 
 
 class TestBot(unittest.TestCase):
-    def test_format_post_message_with_links(self):
-        """Test formatting post message when streaming links are present."""
+    @classmethod
+    def setUpClass(cls):
+        db.init_db()
+
+    def test_build_streaming_buttons(self):
+        """Test streaming button grid generation."""
+        links = [
+            "https://vidara.to/v/abc123",
+            "https://streamtape.com/e/tape456",
+            "https://streamfiles.net/sf789",
+        ]
+        markup = build_streaming_buttons(links)
+        self.assertIsNotNone(markup.inline_keyboard)
+        # Verify 2 buttons in row 1, 1 button in row 2
+        self.assertEqual(len(markup.inline_keyboard), 2)
+        self.assertEqual(len(markup.inline_keyboard[0]), 2)
+        self.assertEqual(len(markup.inline_keyboard[1]), 1)
+
+    def test_format_post_card(self):
+        """Test formatting of post details card."""
         details = {
-            "title": "Amazing Movie <HD>",
+            "title": "Sample Movie <4K>",
             "post_url": "https://dropmms.com/topic/123-movie/",
-            "streaming_links": ["https://vidara.to/v/abc12", "https://streamtape.com/e/xyz89"],
+            "tags": ["4K", "1080P"],
+            "streaming_links": ["https://vidara.to/v/123"],
             "thumbnail": "https://dropmms.com/thumb.jpg",
         }
-        msg = format_post_message(details)
+        caption, markup = format_post_card(details)
+        self.assertIn("Sample Movie &lt;4K&gt;", caption)
+        self.assertIn("#4K", caption)
+        self.assertIn("View Forum Thread", caption)
+        self.assertEqual(len(markup.inline_keyboard), 1)
 
-        # Ensure HTML escaping occurred
-        self.assertIn("Amazing Movie &lt;HD&gt;", msg)
-        self.assertNotIn("Amazing Movie <HD>", msg)
+    def test_database_channel_linking(self):
+        """Test channel registration, retrieval, and removal in SQLite."""
+        test_channel_id = -100123456789
+        # Add channel
+        added = db.add_or_update_channel(
+            channel_id=test_channel_id,
+            title="Test Movie Channel",
+            username="test_movies",
+            category_url="https://dropmms.com/forum/2-general/",
+        )
+        self.assertTrue(added)
 
-        # Check links presence
-        self.assertIn("https://vidara.to/v/abc12", msg)
-        self.assertIn("https://streamtape.com/e/xyz89", msg)
-        self.assertIn("Streaming Links (2)", msg)
+        # Retrieve channel
+        ch = db.get_channel(test_channel_id)
+        self.assertIsNotNone(ch)
+        self.assertEqual(ch["title"], "Test Movie Channel")
+        self.assertEqual(ch["is_active"], 1)
 
-    def test_format_post_message_without_links(self):
-        """Test formatting post message when no streaming links are found."""
-        details = {
-            "title": "Discussion Only",
-            "post_url": "https://dropmms.com/topic/456-discuss/",
-            "streaming_links": [],
-            "thumbnail": None,
-        }
-        msg = format_post_message(details)
-        self.assertIn("Discussion Only", msg)
-        self.assertIn("Koi streaming link nahi mila", msg)
+        # Mark post seen
+        test_post = "https://dropmms.com/topic/999-test/"
+        self.assertFalse(db.is_post_seen(test_post))
+        db.mark_post_seen(test_post, "Test Post Title")
+        self.assertTrue(db.is_post_seen(test_post))
 
-    def test_get_uptime_str(self):
-        """Test uptime string generation."""
-        uptime = get_uptime_str()
-        self.assertIsInstance(uptime, str)
-        self.assertTrue(any(unit in uptime for unit in ["s", "m", "h", "d"]))
-
-    def test_get_start_keyboard(self):
-        """Test inline keyboard markup generation."""
-        kb = get_start_keyboard()
-        self.assertIsNotNone(kb.inline_keyboard)
-        # Check that we have buttons configured
-        flat_buttons = [btn.text for row in kb.inline_keyboard for btn in row]
-        self.assertTrue(any("Help" in b for b in flat_buttons))
-        self.assertTrue(any("Domains" in b for b in flat_buttons))
-        self.assertTrue(any("Status" in b for b in flat_buttons))
+        # Remove channel
+        removed = db.remove_channel(test_channel_id)
+        self.assertTrue(removed)
+        self.assertIsNone(db.get_channel(test_channel_id))
 
 
 if __name__ == "__main__":

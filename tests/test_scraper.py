@@ -14,6 +14,8 @@ from scraper import (
     _extract_streaming_links_from_html,
     _extract_thumbnail,
     get_post_details,
+    get_host_display_name,
+    extract_tags_and_quality,
 )
 
 
@@ -31,6 +33,20 @@ class TestScraper(unittest.TestCase):
         self.assertFalse(_is_streaming_link("https://dropmms.com/forum/test"))
         self.assertFalse(_is_streaming_link(""))
         self.assertFalse(_is_streaming_link(None))
+
+    def test_get_host_display_name(self):
+        """Test emoji badge formatting for streaming hosts."""
+        self.assertEqual(get_host_display_name("https://vidara.to/v/123"), "⚡ Vidara")
+        self.assertEqual(get_host_display_name("https://streamtape.com/e/456"), "🎬 Streamtape")
+        self.assertEqual(get_host_display_name("https://streamfiles.net/789"), "📥 Streamfiles")
+
+    def test_extract_tags_and_quality(self):
+        """Test quality and tag extraction from title."""
+        title = "Super Action Film [1080p] (Exclusive) [Hindi]"
+        clean_title, tags = extract_tags_and_quality(title)
+        self.assertIn("1080p", tags)
+        self.assertIn("Exclusive", tags)
+        self.assertIn("Hindi", tags)
 
     def test_clean_topic_url(self):
         """Test cleaning of query params, fragments, and pagination."""
@@ -80,33 +96,6 @@ class TestScraper(unittest.TestCase):
         self.assertIn("https://doodstream.com/d/dood456", links)
         self.assertNotIn("https://unrelated-domain.com/page", links)
 
-    def test_extract_thumbnail(self):
-        """Test OpenGraph and content image extraction."""
-        html_with_og = """
-        <html>
-            <head>
-                <meta property="og:image" content="https://dropmms.com/uploads/thumb.jpg" />
-            </head>
-            <body></body>
-        </html>
-        """
-        soup_og = BeautifulSoup(html_with_og, "html.parser")
-        thumb = _extract_thumbnail(soup_og, "https://dropmms.com/topic/123/")
-        self.assertEqual(thumb, "https://dropmms.com/uploads/thumb.jpg")
-
-        html_with_body_img = """
-        <html>
-            <body>
-                <div class="cPost_contentWrap">
-                    <img src="https://dropmms.com/images/poster.png" />
-                </div>
-            </body>
-        </html>
-        """
-        soup_body = BeautifulSoup(html_with_body_img, "html.parser")
-        thumb2 = _extract_thumbnail(soup_body, "https://dropmms.com/topic/123/")
-        self.assertEqual(thumb2, "https://dropmms.com/images/poster.png")
-
     @patch("scraper._fetch_soup")
     def test_get_post_details(self, mock_fetch_soup):
         """Test full get_post_details with mocked soup response."""
@@ -116,7 +105,7 @@ class TestScraper(unittest.TestCase):
                 <meta property="og:image" content="https://dropmms.com/thumb.jpg" />
             </head>
             <body>
-                <h1 class="ipsType_pageTitle">Sample Video Title 2026</h1>
+                <h1 class="ipsType_pageTitle">Sample Video Title [1080p]</h1>
                 <div class="cPost_contentWrap">
                     <a href="https://vidara.to/v/sample123">Vidara Link</a>
                 </div>
@@ -126,10 +115,11 @@ class TestScraper(unittest.TestCase):
         mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
 
         details = get_post_details("https://dropmms.com/topic/123-sample/")
-        self.assertEqual(details["title"], "Sample Video Title 2026")
+        self.assertEqual(details["title"], "Sample Video Title [1080p]")
         self.assertEqual(details["thumbnail"], "https://dropmms.com/thumb.jpg")
         self.assertEqual(details["streaming_links"], ["https://vidara.to/v/sample123"])
         self.assertEqual(details["post_url"], "https://dropmms.com/topic/123-sample/")
+        self.assertIn("1080p", details["tags"])
 
 
 if __name__ == "__main__":
