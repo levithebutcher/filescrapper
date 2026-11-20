@@ -3,6 +3,7 @@
 Unit tests for bot message formatting, UI buttons, and database integration.
 """
 
+import uuid
 import unittest
 from bot import format_post_card, build_streaming_buttons
 from scraper import get_host_display_name
@@ -62,7 +63,7 @@ class TestBot(unittest.TestCase):
         self.assertEqual(ch["is_active"], 1)
 
         # Mark post seen
-        test_post = "https://dropmms.com/topic/999-test/"
+        test_post = f"https://dropmms.com/topic/test-{uuid.uuid4()}/"
         self.assertFalse(db.is_post_seen(test_post))
         db.mark_post_seen(test_post, "Test Post Title")
         self.assertTrue(db.is_post_seen(test_post))

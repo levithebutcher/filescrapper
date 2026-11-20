@@ -49,9 +49,11 @@ logs/
 htmlcov/
 .tox/
 
-# Jupyter Notebook checkpoints
+# Jupyter Notebook checkpoints & Private Dev Notebooks
 .ipynb_checkpoints/
 *-checkpoint.ipynb
+*Dev*.ipynb
+*_dev.ipynb
 
 # Editor directories and OS files
 .vscode/

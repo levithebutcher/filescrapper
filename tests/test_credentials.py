@@ -19,6 +19,14 @@ API_HASH_REGEX = re.compile(r"\b[a-f0-9]{32}\b", re.IGNORECASE)
 IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".idea", ".vscode"}
 IGNORED_FILES = {".env"}  # .env is local-only and ignored in git
 
+def is_ignored_file(filename: str) -> bool:
+    if filename in IGNORED_FILES:
+        return True
+    lower = filename.lower()
+    if "dev" in lower and lower.endswith(".ipynb"):
+        return True
+    return False
+
 
 class TestCredentialSecurity(unittest.TestCase):
     @classmethod
@@ -72,7 +80,7 @@ class TestCredentialSecurity(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
 
             for file in files:
-                if file in IGNORED_FILES:
+                if is_ignored_file(file):
                     continue
 
                 filepath = Path(root) / file

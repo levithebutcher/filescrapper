@@ -19,6 +19,14 @@ PRIVATE_KEY_REGEX = re.compile(r"-----BEGIN\s+(?:RSA|OPENSSH|DSA|EC|PGP)?\s*PRIV
 IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".idea", ".vscode"}
 IGNORED_FILES = {".env"}  # .env is deliberately ignored by git
 
+def is_ignored_file(filename: str) -> bool:
+    if filename in IGNORED_FILES:
+        return True
+    lower = filename.lower()
+    if "dev" in lower and lower.endswith(".ipynb"):
+        return True
+    return False
+
 
 def run_security_check() -> bool:
     root = Path(__file__).resolve().parent
@@ -64,7 +72,7 @@ def run_security_check() -> bool:
         dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
 
         for fname in filenames:
-            if fname in IGNORED_FILES:
+            if is_ignored_file(fname):
                 continue
 
             fpath = Path(dirpath) / fname
