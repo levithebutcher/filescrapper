@@ -135,6 +135,34 @@ class TestBot(unittest.TestCase):
         self.assertEqual(badges[2], "📥 Streamfiles")
         self.assertEqual(badges[3], "🎥 Doodstream")
 
+    def test_slicing_args_and_apply_slice(self):
+        """Test parse_slicing_args and apply_slice helper functions."""
+        from scraper import parse_slicing_args, apply_slice
+
+        # Single count
+        url, start, end, is_last = parse_slicing_args(["https://dropmms.com/forum/2-general/", "4"])
+        self.assertEqual(url, "https://dropmms.com/forum/2-general/")
+        self.assertEqual(start, 1)
+        self.assertEqual(end, 4)
+        self.assertFalse(is_last)
+
+        # Range
+        url, start, end, is_last = parse_slicing_args(["https://dropmms.com/forum/2-general/", "1-5"])
+        self.assertEqual(start, 1)
+        self.assertEqual(end, 5)
+
+        # Last N
+        url, start, end, is_last = parse_slicing_args(["https://dropmms.com/forum/2-general/", "last", "5"])
+        self.assertIsNone(start)
+        self.assertEqual(end, 5)
+        self.assertTrue(is_last)
+
+        # Apply slice tests
+        items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        self.assertEqual(apply_slice(items, 1, 4, False), [1, 2, 3, 4])
+        self.assertEqual(apply_slice(items, 3, 6, False), [3, 4, 5, 6])
+        self.assertEqual(apply_slice(items, None, 5, True), [6, 7, 8, 9, 10])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -355,76 +355,96 @@ def _clean_topic_url(url: str) -> str:
 
 def _is_posted_today(date_str: str | None, time_text: str | None, full_row_text: str | None = None) -> tuple[bool, bool]:
     """
-    Check if a post timestamp, relative text, or row text indicates it was posted today (within last 24-26h).
+    Check if a post timestamp, relative text, or row text indicates it was posted today.
+    Handles Indian Standard Time (IST, UTC+05:30) and UTC/server time.
     Returns: (is_today: bool, is_definitely_older: bool)
-    - is_today: Confirmed to be uploaded today / within ~26h across timezones.
+    - is_today: Confirmed to be uploaded today (from 1:00 AM IST to now, or within ~24h).
     - is_definitely_older: Confirmed older (yesterday or earlier).
     """
     now_utc = datetime.now(timezone.utc)
-    today_utc_date = now_utc.date()
-    today_utc_str = now_utc.strftime("%Y-%m-%d")
-
-    now_ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = now_utc.astimezone(IST)
     today_ist_date = now_ist.date()
+    today_utc_date = now_utc.date()
 
-    tt = str(time_text or "")
-    fr = str(full_row_text or "")
-    combined = f"{tt} {fr}".lower().strip()
-
-    # 1. ABSOLUTE VETO: If text explicitly says 'yesterday', 'day ago', 'days ago', 'week', etc.
-    if any(w in combined for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
-        return False, True
-
-    # 2. Direct today indicators
-    if any(w in combined for w in ["today", "just now", "moment"]):
-        return True, False
-
-    # 3. Relative hours/mins/seconds regex (e.g. "2h", "2 hr", "2 hours", "20m", "20 min", "45s")
-    if re.search(r"\b\d+\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs)\b(\s*ago)?", combined):
-        if not re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined):
-            return True, False
-
-    # Relative days/weeks/years regex (e.g. "2d", "3w")
-    if re.search(r"\b\d+\s*(d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined):
-        return False, True
-
-    # 4. Check date_str from <time datetime="..."> or title attribute
+    # 1. Authoritative ISO 8601 parsing from <time datetime="...">
     if date_str:
         s = str(date_str).strip()
-        if s.startswith(today_utc_str):
-            return True, False
-
-        # Attempt ISO 8601 parsing
         try:
             cleaned_iso = s.replace("Z", "+00:00")
             dt = datetime.fromisoformat(cleaned_iso)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            dt_utc = dt.astimezone(timezone.utc)
+            dt_ist = dt.astimezone(IST)
 
-            # If UTC date is earlier than today in UTC, it's definitely older
-            if dt_utc.date() < today_utc_date:
+            # If posted today in IST (from 00:00/01:00 AM IST to current time)
+            if dt_ist.date() == today_ist_date:
+                return True, False
+
+            # If posted before today in IST, it's definitely older
+            if dt_ist.date() < today_ist_date:
                 return False, True
-            elif dt_utc.date() == today_utc_date:
+            elif dt_ist.date() > today_ist_date:
                 return True, False
         except Exception:
             pass
 
-    # 5. Check calendar dates in text (e.g. "Nov 20", "20 Nov", "November 20")
-    today_days = {str(now_utc.day), f"{now_utc.day:02d}", str(now_ist.day), f"{now_ist.day:02d}"}
-    today_months = {now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()}
-    for m in today_months:
-        if m in combined:
-            for d in today_days:
-                if re.search(rf"\b{d}\b", combined):
-                    return True, False
-            # Mentioned current month but different day -> older
+    # 2. Text-based relative checks on time_text specifically (avoids false hits in post titles/usernames)
+    tt = str(time_text or "").strip().lower()
+    if tt:
+        # Check for yesterday
+        if re.search(r"\byesterday\b", tt):
             return False, True
 
-    # If any other month is mentioned (e.g. "Oct 15") -> definitely older
-    all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-    if any(m in combined for m in all_months):
-        return False, True
+        # Check for days / weeks / months / years ago
+        if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
+            return False, True
+
+        # Check for today / just now / moment
+        if any(w in tt for w in ["today", "just now", "moment"]):
+            return True, False
+
+        # Relative minutes or seconds ago (e.g. "10 minutes ago", "25m", "45s")
+        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", tt):
+            return True, False
+
+        # Relative hours (e.g. "2 hours ago", "5h", "14 hr")
+        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", tt)
+        if m_hr:
+            hrs = int(m_hr.group(1))
+            if hrs <= 24:
+                return True, False
+            else:
+                return False, True
+
+        # Explicit calendar date in time_text (e.g. "Nov 20", "20 Nov", "November 20")
+        today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
+        today_months = {
+            now_ist.strftime("%b").lower(), now_ist.strftime("%B").lower(),
+            now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()
+        }
+        for m in today_months:
+            if m in tt:
+                for d in today_days:
+                    if re.search(rf"\b{d}\b", tt):
+                        return True, False
+                # Mentions current month but a different day
+                return False, True
+
+        # Other months mentioned (e.g. "Oct 15", "September 3")
+        all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        if any(m in tt for m in all_months):
+            return False, True
+
+    # 3. Fallback to full_row_text only if time_text was completely absent
+    if not tt and full_row_text:
+        fr = str(full_row_text).strip().lower()
+        if re.search(r"\byesterday\b", fr):
+            return False, True
+        if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\s*ago\b", fr):
+            return False, True
+        if re.search(r"\btoday\b", fr):
+            return True, False
 
     return False, False
 
@@ -436,145 +456,187 @@ def get_forum_topics(
     only_today: bool = False,
 ) -> list[dict]:
     """
-    Fetch structured topics from a forum category with date-sorting and metadata.
+    Fetch structured topics from a forum category with date-sorting, metadata, and multi-page pagination.
     sort_by options:
       - 'start_date': Sort by topic creation/upload date (Newest uploads first)
       - 'views': Sort by popularity/views
       - 'updated': Sort by last activity
     only_today:
-      - If True: Option 1 Live Date Cutoff. Filters for topics posted today / within 24h,
-        skipping pinned announcements and older topics, without needing database storage.
-      - If False: Scrapes up to `limit` posts across the full page (default: 25).
+      - If True: Option 1 Live Date Cutoff. Filters for topics posted today (IST / UTC),
+        multi-page paginating until yesterday's date cutoff is hit.
+      - If False: Scrapes up to `limit` posts across forum pages (default: 25).
     """
-    separator = "&" if "?" in forum_url else "?"
-    if sort_by == "start_date":
-        target_url = f"{forum_url}{separator}sortby=forums_topics.start_date&sortdirection=desc"
-    elif sort_by == "views":
-        target_url = f"{forum_url}{separator}sortby=views&sortdirection=desc"
-    else:
-        target_url = forum_url
+    clean_base = forum_url.split("?")[0].split("#")[0]
+    clean_base = re.sub(r"/page/\d+/?$", "/", clean_base)
+    if not clean_base.endswith("/"):
+        clean_base += "/"
 
-    soup = _fetch_soup(target_url)
     topics = []
     seen = set()
+    current_page = 1
+    # For today scans, check up to 10 pages to catch all uploads of today without 24-post cap
+    max_pages = 10 if only_today else max(1, (limit + 24) // 25)
 
-    # Search for topic row elements (IPS Community rows)
-    row_elements = soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
+    logger.info(f"🌐 [get_forum_topics] Starting topic scan for {clean_base} (sort_by={sort_by}, limit={limit}, only_today={only_today}, max_pages={max_pages})")
 
-    for row in row_elements:
-        # Find the topic title link in the row
-        title_container = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
-        if title_container:
-            link_elem = title_container.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+    while len(topics) < limit and current_page <= max_pages:
+        if current_page == 1:
+            if sort_by == "start_date":
+                target_url = f"{clean_base}?sortby=forums_topics.start_date&sortdirection=desc"
+            elif sort_by == "views":
+                target_url = f"{clean_base}?sortby=views&sortdirection=desc"
+            else:
+                target_url = clean_base
         else:
-            link_elem = None
+            if sort_by == "start_date":
+                target_url = f"{clean_base}page/{current_page}/?sortby=forums_topics.start_date&sortdirection=desc"
+            elif sort_by == "views":
+                target_url = f"{clean_base}page/{current_page}/?sortby=views&sortdirection=desc"
+            else:
+                target_url = f"{clean_base}page/{current_page}/"
 
-        if not link_elem:
-            link_elem = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+        try:
+            logger.info(f"📄 Fetching forum page {current_page}: {target_url}")
+            soup = _fetch_soup(target_url)
+        except Exception as e:
+            logger.warning(f"Could not fetch page {current_page} ({target_url}): {e}")
+            break
 
-        if not link_elem:
-            continue
+        # Search for topic row elements (IPS Community rows)
+        row_elements = soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
 
-        full_url = urljoin(forum_url, link_elem["href"].strip())
-        clean_url = _clean_topic_url(full_url)
-        if clean_url in seen:
-            continue
+        hit_older = False
+        new_on_page = 0
 
-        # Skip pinned / sticky / announcement topics when filtering for today's uploads
-        row_classes = " ".join(row.get("class", [])).lower()
-        is_pinned = (
-            "pinned" in row_classes
-            or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
-            or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
-        )
-        if is_pinned and only_today:
-            continue
+        for row in row_elements:
+            # Find the topic title link in the row
+            title_container = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
+            if title_container:
+                link_elem = title_container.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+            else:
+                link_elem = None
 
-        # Extract publication timestamp from the topic creation container (NOT last poster!)
-        date_str = None
-        time_text = None
+            if not link_elem:
+                link_elem = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
 
-        main_elem = row.find(class_=re.compile(r"ipsDataItem_main|cForumRow_main", re.I)) or row
-        meta_elem = main_elem.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I)) or main_elem
-
-        time_tag = meta_elem.find("time")
-        if time_tag:
-            date_str = time_tag.get("datetime") or time_tag.get("title")
-            time_text = time_tag.get_text(strip=True)
-
-        # Full text of creation container (e.g. "Started by Levi, Yesterday at 9:43 PM")
-        row_text = meta_elem.get_text(" ", strip=True)
-
-        # Apply Option 1 Live Date Cutoff when requested via /today
-        if only_today:
-            is_today, is_older = _is_posted_today(date_str, time_text, full_row_text=row_text)
-            if is_older:
-                # Stop scanning as soon as we reach yesterday's uploads!
-                logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' ({row_text}). Stopping scan.")
-                break
-            if not is_today:
-                # Skip unconfirmed
+            if not link_elem:
                 continue
 
-        seen.add(clean_url)
-        title = link_elem.get_text(strip=True) or "Untitled Post"
+            full_url = urljoin(clean_base, link_elem["href"].strip())
+            clean_url = _clean_topic_url(full_url)
+            if clean_url in seen:
+                continue
 
-        # Extract views count
-        views_str = None
-        views_elem = row.find("span", class_=re.compile("ipsType_light|cForumRow_views", re.I))
-        if views_elem:
-            views_str = views_elem.get_text(strip=True)
+            # Skip pinned / sticky / announcement topics when filtering for today's uploads
+            row_classes = " ".join(row.get("class", [])).lower()
+            is_pinned = (
+                "pinned" in row_classes
+                or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
+                or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
+            )
+            if is_pinned and only_today:
+                continue
 
-        topics.append({
-            "title": title,
-            "url": clean_url,
-            "date": date_str,
-            "views": views_str,
-        })
+            # Extract publication timestamp from the topic creation container
+            date_str = None
+            time_text = None
+
+            main_elem = row.find(class_=re.compile(r"ipsDataItem_main|cForumRow_main", re.I)) or row
+            meta_elem = main_elem.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I)) or main_elem
+
+            time_tag = meta_elem.find("time")
+            if time_tag:
+                date_str = time_tag.get("datetime") or time_tag.get("title")
+                time_text = time_tag.get_text(strip=True)
+
+            row_text = meta_elem.get_text(" ", strip=True)
+
+            # Apply Option 1 Live Date Cutoff when requested via /today
+            if only_today:
+                is_today, is_older = _is_posted_today(date_str, time_text, full_row_text=row_text)
+                if is_older:
+                    logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' (date={date_str}, time={time_text}). Stopping scan.")
+                    hit_older = True
+                    break
+                if not is_today:
+                    continue
+
+            seen.add(clean_url)
+            new_on_page += 1
+            title = link_elem.get_text(strip=True) or "Untitled Post"
+
+            views_str = None
+            views_elem = row.find("span", class_=re.compile("ipsType_light|cForumRow_views", re.I))
+            if views_elem:
+                views_str = views_elem.get_text(strip=True)
+
+            topics.append({
+                "title": title,
+                "url": clean_url,
+                "date": date_str,
+                "views": views_str,
+            })
+
+            if len(topics) >= limit:
+                break
+
+        # Fallback for page 1 if no row elements found (only when only_today is False)
+        if not topics and current_page == 1 and not only_today:
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if "/topic/" in href or "index.php?/topic/" in href:
+                    full_url = urljoin(clean_base, href)
+                    clean_url = _clean_topic_url(full_url)
+                    if clean_url not in seen:
+                        seen.add(clean_url)
+                        t_title = a.get_text(strip=True) or "Untitled Post"
+                        topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
+                        if len(topics) >= limit:
+                            break
+
+        # If date cutoff reached, or no row elements on this page, or no new topics found: stop pagination
+        if hit_older or not row_elements or new_on_page == 0:
+            break
 
         if len(topics) >= limit:
             break
 
-    # Fallback: scan all links with /topic/ if specific row elements were not found (only when only_today is False)
-    if not topics and not only_today:
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            if "/topic/" in href or "index.php?/topic/" in href:
-                full_url = urljoin(forum_url, href)
-                clean_url = _clean_topic_url(full_url)
-                if clean_url not in seen:
-                    seen.add(clean_url)
-                    t_title = a.get_text(strip=True) or "Untitled Post"
-                    topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
-                    if len(topics) >= limit:
-                        break
+        current_page += 1
 
-    # If this is a category/parent forum that lists subforums, traverse into subforums
-    if not topics:
+    # Subforum traversal: ONLY for parent categories when not only_today and no direct topics were found
+    if not topics and not only_today:
         subforum_links = []
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
             if re.search(r"/forum/\d+|/forums/forum/\d+", href, re.I):
-                sf_url = urljoin(forum_url, href)
+                sf_url = urljoin(clean_base, href)
                 clean_sf = sf_url.split("?")[0].split("#")[0].rstrip("/") + "/"
-                clean_forum = forum_url.split("?")[0].split("#")[0].rstrip("/") + "/"
-                if clean_sf not in subforum_links and clean_sf != clean_forum:
+                if clean_sf not in subforum_links and clean_sf != clean_base:
                     subforum_links.append(clean_sf)
 
         for sf_url in subforum_links[:3]:
             try:
-                sub_topics = get_forum_topics(sf_url, sort_by=sort_by, limit=limit - len(topics), only_today=only_today)
-                for st in sub_topics:
-                    if st["url"] not in seen:
-                        seen.add(st["url"])
-                        topics.append(st)
-                        if len(topics) >= limit:
-                            break
+                sf_soup = _fetch_soup(sf_url)
+                sf_rows = sf_soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
+                for row in sf_rows:
+                    tc = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
+                    le = tc.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I)) if tc else None
+                    if not le:
+                        le = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+                    if le:
+                        fu = _clean_topic_url(urljoin(sf_url, le["href"].strip()))
+                        if fu not in seen:
+                            seen.add(fu)
+                            title = le.get_text(strip=True) or "Untitled Post"
+                            topics.append({"title": title, "url": fu, "date": None, "views": None})
+                            if len(topics) >= limit:
+                                break
                 if len(topics) >= limit:
                     break
             except Exception as e:
                 logger.debug(f"Could not scrape subforum {sf_url}: {e}")
 
+    logger.info(f"✅ [get_forum_topics] Finished scan. Found {len(topics)} topic(s) from {clean_base}")
     return topics
 
 

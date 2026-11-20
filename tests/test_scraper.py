@@ -518,6 +518,54 @@ class TestScraper(unittest.TestCase):
         self.assertIn("<code>https://livecamrips.to/video/16877744</code>", card)
         self.assertIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card)
 
+    def test_title_words_not_triggering_cutoff(self):
+        """Test that words like 'week', 'month', 'year' in titles do NOT trigger cutoff."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import _is_posted_today
+
+        now_utc = datetime.now(timezone.utc)
+        today_iso = now_utc.strftime("%Y-%m-%dT10:00:00Z")
+
+        # Title containing 'week', 'month', 'year'
+        is_today, is_older = _is_posted_today(today_iso, "2 hours ago", full_row_text="Best compilation of the week and year")
+        self.assertTrue(is_today)
+        self.assertFalse(is_older)
+
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_multipage_today(self, mock_fetch_soup):
+        """Test that get_forum_topics paginates to page 2 to collect all today's uploads."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import get_forum_topics
+
+        now_utc = datetime.now(timezone.utc)
+        today_iso = now_utc.strftime("%Y-%m-%dT10:00:00Z")
+        yesterday_iso = (now_utc - timedelta(days=1)).strftime("%Y-%m-%dT10:00:00Z")
+
+        # Page 1: 3 today posts
+        p1_html = f"""
+        <html><body>
+            <li class="ipsDataItem"><a href="/topic/1-p1/">Post 1</a><time datetime="{today_iso}">1h ago</time></li>
+            <li class="ipsDataItem"><a href="/topic/2-p1/">Post 2</a><time datetime="{today_iso}">2h ago</time></li>
+            <li class="ipsDataItem"><a href="/topic/3-p1/">Post 3</a><time datetime="{today_iso}">3h ago</time></li>
+        </body></html>
+        """
+        # Page 2: 2 today posts + 1 yesterday post (cutoff)
+        p2_html = f"""
+        <html><body>
+            <li class="ipsDataItem"><a href="/topic/4-p2/">Post 4</a><time datetime="{today_iso}">4h ago</time></li>
+            <li class="ipsDataItem"><a href="/topic/5-p2/">Post 5</a><time datetime="{today_iso}">5h ago</time></li>
+            <li class="ipsDataItem"><a href="/topic/6-p2/">Yesterday Post</a><time datetime="{yesterday_iso}">Yesterday</time></li>
+        </body></html>
+        """
+        mock_fetch_soup.side_effect = [
+            BeautifulSoup(p1_html, "html.parser"),
+            BeautifulSoup(p2_html, "html.parser"),
+        ]
+
+        topics = get_forum_topics("https://dropmms.com/forum/2-general/", limit=100, only_today=True)
+        self.assertEqual(len(topics), 5)
+        self.assertEqual([t["title"] for t in topics], ["Post 1", "Post 2", "Post 3", "Post 4", "Post 5"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -533,6 +533,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id if update.effective_user else None
     chat_id = msg.chat_id
 
+    # Log incoming command and arguments
+    logger.info(f"📅 [/today] Chat {chat_id} (User: {user_id}) - context.args={context.args}")
+
     # Register scrape immediately so /stop or button cancels it without delay
     start_scrape_for_chat(chat_id)
 
@@ -541,6 +544,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_url = DEFAULT_CATEGORY_URL
     elif not target_url.startswith("http://") and not target_url.startswith("https://"):
         target_url = f"https://{target_url}"
+
+    has_slice = (start_idx is not None) or (end_idx is not None) or is_last_n
+    logger.info(f"🎯 [/today] Target URL: {target_url} | Slice: start={start_idx}, end={end_idx}, is_last_n={is_last_n}")
 
     status_msg = await msg.reply_text("📅 <i>Scanning today's uploads...</i>", parse_mode=ParseMode.HTML)
 
@@ -564,7 +570,6 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # 1B. Model page URL
-        has_slice = (start_idx is not None) or (end_idx is not None) or is_last_n
         only_today = not has_slice  # If user requested a slice (e.g. 4 or 1-5), fetch recent videos
 
         try:
@@ -633,9 +638,10 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. DropMMS Forum Category
     try:
-        # Fetch today's topics without artificial limit (stops when yesterday reached)
+        # Fetch today's topics without artificial limit (stops when yesterday reached, paginating up to 10 pages)
         all_today_topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", 200, True)
     except Exception as e:
+        logger.error(f"Error fetching forum category: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
         end_scrape_for_chat(chat_id)
         return
@@ -643,16 +649,33 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Apply slicing if specified
     topics = apply_slice(all_today_topics, start_idx, end_idx, is_last_n)
 
+    # If user explicitly asked for a slice (e.g. 4 or 1-5) and 0 uploads occurred today,
+    # gracefully fall back to latest posts from that category so the user's slice is fulfilled
+    if not topics and has_slice:
+        logger.info(f"No today posts found for slice in {target_url}. Fetching recent posts.")
+        await status_msg.edit_text("📅 <i>No posts uploaded today. Fetching recent uploads...</i>", parse_mode=ParseMode.HTML)
+        try:
+            recent_topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", 50, False)
+            topics = apply_slice(recent_topics, start_idx, end_idx, is_last_n)
+        except Exception as e:
+            logger.warning(f"Fallback fetch error: {e}")
+
     if not topics:
         end_scrape_for_chat(chat_id)
+        quick_buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Latest Posts", callback_data="cb_latest")],
+            [InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search")],
+        ])
         await status_msg.edit_text(
             "📅 <b>No new posts found today yet!</b>\n\n"
             "<i>No topics uploaded today in this category. Older posts were skipped.</i>\n\n"
-            "💡 <i>Tip: Pass a specific category or topic link:</i>\n"
-            "<code>/today https://dropmms.com/forum/2-general/</code>\n"
-            "<code>/scrape https://dropmms.com/forum/2-general/ 5</code>\n\n"
-            "<i>Or paste any link directly in chat to extract recent releases.</i>",
+            "💡 <i>Tips:</i>\n"
+            f"• Get recent uploads with count or range:\n"
+            f"  <code>/scrape {html.escape(target_url)} 4</code>\n"
+            f"  <code>/scrape {html.escape(target_url)} 1-5</code>\n"
+            "• Or tap below to view latest releases:",
             parse_mode=ParseMode.HTML,
+            reply_markup=quick_buttons,
         )
         return
 
@@ -660,7 +683,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
     ]])
     await status_msg.edit_text(
-        f"📅 <b>Found {len(topics)} fresh upload(s) from today!</b>\n<i>Extracting links...</i>",
+        f"📅 <b>Found {len(topics)} upload(s)!</b>\n<i>Extracting links...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=stop_markup,
     )
@@ -972,6 +995,7 @@ async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int =
 async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /scrape <url> [slice] command."""
     msg = update.effective_message
+    logger.info(f"🛠️ [/scrape] Chat {update.effective_chat.id} (User: {update.effective_user.id if update.effective_user else None}) - context.args={context.args}")
     if not context.args:
         await msg.reply_text(
             "ℹ️ <b>Usage:</b> <code>/scrape &lt;url&gt; [count or range]</code>\n\n"
@@ -1008,6 +1032,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         else:
             return
 
+    logger.info(f"🔗 [handle_raw_url] Chat {chat_id} (User: {user_id}) - Target URL: {target_url} | Slice: start={start_idx}, end={end_idx}, is_last_n={is_last_n}")
     start_scrape_for_chat(chat_id)
 
     # 1. LiveCamRips Single Video
@@ -1132,6 +1157,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
+    logger.info(f"📩 [handle_message] Received text from Chat {update.effective_chat.id} (User: {update.effective_user.id if update.effective_user else None}): {text!r}")
     if text.startswith("http://") or text.startswith("https://") or "dropmms.com" in text or "livecamrips.to" in text:
         await handle_raw_url(update, context, text)
 
