@@ -1148,23 +1148,28 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
     # 4. DropMMS Forum Category
     if is_forum_url(target_url):
-        status = await msg.reply_text("📂 <i>Scanning forum category...</i>", parse_mode=ParseMode.HTML)
+        m_p = re.search(r"/page/(\d+)", target_url, re.I) or re.search(r"[?&]page=(\d+)", target_url, re.I)
+        page_num = int(m_p.group(1)) if m_p else 1
+        page_label = f" (Page {page_num})" if page_num > 1 else ""
+
+        status = await msg.reply_text(f"📂 <i>Scanning forum category{page_label}...</i>", parse_mode=ParseMode.HTML)
         try:
-            topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", 50, False)
+            req_limit = MAX_POSTS_PER_FORUM if (start_idx is None and end_idx is None and not is_last_n) else (end_idx or 50)
+            topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", req_limit, False)
             if start_idx is not None or end_idx is not None or is_last_n:
                 topics = apply_slice(topics, start_idx, end_idx, is_last_n)
             else:
                 topics = topics[:MAX_POSTS_PER_FORUM]
 
             if not topics:
-                await status.edit_text("❌ No topics found in this category.")
+                await status.edit_text(f"❌ No topics found in this category{page_label}.")
                 end_scrape_for_chat(chat_id)
                 return
 
             stop_markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
             ]])
-            await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...", reply_markup=stop_markup)
+            await status.edit_text(f"✅ Found {len(topics)} topics{page_label}! Extracting...", reply_markup=stop_markup)
 
             for idx, t in enumerate(topics, start=1):
                 if is_scrape_cancelled(chat_id):

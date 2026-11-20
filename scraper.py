@@ -466,6 +466,35 @@ def get_forum_topics(
         multi-page paginating until yesterday's date cutoff is hit.
       - If False: Scrapes up to `limit` posts across forum pages (default: 25).
     """
+    # Detect if user specifically provided a starting page number (e.g. /page/2/ or ?page=2)
+    start_page = 1
+    m_path_page = re.search(r"/page/(\d+)/?", forum_url, re.I)
+    if m_path_page:
+        try:
+            start_page = max(1, int(m_path_page.group(1)))
+        except Exception:
+            start_page = 1
+    else:
+        m_query_page = re.search(r"[?&]page=(\d+)", forum_url, re.I)
+        if m_query_page:
+            try:
+                start_page = max(1, int(m_query_page.group(1)))
+            except Exception:
+                start_page = 1
+
+    # Extract user-provided query parameters excluding page=
+    query_str = ""
+    if "?" in forum_url:
+        raw_query = forum_url.split("?")[1].split("#")[0]
+        filtered_parts = [p for p in raw_query.split("&") if not re.match(r"^page=\d+$", p, re.I)]
+        query_str = "&".join(filtered_parts)
+
+    if not query_str:
+        if sort_by == "start_date":
+            query_str = "sortby=forums_topics.start_date&sortdirection=desc"
+        elif sort_by == "views":
+            query_str = "sortby=views&sortdirection=desc"
+
     clean_base = forum_url.split("?")[0].split("#")[0]
     clean_base = re.sub(r"/page/\d+/?$", "/", clean_base)
     if not clean_base.endswith("/"):
@@ -473,27 +502,23 @@ def get_forum_topics(
 
     topics = []
     seen = set()
-    current_page = 1
-    # For today scans, check up to 10 pages to catch all uploads of today without 24-post cap
-    max_pages = 10 if only_today else max(1, (limit + 24) // 25)
+    current_page = start_page
 
-    logger.info(f"🌐 [get_forum_topics] Starting topic scan for {clean_base} (sort_by={sort_by}, limit={limit}, only_today={only_today}, max_pages={max_pages})")
+    # Calculate max_pages
+    if only_today:
+        max_pages = start_page + 9
+    else:
+        pages_to_scan = max(1, (limit + 24) // 25)
+        max_pages = start_page + pages_to_scan - 1
+
+    logger.info(f"🌐 [get_forum_topics] Starting topic scan for {clean_base} (start_page={start_page}, sort_by={sort_by}, limit={limit}, only_today={only_today}, max_pages={max_pages})")
 
     while len(topics) < limit and current_page <= max_pages:
+        q_part = f"?{query_str}" if query_str else ""
         if current_page == 1:
-            if sort_by == "start_date":
-                target_url = f"{clean_base}?sortby=forums_topics.start_date&sortdirection=desc"
-            elif sort_by == "views":
-                target_url = f"{clean_base}?sortby=views&sortdirection=desc"
-            else:
-                target_url = clean_base
+            target_url = f"{clean_base}{q_part}"
         else:
-            if sort_by == "start_date":
-                target_url = f"{clean_base}page/{current_page}/?sortby=forums_topics.start_date&sortdirection=desc"
-            elif sort_by == "views":
-                target_url = f"{clean_base}page/{current_page}/?sortby=views&sortdirection=desc"
-            else:
-                target_url = f"{clean_base}page/{current_page}/"
+            target_url = f"{clean_base}page/{current_page}/{q_part}"
 
         try:
             logger.info(f"📄 Fetching forum page {current_page}: {target_url}")

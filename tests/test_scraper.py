@@ -397,6 +397,31 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(topics[0]["title"], "Subforum Video 1")
         self.assertEqual(topics[0]["url"], "https://dropmms.com/topic/501-sub-video/")
 
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_specific_page(self, mock_fetch_soup):
+        """Test that get_forum_topics respects user-provided /page/2/ URL and fetches Page 2."""
+        from scraper import get_forum_topics
+
+        p2_html = """
+        <html><body>
+            <li class="ipsDataItem"><a href="/topic/201-p2-video/">Page 2 Video 1</a></li>
+            <li class="ipsDataItem"><a href="/topic/202-p2-video/">Page 2 Video 2</a></li>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(p2_html, "html.parser")
+
+        topics = get_forum_topics(
+            "https://dropmms.com/forum/4-desi/page/2/?sortby=start_date&sortdirection=desc",
+            limit=25,
+            only_today=False,
+        )
+
+        called_url = mock_fetch_soup.call_args[0][0]
+        self.assertIn("/page/2/", called_url)
+        self.assertIn("sortby=start_date&sortdirection=desc", called_url)
+        self.assertEqual(len(topics), 2)
+        self.assertEqual(topics[0]["title"], "Page 2 Video 1")
+
     def test_provider_priority_and_fallback(self):
         """Test that PROVIDER_PRIORITY strictly picks Streamtape -> Vidara -> Streamfiles -> iPlayGo."""
         from scraper import filter_links_by_preference, PROVIDER_PRIORITY
