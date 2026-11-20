@@ -29,7 +29,7 @@ class TestBot(unittest.TestCase):
         self.assertEqual(len(grouped["🎬 Streamtape"]), 1)
 
     def test_format_post_card(self):
-        """Test formatting of post details card with copyable multi-line code boxes."""
+        """Test formatting of post details card with blockquote title and preferred link."""
         details = {
             "title": "Sample Movie <4K>",
             "post_url": "https://dropmms.com/topic/123-movie/",
@@ -41,13 +41,29 @@ class TestBot(unittest.TestCase):
             ],
             "thumbnail": "https://dropmms.com/thumb.jpg",
         }
-        caption, markup = format_post_card(details)
-        self.assertIn("Sample Movie &lt;4K&gt;", caption)
+        # Preferred: vidara
+        caption = format_post_card(details, user_pref="vidara")
+        self.assertIn("<blockquote>🎬 <b>Sample Movie &lt;4K&gt;</b></blockquote>", caption)
         self.assertIn("#4K", caption)
-        self.assertIn("View Forum Thread", caption)
-        self.assertIn("<pre><code>https://vidara.to/v/part1\nhttps://vidara.to/v/part2</code></pre>", caption)
-        self.assertIn("All Links (Batch Copy All):", caption)
-        self.assertIsNone(markup)
+        self.assertIn("⚡ Vidara Links:", caption)
+        self.assertIn("1. <code>https://vidara.to/v/part1</code>", caption)
+        self.assertIn("2. <code>https://vidara.to/v/part2</code>", caption)
+        # Should NOT have streamtape when vidara is preferred and present
+        self.assertNotIn("streamtape.com", caption)
+
+        # Fallback test: when preferred host (e.g. doodstream) is not in post
+        caption_fallback = format_post_card(details, user_pref="doodstream")
+        self.assertIn("Using alternative", caption_fallback)
+
+    def test_user_host_preference_db(self):
+        """Test setting and getting user host preference in db."""
+        test_uid = 99887766
+        # Default should be vidara
+        self.assertEqual(db.get_user_host_preference(test_uid), "vidara")
+
+        # Update to streamtape
+        db.set_user_host_preference(test_uid, "streamtape")
+        self.assertEqual(db.get_user_host_preference(test_uid), "streamtape")
 
     def test_database_channel_linking(self):
         """Test channel registration, retrieval, and removal in SQLite."""

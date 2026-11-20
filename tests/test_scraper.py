@@ -15,6 +15,7 @@ from scraper import (
     _extract_thumbnail,
     _is_valid_thumbnail_url,
     get_post_details,
+    filter_links_by_preference,
     get_host_display_name,
     extract_tags_and_quality,
 )
@@ -133,6 +134,28 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(details["streaming_links"], ["https://vidara.to/v/sample123"])
         self.assertEqual(details["post_url"], "https://dropmms.com/topic/123-sample/")
         self.assertIn("1080p", details["tags"])
+
+    def test_filter_links_by_preference(self):
+        """Test user preferred host filtering and smart fallback."""
+        sample_links = [
+            "https://vidara.to/v/vid1",
+            "https://streamtape.com/e/tape1",
+            "https://streamfiles.net/sf1",
+        ]
+        # Exact match
+        badge, links, is_fallback = filter_links_by_preference(sample_links, "streamtape")
+        self.assertEqual(badge, "🎬 Streamtape")
+        self.assertEqual(links, ["https://streamtape.com/e/tape1"])
+        self.assertFalse(is_fallback)
+
+        # Fallback when preferred host is missing
+        badge, links, is_fallback = filter_links_by_preference(sample_links, "doodstream")
+        self.assertTrue(is_fallback)
+        self.assertEqual(len(links), 1)
+
+        # All hosts
+        badge, links, is_fallback = filter_links_by_preference(sample_links, "all")
+        self.assertEqual(len(links), 3)
 
 
 if __name__ == "__main__":

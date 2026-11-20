@@ -49,6 +49,7 @@ from scraper import (
     is_forum_url,
     is_topic_url,
     get_host_display_name,
+    filter_links_by_preference,
 )
 import db
 
@@ -77,53 +78,62 @@ def group_links_by_host(links: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
-def format_post_card(details: dict) -> tuple[str, InlineKeyboardMarkup | None]:
+def format_post_card(details: dict, user_pref: str = "vidara") -> str:
     """
-    Format single post details into a clean, 1-tap copyable text card.
-    Uses multi-line <pre><code> boxes so users can tap any provider box
-    to copy all links for that specific host at once (or all links at once).
+    Format single post details into a clean, minimal message.
+    Uses Telegram blockquote for the title, filters links according to user preference,
+    and formats them as a clean numbered list of copyable <code> links.
     """
     title = html.escape(details.get("title", "Untitled Video"))
     post_url = html.escape(details.get("post_url", ""))
     tags = details.get("tags", [])
-    links = details.get("streaming_links", [])
+    raw_links = details.get("streaming_links", [])
 
-    caption_lines = [f"🎬 <b>{title}</b>"]
+    caption_lines = [f"<blockquote>🎬 <b>{title}</b></blockquote>"]
 
     if tags:
         tag_str = " ".join([f"<code>#{html.escape(t)}</code>" for t in tags[:5]])
         caption_lines.append(f"🏷️ {tag_str}")
 
-    if post_url:
-        caption_lines.append(f"🌐 <a href='{post_url}'>View Forum Thread</a>")
-
-    if not links:
+    if not raw_links:
         caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
+    elif user_pref == "all":
+        # Group and show all providers cleanly
+        grouped = group_links_by_host(raw_links)
+        caption_lines.append("\n🍿 <b>Streaming Links (All Hosts):</b>")
+        for host_badge, h_links in grouped.items():
+            caption_lines.append(f"\n{host_badge}:")
+            for i, l in enumerate(h_links, 1):
+                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
     else:
-        grouped = group_links_by_host(links)
-        caption_lines.append("\n🍿 <b>Streaming Links (Tap box to copy):</b>")
+        # Filter by preference with smart fallback
+        host_badge, filtered_links, is_fallback = filter_links_by_preference(raw_links, user_pref)
 
-        for host_badge, host_links in grouped.items():
-            count_label = f" ({len(host_links)})" if len(host_links) > 1 else ""
-            caption_lines.append(f"\n{host_badge}{count_label}:")
-            escaped_links = "\n".join([html.escape(l) for l in host_links])
-            caption_lines.append(f"<pre><code>{escaped_links}</code></pre>")
+        if is_fallback:
+            caption_lines.append(f"\n⚠️ <i>{user_pref.capitalize()} not available in this post.</i>")
+            caption_lines.append(f"🍿 <b>Using alternative ({host_badge}):</b>")
+        else:
+            caption_lines.append(f"\n🍿 <b>{host_badge} Links:</b>")
 
-        # Master Batch Copy block (if multiple providers or multiple links)
-        if len(grouped) > 1 or len(links) > 1:
-            caption_lines.append("\n📋 <b>All Links (Batch Copy All):</b>")
-            all_escaped = "\n".join([html.escape(l) for l in links])
-            caption_lines.append(f"<pre><code>{all_escaped}</code></pre>")
+        if len(filtered_links) == 1:
+            caption_lines.append(f"🔗 <code>{html.escape(filtered_links[0])}</code>")
+        else:
+            for i, l in enumerate(filtered_links, 1):
+                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
 
-    caption = "\n".join(caption_lines)
-    return caption, None
+    if post_url:
+        caption_lines.append(f"\n🌐 <a href='{post_url}'>Original Forum Thread</a>")
+
+    return "\n".join(caption_lines)
 
 
 # --- Post Sender Engine ---
 
-async def send_post_card(bot, chat_id: int | str, details: dict):
-    """Deliver a premium post card with thumbnail and copyable link blocks."""
-    caption, markup = format_post_card(details)
+async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None):
+    """Deliver a clean post card with thumbnail and preferred copyable link(s)."""
+    target_uid = user_id if user_id else (chat_id if isinstance(chat_id, int) and chat_id > 0 else 0)
+    user_pref = db.get_user_host_preference(target_uid) if target_uid else "vidara"
+    caption = format_post_card(details, user_pref)
     thumbnail = details.get("thumbnail")
 
     # If thumbnail exists and caption fits within photo caption limit (1024 chars)
@@ -134,7 +144,6 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
                 photo=thumbnail,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
-                reply_markup=markup,
             )
             return
         except RetryAfter as e:
@@ -145,7 +154,6 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
                     photo=thumbnail,
                     caption=caption,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=markup,
                 )
                 return
             except Exception:
@@ -153,26 +161,12 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
         except Exception as e:
             logger.warning(f"Thumbnail send failed: {e}")
 
-    # If caption > 1024 chars but thumbnail exists, send photo first with title, then full link card
-    if thumbnail and len(caption) > 1024:
-        try:
-            short_caption = f"🎬 <b>{html.escape(details.get('title', 'Video'))}</b>"
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=thumbnail,
-                caption=short_caption,
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-
-    # Send text message card
+    # Fallback to text message if no thumbnail, caption > 1024 chars, or image failed
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=markup,
             disable_web_page_preview=True,
         )
     except RetryAfter as e:
@@ -181,7 +175,6 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
             chat_id=chat_id,
             text=caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=markup,
             disable_web_page_preview=True,
         )
     except Exception as e:
@@ -189,6 +182,51 @@ async def send_post_card(bot, chat_id: int | str, details: dict):
 
 
 # --- Command Handlers ---
+
+def get_host_settings_keyboard(current_pref: str = "vidara") -> InlineKeyboardMarkup:
+    """Generate keyboard for selecting preferred streaming provider."""
+    hosts = [
+        ("vidara", "⚡ Vidara"),
+        ("streamtape", "🎬 Streamtape"),
+        ("streamfiles", "📥 Streamfiles"),
+        ("doodstream", "🎥 Doodstream"),
+        ("streamwish", "✨ Streamwish"),
+        ("lplaygo", "▶️ Lplaygo"),
+        ("all", "🌐 All Providers"),
+    ]
+    buttons = []
+    row = []
+    for key, label in hosts:
+        check = " ✅" if key == current_pref else ""
+        row.append(InlineKeyboardButton(f"{label}{check}", callback_data=f"sethost_{key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)
+
+
+async def sethost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow user to choose their preferred streaming provider."""
+    user = update.effective_user
+    uid = user.id if user else update.effective_chat.id
+    current_pref = db.get_user_host_preference(uid)
+
+    text = (
+        "⚙️ <b>Streaming Player Preferences</b>\n\n"
+        f"Aapka current preferred player: <b>{current_pref.upper()}</b>\n\n"
+        "Apna pasandida player chuniye. Bot aapko <b>sirf usi player ke copyable links</b> dega.\n\n"
+        "<i>💡 Agar kisi post mein aapka selected player na hua, to bot automatically "
+        "dusra working link dega taaki video miss na ho.</i>"
+    )
+
+    await update.effective_message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_host_settings_keyboard(current_pref),
+    )
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Minimal, elegant greeting."""
@@ -200,6 +238,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>⚡ Quick Commands:</b>\n"
         "• <code>/today</code> — Today's fresh uploads\n"
         "• <code>/latest</code> — Latest forum releases\n"
+        "• <code>/sethost</code> — Set preferred video player (Vidara/Streamtape/etc.)\n"
         "• <code>/search &lt;name&gt;</code> — Find videos by keyword\n"
         "• <code>/scrape &lt;url&gt;</code> — Extract any topic or category\n"
         "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
@@ -212,8 +251,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⚡ Latest Posts", callback_data="cb_latest"),
         ],
         [
+            InlineKeyboardButton("⚙️ Preferred Player", callback_data="cb_sethost"),
             InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
-            InlineKeyboardButton("🌐 Domains", callback_data="cb_domains"),
         ],
     ]
 
@@ -553,11 +592,11 @@ async def auto_feed_loop(app: Application):
 
 # --- URL Processing & Button Callback Handlers ---
 
-async def process_topic_scrape(bot, chat_id: int | str, url: str):
+async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int = None):
     """Scrape and deliver single topic card."""
     try:
         details = await asyncio.to_thread(get_post_details, url)
-        await send_post_card(bot, chat_id, details)
+        await send_post_card(bot, chat_id, details, user_id=user_id)
     except Exception as e:
         safe_err = html.escape(str(e))
         await bot.send_message(
@@ -585,6 +624,7 @@ async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     """Process URLs pasted directly in chat."""
     msg = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else None
     url = url.strip()
 
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -592,7 +632,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
 
     if is_topic_url(url):
         status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
-        await process_topic_scrape(context.bot, msg.chat_id, url)
+        await process_topic_scrape(context.bot, msg.chat_id, url, user_id=user_id)
         try:
             await status.delete()
         except Exception:
@@ -607,7 +647,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
 
             await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...")
             for t in topics:
-                await process_topic_scrape(context.bot, msg.chat_id, t["url"])
+                await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
                 await asyncio.sleep(POST_SEND_DELAY)
         except Exception as e:
             await status.edit_text(f"❌ Error: {html.escape(str(e))}")
@@ -641,6 +681,23 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await domains_command(update, context)
     elif data == "cb_channel_help":
         await setchannel_command(update, context)
+    elif data == "cb_sethost":
+        await sethost_command(update, context)
+    elif data.startswith("sethost_"):
+        new_pref = data[8:]
+        user_id = query.from_user.id
+        db.set_user_host_preference(user_id, new_pref)
+        display_label = new_pref.upper() if new_pref != "all" else "ALL HOSTS"
+        try:
+            await query.edit_message_text(
+                f"✅ <b>Preferred Player Updated to {display_label}!</b>\n\n"
+                "Ab se aapko har post mein sirf iske copyable links milenge (smart fallback ke saath).\n\n"
+                "Aap neeche se kabhi bhi change kar sakte hain:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_host_settings_keyboard(new_pref),
+            )
+        except Exception:
+            pass
     elif data.startswith("sc_"):
         target_id = data[3:]
         target_url = None
@@ -650,7 +707,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             target_url = target_id
 
         if target_url:
-            await process_topic_scrape(context.bot, query.message.chat_id, target_url)
+            await process_topic_scrape(context.bot, query.message.chat_id, target_url, user_id=query.from_user.id)
         else:
             await query.message.reply_text("⚠️ Link expire ho gaya hai ya invalid hai. Kripya dobara search karein.")
     elif data.startswith("unlink_"):
@@ -685,6 +742,7 @@ async def post_init(application: Application):
         BotCommand("start", "Start the bot & main menu"),
         BotCommand("today", "Today's fresh uploads"),
         BotCommand("latest", "Latest releases from forum"),
+        BotCommand("sethost", "Choose preferred video player"),
         BotCommand("search", "Search videos by keyword"),
         BotCommand("scrape", "Extract links from URL"),
         BotCommand("domains", "Supported streaming hosts"),
@@ -715,6 +773,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("latest", latest_command))
+    app.add_handler(CommandHandler("sethost", sethost_command))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("scrape", scrape_command))
     app.add_handler(CommandHandler("domains", domains_command))

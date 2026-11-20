@@ -73,6 +73,17 @@ def init_db():
             """
         )
 
+        # 5. User Host Preferences (e.g. vidara, streamtape, all)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                preferred_host TEXT DEFAULT 'vidara',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         conn.commit()
         logger.info("✅ Database initialized successfully at %s", DB_PATH)
 
@@ -229,3 +240,43 @@ def get_url_from_short_id(short_id: int) -> str | None:
     except Exception as e:
         logger.error(f"Error resolving short_id {short_id}: {e}")
         return None
+
+
+# --- User Preferences (Preferred Host) ---
+
+def get_user_host_preference(user_id: int) -> str:
+    """
+    Get user's preferred streaming host (default: 'vidara').
+    Possible values: 'vidara', 'streamtape', 'streamfiles', 'doodstream', 'streamwish', 'lplaygo', 'all'
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT preferred_host FROM user_preferences WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            return row["preferred_host"] if row and row["preferred_host"] else "vidara"
+    except Exception as e:
+        logger.error(f"Error fetching user preference for {user_id}: {e}")
+        return "vidara"
+
+
+def set_user_host_preference(user_id: int, host: str) -> bool:
+    """Save user's preferred streaming host."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_preferences (user_id, preferred_host, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    preferred_host = excluded.preferred_host,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, host.lower().strip()),
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error saving host preference for {user_id}: {e}")
+        return False

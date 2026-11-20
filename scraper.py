@@ -96,6 +96,72 @@ def get_host_display_name(url: str) -> str:
         return "🎬 Watch Video"
 
 
+def get_host_key(url: str) -> str:
+    """Extract standard key for a streaming provider (e.g. vidara, streamtape)."""
+    try:
+        domain = urlparse(url).netloc.lower()
+        if "vidara" in domain:
+            return "vidara"
+        elif "streamtape" in domain:
+            return "streamtape"
+        elif "streamfiles" in domain:
+            return "streamfiles"
+        elif "dood" in domain:
+            return "doodstream"
+        elif "streamwish" in domain:
+            return "streamwish"
+        elif "lplaygo" in domain:
+            return "lplaygo"
+        elif "filelions" in domain:
+            return "filelions"
+        elif "dropload" in domain:
+            return "dropload"
+        elif "mixdrop" in domain:
+            return "mixdrop"
+        elif "streamruby" in domain:
+            return "streamruby"
+        else:
+            return domain.replace("www.", "").split(".")[0]
+    except Exception:
+        return "other"
+
+
+def filter_links_by_preference(links: list[str], preferred_host: str = "vidara") -> tuple[str, list[str], bool]:
+    """
+    Filter streaming links according to user preference with smart fallback.
+    Returns: (display_name, filtered_links, is_fallback)
+    - If preferred_host == 'all': returns all links.
+    - If preferred_host exists in links: returns only those links.
+    - If preferred_host NOT in links: falls back to the first available provider so user never misses the video.
+    """
+    if not links:
+        return "None", [], False
+
+    pref = preferred_host.lower().strip() if preferred_host else "vidara"
+    if pref == "all":
+        return "All Providers", links, False
+
+    # Group links by host key
+    grouped: dict[str, list[str]] = {}
+    host_display_map: dict[str, str] = {}
+
+    for link in links:
+        h_key = get_host_key(link)
+        if h_key not in grouped:
+            grouped[h_key] = []
+            host_display_map[h_key] = get_host_display_name(link)
+        if link not in grouped[h_key]:
+            grouped[h_key].append(link)
+
+    # 1. Match preferred host
+    if pref in grouped:
+        return host_display_map[pref], grouped[pref], False
+
+    # 2. Smart Fallback: take the first available provider
+    first_key = next(iter(grouped))
+    return host_display_map[first_key], grouped[first_key], True
+
+
 def extract_tags_and_quality(title: str) -> tuple[str, list[str]]:
     """Extract quality and tags from topic title (e.g. 1080p, 4K, HD, Exclusive)."""
     tags = []
