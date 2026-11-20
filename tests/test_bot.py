@@ -105,6 +105,20 @@ class TestBot(unittest.TestCase):
         resolved = db.get_url_from_short_id(short_id)
         self.assertEqual(resolved, url)
 
+    def test_cancellation_state(self):
+        """Test chat scraping cancellation state machine."""
+        from bot import start_scrape_for_chat, is_scrape_cancelled, cancel_scrape_for_chat, end_scrape_for_chat
+        test_chat = 99887766
+
+        start_scrape_for_chat(test_chat)
+        self.assertFalse(is_scrape_cancelled(test_chat))
+
+        cancel_scrape_for_chat(test_chat)
+        self.assertTrue(is_scrape_cancelled(test_chat))
+
+        end_scrape_for_chat(test_chat)
+        self.assertFalse(is_scrape_cancelled(test_chat))
+
 
 if __name__ == "__main__":
     unittest.main()

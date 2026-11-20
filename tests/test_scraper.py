@@ -200,6 +200,41 @@ class TestScraper(unittest.TestCase):
         im_large.save(buf_large, format="JPEG")
         self.assertTrue(is_valid_thumbnail_image(buf_large.getvalue()))
 
+    def test_clean_highres_image_url(self):
+        """Test converting thumbnail URLs to original full-resolution posters."""
+        from scraper import _clean_highres_image_url
+
+        # Invision thumb removal
+        ips_url = "https://dropmms.com/uploads/monthly_2026_11/poster.thumb.jpg.12345.jpg"
+        self.assertEqual(_clean_highres_image_url(ips_url), "https://dropmms.com/uploads/monthly_2026_11/poster.jpg.12345.jpg")
+
+        # PixHost thumbs to full images
+        pix_url = "https://t15.pixhost.to/thumbs/888/poster.jpg"
+        self.assertEqual(_clean_highres_image_url(pix_url), "https://img15.pixhost.to/images/888/poster.jpg")
+
+        # ImgBox thumbs to original
+        imgbox_url = "https://thumbs2.imgbox.com/ab/cd/poster_t.jpg"
+        self.assertEqual(_clean_highres_image_url(imgbox_url), "https://images2.imgbox.com/ab/cd/poster_o.jpg")
+
+    def test_optimize_image_for_telegram(self):
+        """Test that excessively tall images are padded to prevent squarish cropping on Telegram."""
+        from PIL import Image
+        import io
+        from scraper import optimize_image_for_telegram
+
+        # Very tall image (400x1200, ratio 3.0)
+        im_tall = Image.new("RGB", (400, 1200), color="green")
+        buf = io.BytesIO()
+        im_tall.save(buf, format="JPEG")
+
+        opt_data = optimize_image_for_telegram(buf.getvalue())
+        with Image.open(io.BytesIO(opt_data)) as im_opt:
+            w, h = im_opt.size
+            self.assertEqual(h, 1200)
+            self.assertGreater(w, 400)
+            # Aspect ratio should now be <= 1.7 (safe for Telegram without cropping)
+            self.assertLessEqual(h / w, 1.7)
+
     def test_is_valid_image_bytes(self):
         """Test strict validation of image magic bytes vs HTML error pages."""
         from scraper import is_valid_image_bytes
@@ -264,6 +299,10 @@ class TestScraper(unittest.TestCase):
         html = f"""
         <html>
             <body>
+                <li class="ipsDataItem ipsDataItem_pinned">
+                    <a href="/topic/000-pinned-announcement/">Forum Rules [Pinned]</a>
+                    <time datetime="{yesterday_iso}">1 year ago</time>
+                </li>
                 <li class="ipsDataItem">
                     <a href="/topic/101-today-post-1/">Today Video 1</a>
                     <time datetime="{today_iso}">2 hours ago</time>
@@ -291,9 +330,9 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(today_topics[0]["title"], "Today Video 1")
         self.assertEqual(today_topics[1]["title"], "Today Video 2")
 
-        # Mode B: only_today=False (Normal Page Scan) -> should return all 4 posts up to limit
+        # Mode B: only_today=False (Normal Page Scan) -> should return all 5 posts up to limit
         all_topics = get_forum_topics("https://dropmms.com/forum/2-test/", limit=25, only_today=False)
-        self.assertEqual(len(all_topics), 4)
+        self.assertEqual(len(all_topics), 5)
 
 
 if __name__ == "__main__":

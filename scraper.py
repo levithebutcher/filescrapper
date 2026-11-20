@@ -217,11 +217,10 @@ def _clean_topic_url(url: str) -> str:
 
 def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool, bool]:
     """
-    Check if a post timestamp or relative text indicates it was posted today.
+    Check if a post timestamp or relative text indicates it was posted today (within last 24-26h).
     Returns: (is_today: bool, is_definitely_older: bool)
-    - is_today: Confirmed to be uploaded today.
+    - is_today: Confirmed to be uploaded today / within ~26h across timezones.
     - is_definitely_older: Confirmed older (yesterday or earlier).
-      Triggers an immediate break in the category loop (Option 1: Live Date Cutoff).
     """
     now_utc = datetime.now(timezone.utc)
     today_utc_date = now_utc.date()
@@ -234,7 +233,22 @@ def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool,
 
     valid_today_dates = {today_utc_str, today_ist_str}
 
-    # 1. Inspect date_str from <time datetime="..."> or title attribute
+    # 1. Inspect relative time text (e.g. "3 hours ago", "Started 20 minutes ago", "Today at 12:45")
+    if time_text:
+        t = str(time_text).lower().strip()
+        # Today indicators
+        if any(w in t for w in ["today", "hour", "hr", "min", "sec", "just now", "moment"]):
+            if not any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
+                return True, False
+        # Older indicators
+        if any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
+            return False, True
+        # Check month abbreviations (e.g. "18 nov", "nov 18")
+        months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        if any(m in t for m in months) and not any(td in t for td in valid_today_dates):
+            return False, True
+
+    # 2. Inspect date_str from <time datetime="..."> or title attribute
     if date_str:
         s = str(date_str).strip()
         # Direct date prefix check (e.g. "2026-11-20T...")
@@ -245,27 +259,17 @@ def _is_posted_today(date_str: str | None, time_text: str | None) -> tuple[bool,
         try:
             cleaned_iso = s.replace("Z", "+00:00")
             dt = datetime.fromisoformat(cleaned_iso)
-            dt_date = dt.astimezone(timezone.utc).date()
-            if dt_date == today_utc_date or dt_date == today_ist_date:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dt_utc = dt.astimezone(timezone.utc)
+            dt_ist = dt.astimezone(timezone(timedelta(hours=5, minutes=30)))
+
+            if dt_utc.date() == today_utc_date or dt_ist.date() == today_ist_date:
                 return True, False
-            elif dt_date < today_utc_date and dt_date < today_ist_date:
+            elif dt_utc.date() < today_utc_date and dt_ist.date() < today_ist_date:
                 return False, True
         except Exception:
             pass
-
-    # 2. Inspect relative time text (e.g. "3 hours ago", "Today at 12:45", "Yesterday at 18:20")
-    if time_text:
-        t = str(time_text).lower().strip()
-        # Check today patterns
-        if any(w in t for w in ["today", "hour", "hr", "min", "sec", "just now", "moment"]):
-            return True, False
-        # Check older patterns
-        if any(w in t for w in ["yesterday", "day ago", "days ago", "week", "month", "year"]):
-            return False, True
-        # Check month abbreviations (e.g. "18 nov", "nov 18")
-        months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-        if any(m in t for m in months) and not any(td in t for td in valid_today_dates):
-            return False, True
 
     return False, False
 
@@ -283,9 +287,8 @@ def get_forum_topics(
       - 'views': Sort by popularity/views
       - 'updated': Sort by last activity
     only_today:
-      - If True: Option 1 Live Date Cutoff. Scans topics in descending chronological order
-        and immediately stops scanning as soon as a post from yesterday or earlier is encountered.
-        Returns only today's fresh posts without needing any database storage.
+      - If True: Option 1 Live Date Cutoff. Filters for topics posted today / within 24h,
+        skipping pinned announcements and older topics, without needing database storage.
       - If False: Scrapes up to `limit` posts across the full page (default: 25).
     """
     separator = "&" if "?" in forum_url else "?"
@@ -315,6 +318,16 @@ def get_forum_topics(
         if clean_url in seen:
             continue
 
+        # Skip pinned / sticky / announcement topics when filtering for today's uploads
+        row_classes = " ".join(row.get("class", [])).lower()
+        is_pinned = (
+            "pinned" in row_classes
+            or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
+            or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
+        )
+        if is_pinned and only_today:
+            continue
+
         # Extract publication timestamp from <time datetime="..."> and relative text
         date_str = None
         time_text = None
@@ -326,12 +339,8 @@ def get_forum_topics(
         # Apply Option 1 Live Date Cutoff when requested via /today
         if only_today:
             is_today, is_older = _is_posted_today(date_str, time_text)
-            if is_older:
-                # Chronological descending order means all subsequent topics are also older.
-                logger.info(f"Live date cutoff: Topic '{clean_url}' is older ({date_str or time_text}). Stopping scan.")
-                break
             if not is_today:
-                # If cannot verify as today, skip this topic
+                # Skip any topic that is not confirmed today
                 continue
 
         seen.add(clean_url)
@@ -480,11 +489,42 @@ def _is_valid_thumbnail_url(url: str) -> bool:
     return True
 
 
+def _clean_highres_image_url(url: str) -> str:
+    """
+    Convert thumbnail / scaled forum URLs to their full-size original image URLs.
+    Prevents downloading cropped squarish thumbnails generated by forums and image hosts.
+    """
+    if not url or not isinstance(url, str):
+        return url
+
+    cleaned = url.strip()
+
+    # 1. Invision Community .thumb. removal (e.g. poster.thumb.jpg.12345.jpg -> poster.jpg)
+    cleaned = re.sub(r'\.thumb\.(jpg|jpeg|png|webp)(\.[a-f0-9]+)?$', r'.\1', cleaned, flags=re.I)
+    cleaned = re.sub(r'\.thumb\.', '.', cleaned, flags=re.I)
+
+    # 2. PixHost: replace thumbnail server (tXX) and path (/thumbs/) with full image (imgXX and /images/)
+    if "pixhost.to/thumbs/" in cleaned:
+        cleaned = cleaned.replace("/thumbs/", "/images/")
+        cleaned = re.sub(r'https?://t(\d+)\.pixhost\.to', r'https://img\1.pixhost.to', cleaned)
+
+    # 3. ImgBox: replace thumbs with images, _t with _o (original full-size)
+    if "imgbox.com" in cleaned and "thumbs" in cleaned:
+        cleaned = cleaned.replace("thumbs", "images").replace("_t.", "_o.")
+
+    # 4. PostImg: replace thumbnail paths if present
+    if "postimg.cc" in cleaned and "/t/" in cleaned:
+        cleaned = cleaned.replace("/t/", "/")
+
+    return cleaned
+
+
 def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[str]:
     """
     Extract all valid image URLs from a forum topic.
     Strictly focuses on the first post's commentContent (the actual post body created by author)
     and completely excludes author avatars, user badges, signatures, reactions, and forum chrome.
+    Prioritizes full-resolution uncropped posters over forum-generated thumbnails.
     """
     candidates = []
     seen = set()
@@ -492,7 +532,8 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
     def add_candidate(url: str):
         if not url or not isinstance(url, str):
             return
-        full = urljoin(post_url, url.strip())
+        cleaned = _clean_highres_image_url(url)
+        full = urljoin(post_url, cleaned)
         if _is_valid_thumbnail_url(full) and full not in seen:
             seen.add(full)
             candidates.append(full)
@@ -509,8 +550,13 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
     if not post_body:
         post_body = main_post
 
-    # 2A. PRIORITY 1: Invision Community embedded images (class ipsImage)
+    # 2A. PRIORITY 1: Invision Community embedded images (class ipsImage) and attachment links
     for img in post_body.find_all("img", class_=re.compile(r"ipsImage", re.I)):
+        # Parent <a> is almost always the FULL UNCROPPED original poster!
+        parent = img.parent
+        if parent and parent.name == "a" and parent.get("href"):
+            add_candidate(parent["href"].strip())
+
         src = (
             img.get("data-highres")
             or img.get("data-src")
@@ -538,6 +584,9 @@ def _extract_all_image_candidates(soup: BeautifulSoup, post_url: str) -> list[st
 
     # 2D. PRIORITY 4: General <img> tags within post body
     for img in post_body.find_all("img"):
+        parent = img.parent
+        if parent and parent.name == "a" and parent.get("href"):
+            add_candidate(parent["href"].strip())
         src = (
             img.get("data-highres")
             or img.get("data-src")
@@ -614,6 +663,34 @@ def is_valid_thumbnail_image(data: bytes, min_width: int = 180, min_height: int 
         return True  # If Pillow fails for rare format, fallback to magic bytes check
 
 
+def optimize_image_for_telegram(data: bytes) -> bytes:
+    """
+    Ensure the image displays fully in Telegram chat bubbles without getting cropped or squarified.
+    If an image is excessively tall (height / width > 1.7), add slight dark side-padding
+    to achieve a standard ~2:3 portrait ratio so Telegram displays the full poster without cropping.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+
+            # If aspect ratio is excessively tall (e.g. > 1.7), Telegram mobile/desktop crops top & bottom.
+            # Pad sides with a sleek dark matte background to make it ~2:3 (width = height * 2 // 3).
+            if h / w > 1.7:
+                target_w = int(h * 0.67)
+                pad_left = (target_w - w) // 2
+                new_im = Image.new("RGB", (target_w, h), (18, 18, 18))
+                new_im.paste(im, (pad_left, 0))
+                out_buf = io.BytesIO()
+                new_im.save(out_buf, format="JPEG", quality=92)
+                return out_buf.getvalue()
+
+            return data
+    except Exception as e:
+        logger.debug(f"Image optimization note: {e}")
+        return data
+
+
 def _resolve_image_viewer_url(viewer_url: str, html_text: str) -> str | None:
     """
     Extract direct image URL from an image host viewer webpage (postimg, pixhost, etc.).
@@ -651,6 +728,7 @@ def download_image_bytes(image_url: str) -> bytes | None:
     Verifies image magic bytes AND image dimensions with Pillow to ensure
     tiny avatars / icons are filtered out and Telegram never throws Image_process_failed.
     If image_url is an HTML viewer page, automatically resolves and downloads the real image.
+    Optimizes aspect ratio to prevent Telegram squarish cropping.
     """
     if not image_url or not isinstance(image_url, str):
         return None
@@ -662,7 +740,7 @@ def download_image_bytes(image_url: str) -> bytes | None:
         # 1. Direct image check via magic bytes and Pillow dimension verification
         if is_valid_image_bytes(resp.content):
             if is_valid_thumbnail_image(resp.content):
-                return resp.content
+                return optimize_image_for_telegram(resp.content)
             else:
                 logger.info(f"Skipping candidate {image_url}: failed dimension verification (likely avatar/icon).")
                 return None
@@ -675,7 +753,7 @@ def download_image_bytes(image_url: str) -> bytes | None:
                 direct_resp = _session.get(direct_img_url, timeout=12)
                 if direct_resp.status_code == 200 and is_valid_image_bytes(direct_resp.content):
                     if is_valid_thumbnail_image(direct_resp.content):
-                        return direct_resp.content
+                        return optimize_image_for_telegram(direct_resp.content)
 
     except Exception as e:
         logger.warning(f"Could not download thumbnail bytes from {image_url}: {e}")

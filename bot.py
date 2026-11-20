@@ -66,6 +66,33 @@ logger = logging.getLogger(__name__)
 # Initialize database
 db.init_db()
 
+# Active scrape tracking & cancellation flags
+cancelled_chats: set[int] = set()
+active_scrapes: dict[int, bool] = {}
+
+
+def cancel_scrape_for_chat(chat_id: int):
+    """Mark active scraping as cancelled for the given chat."""
+    cancelled_chats.add(chat_id)
+    active_scrapes[chat_id] = False
+
+
+def is_scrape_cancelled(chat_id: int) -> bool:
+    """Check if cancellation has been requested for this chat."""
+    return chat_id in cancelled_chats
+
+
+def start_scrape_for_chat(chat_id: int):
+    """Register a scrape run for this chat."""
+    cancelled_chats.discard(chat_id)
+    active_scrapes[chat_id] = True
+
+
+def end_scrape_for_chat(chat_id: int):
+    """Clean up scrape state when finished or aborted."""
+    cancelled_chats.discard(chat_id)
+    active_scrapes[chat_id] = False
+
 
 # --- UI & Formatters ---
 
@@ -322,12 +349,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Immediately stop any active topic or category scraping in this chat."""
+    chat_id = update.effective_chat.id
+    if active_scrapes.get(chat_id, False):
+        cancel_scrape_for_chat(chat_id)
+        await update.effective_message.reply_text(
+            "🛑 <b>Stopping active scrape...</b>\n\n"
+            "Category extraction has been cancelled. Remaining posts will not be sent.",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.effective_message.reply_text(
+            "ℹ️ <b>No active scrape running right now.</b>",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Fetch and deliver today's fresh uploads (Option 1: Live Date Cutoff).
-    Scans topics in descending chronological order and stops scanning as soon as a post
-    from yesterday or earlier is encountered.
-    Stateless: operates purely on live HTML metadata without any database storage.
+    Scans topics and strictly returns posts published within today / last 24 hours.
     Usage:
       /today
       /today <category_url>
@@ -339,7 +381,6 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category_url = context.args[0].strip() if (context.args and len(context.args) > 0) else DEFAULT_CATEGORY_URL
 
     try:
-        # only_today=True: Option 1 Live Date Cutoff activated!
         topics = await asyncio.to_thread(get_forum_topics, category_url, "start_date", 25, True)
     except Exception as e:
         await status_msg.edit_text(f"❌ Error fetching category: {html.escape(str(e))}")
@@ -348,20 +389,38 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not topics:
         await status_msg.edit_text(
             "📅 <b>No new posts found today yet!</b>\n\n"
-            "<i>No topics uploaded today in this category. Older posts were skipped because /today strictly delivers today's fresh drops.</i>\n\n"
-            "💡 <i>To scrape all recent posts regardless of date, paste the category link directly without /today.</i>",
+            "<i>No topics uploaded today in this category.</i>\n\n"
+            "💡 <i>Tip: Pass a specific category link to check today's drops:</i>\n"
+            "<code>/today https://dropmms.com/forum/2-general/</code>\n\n"
+            "<i>Or paste any category link directly to fetch all recent posts.</i>",
             parse_mode=ParseMode.HTML,
         )
         return
 
+    stop_markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+    ]])
     await status_msg.edit_text(
         f"📅 <b>Found {len(topics)} fresh upload(s) from today!</b>\n<i>Extracting links...</i>",
         parse_mode=ParseMode.HTML,
+        reply_markup=stop_markup,
     )
 
-    for t in topics:
-        await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
-        await asyncio.sleep(POST_SEND_DELAY)
+    start_scrape_for_chat(msg.chat_id)
+    try:
+        for idx, t in enumerate(topics, start=1):
+            if is_scrape_cancelled(msg.chat_id):
+                logger.info(f"Today scrape cancelled by user in chat {msg.chat_id}")
+                await context.bot.send_message(
+                    chat_id=msg.chat_id,
+                    text=f"🛑 <b>Today scrape stopped!</b> Sent {idx-1}/{len(topics)} posts.",
+                    parse_mode=ParseMode.HTML,
+                )
+                break
+            await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
+            await asyncio.sleep(POST_SEND_DELAY)
+    finally:
+        end_scrape_for_chat(msg.chat_id)
 
     try:
         await status_msg.delete()
@@ -686,10 +745,27 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url
                 await status.edit_text("❌ No topics found in this category.")
                 return
 
-            await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...")
-            for t in topics:
-                await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
-                await asyncio.sleep(POST_SEND_DELAY)
+            stop_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+            ]])
+            await status.edit_text(f"✅ Found {len(topics)} topics! Extracting...", reply_markup=stop_markup)
+
+            start_scrape_for_chat(msg.chat_id)
+            try:
+                for idx, t in enumerate(topics, start=1):
+                    if is_scrape_cancelled(msg.chat_id):
+                        logger.info(f"Category scrape cancelled by user in chat {msg.chat_id}")
+                        await context.bot.send_message(
+                            chat_id=msg.chat_id,
+                            text=f"🛑 <b>Scraping stopped!</b> Processed {idx-1}/{len(topics)} topics.",
+                            parse_mode=ParseMode.HTML,
+                        )
+                        break
+                    await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
+                    await asyncio.sleep(POST_SEND_DELAY)
+            finally:
+                end_scrape_for_chat(msg.chat_id)
+
             try:
                 await status.delete()
             except Exception:
@@ -718,7 +794,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     data = query.data
 
-    if data == "cb_today":
+    if data == "btn_stop_scrape":
+        chat_id = query.message.chat_id
+        cancel_scrape_for_chat(chat_id)
+        try:
+            await query.edit_message_text(
+                "🛑 <b>Scrape stopped by user.</b>\nRemaining topics will not be processed.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+    elif data == "cb_today":
         await today_command(update, context)
     elif data == "cb_latest":
         await latest_command(update, context)
@@ -806,6 +892,7 @@ async def post_init(application: Application):
         BotCommand("domains", "Supported streaming hosts"),
         BotCommand("setchannel", "Link channel for auto-feed"),
         BotCommand("channels", "View connected channels"),
+        BotCommand("stop", "Stop active category extraction"),
         BotCommand("help", "Help & instructions"),
     ]
     try:
@@ -842,6 +929,8 @@ def main():
     app.add_handler(CommandHandler("domains", domains_command))
     app.add_handler(CommandHandler("setchannel", setchannel_command))
     app.add_handler(CommandHandler("channels", channels_command))
+    app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("cancel", stop_command))
 
     # Automatic Channel Link Handler (when bot is added as Admin)
     app.add_handler(ChatMemberHandler(chat_member_updated, ChatMemberHandler.MY_CHAT_MEMBER))
