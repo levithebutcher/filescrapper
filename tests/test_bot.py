@@ -184,6 +184,23 @@ class TestBot(unittest.TestCase):
         self.assertEqual(apply_slice(items, 3, 6, False), [3, 4, 5, 6])
         self.assertEqual(apply_slice(items, None, 5, True), [6, 7, 8, 9, 10])
 
+    def test_forum_page_regex_in_bot(self):
+        """Test page extraction regex in bot.py for forum URLs."""
+        import re
+        url1 = "https://dropmms.com/forum/4-desi/page/2/?sortby=start_date&sortdirection=desc"
+        m1 = re.search(r"/page/(\d+)", url1, re.I) or re.search(r"[?&]page=(\d+)", url1, re.I)
+        self.assertIsNotNone(m1)
+        self.assertEqual(int(m1.group(1)), 2)
+
+        url2 = "https://dropmms.com/forum/4-desi/?page=3"
+        m2 = re.search(r"/page/(\d+)", url2, re.I) or re.search(r"[?&]page=(\d+)", url2, re.I)
+        self.assertIsNotNone(m2)
+        self.assertEqual(int(m2.group(1)), 3)
+
+        url_no_page = "https://dropmms.com/forum/4-desi/"
+        m_none = re.search(r"/page/(\d+)", url_no_page, re.I) or re.search(r"[?&]page=(\d+)", url_no_page, re.I)
+        self.assertIsNone(m_none)
+
 
 if __name__ == "__main__":
     unittest.main()

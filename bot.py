@@ -1,6 +1,7 @@
 # bot.py
 
 import sys
+import re
 import html
 import io
 import time
