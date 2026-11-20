@@ -248,8 +248,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for idx, t in enumerate(display_topics, start=1):
         clean_t = html.escape(t["title"])
         text += f"{idx}. <b>{clean_t}</b>\n"
-        # Create an inline button to scrape/view this post
-        btn = InlineKeyboardButton(f"🎬 View #{idx}", callback_data=f"sc_{t['url']}")
+        # Store in URL cache to strictly respect Telegram's 64-byte callback_data limit
+        short_id = db.get_or_create_short_id(t["url"])
+        btn = InlineKeyboardButton(f"🎬 View #{idx}", callback_data=f"sc_{short_id}")
         buttons.append([btn])
 
     text += "\n<i>Tap any button below to extract streaming links directly:</i>"
@@ -283,7 +284,8 @@ async def latest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for idx, t in enumerate(topics, start=1):
         clean_t = html.escape(t["title"])
         text += f"{idx}. <b>{clean_t}</b>\n"
-        btn = InlineKeyboardButton(f"🎬 Get Links #{idx}", callback_data=f"sc_{t['url']}")
+        short_id = db.get_or_create_short_id(t["url"])
+        btn = InlineKeyboardButton(f"🎬 Get Links #{idx}", callback_data=f"sc_{short_id}")
         buttons.append([btn])
 
     await status_msg.edit_text(
@@ -321,7 +323,8 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     for idx, r in enumerate(results, start=1):
         text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
-        btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{r['url']}")
+        short_id = db.get_or_create_short_id(r["url"])
+        btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{short_id}")
         buttons.append([btn])
 
     await status_msg.edit_text(
@@ -611,12 +614,39 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "cb_channel_help":
         await setchannel_command(update, context)
     elif data.startswith("sc_"):
-        target_url = data[3:]
-        await process_topic_scrape(context.bot, query.message.chat_id, target_url)
+        target_id = data[3:]
+        target_url = None
+        if target_id.isdigit():
+            target_url = db.get_url_from_short_id(int(target_id))
+        else:
+            target_url = target_id
+
+        if target_url:
+            await process_topic_scrape(context.bot, query.message.chat_id, target_url)
+        else:
+            await query.message.reply_text("⚠️ Link expire ho gaya hai ya invalid hai. Kripya dobara search karein.")
     elif data.startswith("unlink_"):
-        ch_id = int(data.split("_")[1])
-        db.remove_channel(ch_id)
-        await query.edit_message_text(f"✅ Channel {ch_id} has been unlinked.")
+        try:
+            ch_id = int(data[7:])
+            db.remove_channel(ch_id)
+            await query.edit_message_text(f"✅ Channel {ch_id} has been unlinked.")
+        except Exception as e:
+            logger.error(f"Error unlinking channel: {e}")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler for telegram bot exceptions."""
+    logger.error("Exception while handling update:", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            # If Telegram complains about message not modified, ignore
+            if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
+                return
+            await update.effective_message.reply_text(
+                "⚠️ Bot par ek temporary error aaya. Kripya dobara prayas karein."
+            )
+        except Exception:
+            pass
 
 
 # --- Post Init & Main Runner ---
@@ -671,6 +701,9 @@ def main():
 
     # Plain text links
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Global Error Handler
+    app.add_error_handler(error_handler)
 
     logger.info("✅ Bot initialized and listening for updates...")
     print("🚀 Bot is LIVE! Press Ctrl+C to stop.")

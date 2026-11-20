@@ -73,6 +73,17 @@ class TestBot(unittest.TestCase):
         self.assertTrue(removed)
         self.assertIsNone(db.get_channel(test_channel_id))
 
+    def test_url_cache_short_id(self):
+        """Test url_cache mapping for callback_data limit."""
+        url = "https://dropmms.com/topic/12345-extremely-long-title-that-exceeds-sixty-four-bytes-limit-in-telegram/"
+        short_id = db.get_or_create_short_id(url)
+        self.assertIsInstance(short_id, int)
+        self.assertGreater(short_id, 0)
+
+        # Retrieve back
+        resolved = db.get_url_from_short_id(short_id)
+        self.assertEqual(resolved, url)
+
 
 if __name__ == "__main__":
     unittest.main()

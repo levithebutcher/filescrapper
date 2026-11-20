@@ -13,6 +13,7 @@ from scraper import (
     is_topic_url,
     _extract_streaming_links_from_html,
     _extract_thumbnail,
+    _is_valid_thumbnail_url,
     get_post_details,
     get_host_display_name,
     extract_tags_and_quality,
@@ -95,6 +96,18 @@ class TestScraper(unittest.TestCase):
         self.assertIn("https://streamfiles.net/embed/sf999", links)
         self.assertIn("https://doodstream.com/d/dood456", links)
         self.assertNotIn("https://unrelated-domain.com/page", links)
+
+    def test_is_valid_thumbnail_url(self):
+        """Test rejection of blank.gif, site logos, and acceptance of real images."""
+        self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/uploads/blank.gif"))
+        self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/images/spacer.png"))
+        self.assertFalse(_is_valid_thumbnail_url("https://dropmms.com/theme/site_logo.png"))
+        self.assertFalse(_is_valid_thumbnail_url("data:image/svg+xml;base64,..."))
+        self.assertFalse(_is_valid_thumbnail_url(""))
+
+        # Real movie poster
+        self.assertTrue(_is_valid_thumbnail_url("https://dropmms.com/uploads/monthly_2026/poster_1080p.jpg"))
+        self.assertTrue(_is_valid_thumbnail_url("https://img.host.com/images/movie_shot.webp"))
 
     @patch("scraper._fetch_soup")
     def test_get_post_details(self, mock_fetch_soup):

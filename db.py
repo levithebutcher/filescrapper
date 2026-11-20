@@ -62,6 +62,17 @@ def init_db():
             """
         )
 
+        # 4. Short URL Reference Cache (to keep Telegram callback_data well under 64-byte limit)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS url_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         conn.commit()
         logger.info("✅ Database initialized successfully at %s", DB_PATH)
 
@@ -179,3 +190,42 @@ def set_setting(key: str, value: str):
             (key, str(value)),
         )
         conn.commit()
+
+
+# --- URL Short Reference Cache ---
+
+def get_or_create_short_id(url: str) -> int:
+    """
+    Get or create integer ID for a URL so it fits easily within Telegram's 64-byte callback_data.
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM url_cache WHERE url = ?", (url,))
+            row = cursor.fetchone()
+            if row:
+                return row["id"]
+            cursor.execute("INSERT OR IGNORE INTO url_cache (url) VALUES (?)", (url,))
+            conn.commit()
+            if cursor.lastrowid:
+                return cursor.lastrowid
+            # In case of race condition
+            cursor.execute("SELECT id FROM url_cache WHERE url = ?", (url,))
+            row = cursor.fetchone()
+            return row["id"] if row else 0
+    except Exception as e:
+        logger.error(f"Error getting short_id for url {url}: {e}")
+        return 0
+
+
+def get_url_from_short_id(short_id: int) -> str | None:
+    """Retrieve full URL from short reference ID."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT url FROM url_cache WHERE id = ?", (short_id,))
+            row = cursor.fetchone()
+            return row["url"] if row else None
+    except Exception as e:
+        logger.error(f"Error resolving short_id {short_id}: {e}")
+        return None

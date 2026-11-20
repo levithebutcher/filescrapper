@@ -287,45 +287,95 @@ def _extract_streaming_links_from_html(soup: BeautifulSoup, post_url: str) -> li
     return links
 
 
+def _is_valid_thumbnail_url(url: str) -> bool:
+    """Validate if an image URL is an actual video thumbnail and not a white/blank spacer or site logo."""
+    if not url or not isinstance(url, str):
+        return False
+    lower = url.lower().strip()
+    if not lower.startswith("http://") and not lower.startswith("https://"):
+        return False
+
+    # Discard blank GIFs, spacer images, transparent SVGs, default site logos
+    blacklisted = [
+        "blank.gif",
+        "blank.png",
+        "spacer.gif",
+        "spacer.png",
+        "transparent",
+        "1x1",
+        "pixel.gif",
+        "default_og",
+        "default_avatar",
+        "avatar",
+        "emoticons",
+        "smile",
+        "site_logo",
+        "logo.png",
+        "logo.jpg",
+        "logo.svg",
+        "loading.gif",
+        "placeholder",
+        "svg+xml",
+        "attachment-icon",
+        "theme_logo",
+    ]
+    if any(b in lower for b in blacklisted):
+        return False
+    return True
+
+
 def _extract_thumbnail(soup: BeautifulSoup, post_url: str) -> str | None:
-    """Extract best thumbnail image from OpenGraph, Twitter, or post content."""
-    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"})
-    if og_img and og_img.get("content"):
-        content = og_img["content"].strip()
-        if content.startswith("http"):
-            return content
-
-    tw_img = soup.find("meta", attrs={"name": "twitter:image"})
-    if tw_img and tw_img.get("content"):
-        content = tw_img["content"].strip()
-        if content.startswith("http"):
-            return content
-
+    """
+    Extract best thumbnail image from post content or metadata.
+    Prioritizes real content poster images over site-wide logos or blank spacer GIFs.
+    """
+    # 1. Search post content body FIRST (where real video poster is located)
     content_container = (
         soup.find("div", class_="cPost_contentWrap")
         or soup.find("div", attrs={"data-role": "commentContent"})
+        or soup.find("div", class_="ipsType_richText")
         or soup.find("article")
         or soup
     )
 
+    # 1A. Direct image attachment links (e.g. IPS ipsAttachLink_image)
+    for a in content_container.find_all("a", href=True):
+        href = a["href"].strip()
+        full_href = urljoin(post_url, href)
+        lower_href = full_href.lower().split("?")[0]
+        if any(lower_href.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+            if _is_valid_thumbnail_url(full_href):
+                return full_href
+
+    # 1B. Image tags: check lazy-load attributes (data-src) BEFORE src (which is often blank.gif)
     for img in content_container.find_all("img"):
         src = (
-            img.get("src")
-            or img.get("data-src")
+            img.get("data-src")
             or img.get("data-original")
-            or img.get("data-url")
             or img.get("data-lazy-src")
+            or img.get("data-url")
+            or img.get("data-image")
+            or img.get("src")
         )
         if not src:
             continue
-        src = src.strip()
-        lower_src = src.lower()
-        if any(ign in lower_src for ign in ["avatar", "emoticons", "badge", "icon", "logo", "smile"]):
-            continue
-
-        full_img_url = urljoin(post_url, src)
-        if full_img_url.startswith("http"):
+        full_img_url = urljoin(post_url, src.strip())
+        if _is_valid_thumbnail_url(full_img_url):
             return full_img_url
+
+    # 2. Fallback to OpenGraph image (only if it is a real post image, not default logo)
+    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"})
+    if og_img and og_img.get("content"):
+        content = urljoin(post_url, og_img["content"].strip())
+        if _is_valid_thumbnail_url(content):
+            return content
+
+    # 3. Fallback to Twitter image
+    tw_img = soup.find("meta", attrs={"name": "twitter:image"})
+    if tw_img and tw_img.get("content"):
+        content = urljoin(post_url, tw_img["content"].strip())
+        if _is_valid_thumbnail_url(content):
+            return content
 
     return None
 
