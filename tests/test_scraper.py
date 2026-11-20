@@ -418,9 +418,57 @@ class TestScraper(unittest.TestCase):
 
         called_url = mock_fetch_soup.call_args[0][0]
         self.assertIn("/page/2/", called_url)
-        self.assertIn("sortby=start_date&sortdirection=desc", called_url)
+        self.assertIn("sortby=forums_topics.start_date&sortdirection=desc", called_url)
         self.assertEqual(len(topics), 2)
         self.assertEqual(topics[0]["title"], "Page 2 Video 1")
+
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_page_fallback_without_row_classes(self, mock_fetch_soup):
+        """Test that get_forum_topics uses universal fallback on Page 2 when row classes are absent."""
+        from scraper import get_forum_topics
+
+        p2_links_html = """
+        <html><body>
+            <div>
+                <a href="/topic/301-fallback-video/">Fallback Video 1</a>
+                <a href="/topic/302-fallback-video/">Fallback Video 2</a>
+            </div>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(p2_links_html, "html.parser")
+
+        topics = get_forum_topics(
+            "https://dropmms.com/forum/4-desi/page/2/",
+            limit=25,
+            only_today=False,
+        )
+        self.assertEqual(len(topics), 2)
+        self.assertEqual(topics[0]["title"], "Fallback Video 1")
+        self.assertEqual(topics[1]["title"], "Fallback Video 2")
+
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_clean_page_retry(self, mock_fetch_soup):
+        """Test that get_forum_topics retries without query parameters if query params return 0 topics."""
+        from scraper import get_forum_topics
+
+        empty_html = "<html><body><div>No topics found with bad sort</div></body></html>"
+        success_html = """
+        <html><body>
+            <li class="ipsDataItem"><a href="/topic/401-recovered/">Recovered Video 1</a></li>
+        </body></html>
+        """
+        mock_fetch_soup.side_effect = [
+            BeautifulSoup(empty_html, "html.parser"),
+            BeautifulSoup(success_html, "html.parser"),
+        ]
+
+        topics = get_forum_topics(
+            "https://dropmms.com/forum/4-desi/page/2/?sortby=invalid_col",
+            limit=25,
+            only_today=False,
+        )
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]["title"], "Recovered Video 1")
 
     def test_provider_priority_and_fallback(self):
         """Test that PROVIDER_PRIORITY strictly picks Streamtape -> Vidara -> Streamfiles -> iPlayGo."""

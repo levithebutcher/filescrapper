@@ -489,6 +489,13 @@ def get_forum_topics(
         filtered_parts = [p for p in raw_query.split("&") if not re.match(r"^page=\d+$", p, re.I)]
         query_str = "&".join(filtered_parts)
 
+    # Normalize invalid or shorthand Invision Community sort keys
+    if query_str:
+        if "sortby=start_date" in query_str.lower() and "forums_topics.start_date" not in query_str.lower():
+            query_str = re.sub(r"sortby=start_date", "sortby=forums_topics.start_date", query_str, flags=re.I)
+        if "sortby=date" in query_str.lower() and "forums_topics.start_date" not in query_str.lower():
+            query_str = re.sub(r"sortby=date", "sortby=forums_topics.start_date", query_str, flags=re.I)
+
     if not query_str:
         if sort_by == "start_date":
             query_str = "sortby=forums_topics.start_date&sortdirection=desc"
@@ -605,8 +612,8 @@ def get_forum_topics(
             if len(topics) >= limit:
                 break
 
-        # Fallback for page 1 if no row elements found (only when only_today is False)
-        if not topics and current_page == 1 and not only_today:
+        # Fallback for ANY page if row elements yielded 0 topics (only when only_today is False)
+        if new_on_page == 0 and not only_today:
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 if "/topic/" in href or "index.php?/topic/" in href:
@@ -614,13 +621,36 @@ def get_forum_topics(
                     clean_url = _clean_topic_url(full_url)
                     if clean_url not in seen:
                         seen.add(clean_url)
+                        new_on_page += 1
                         t_title = a.get_text(strip=True) or "Untitled Post"
                         topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
                         if len(topics) >= limit:
                             break
 
-        # If date cutoff reached, or no row elements on this page, or no new topics found: stop pagination
-        if hit_older or not row_elements or new_on_page == 0:
+        # If still 0 topics and query params were present, retry without query params on this page
+        if new_on_page == 0 and query_str and not only_today:
+            clean_page_url = f"{clean_base}page/{current_page}/" if current_page > 1 else clean_base
+            if clean_page_url != target_url:
+                try:
+                    logger.info(f"🔄 Retrying forum page {current_page} without query parameters: {clean_page_url}")
+                    clean_soup = _fetch_soup(clean_page_url)
+                    for a in clean_soup.find_all("a", href=True):
+                        href = a["href"].strip()
+                        if "/topic/" in href or "index.php?/topic/" in href:
+                            full_url = urljoin(clean_base, href)
+                            clean_url = _clean_topic_url(full_url)
+                            if clean_url not in seen:
+                                seen.add(clean_url)
+                                new_on_page += 1
+                                t_title = a.get_text(strip=True) or "Untitled Post"
+                                topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
+                                if len(topics) >= limit:
+                                    break
+                except Exception as e:
+                    logger.debug(f"Could not fetch clean page {clean_page_url}: {e}")
+
+        # If date cutoff reached, or no topics found on this page: stop pagination
+        if hit_older or new_on_page == 0:
             break
 
         if len(topics) >= limit:
