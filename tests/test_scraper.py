@@ -511,6 +511,17 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(filtered, ["https://streamfiles.net/sf123"])
         self.assertTrue(is_fallback)
 
+    def test_cloudfam_support_and_priority(self):
+        """Test cloudfam.io in STREAMING_DOMAINS and at the end of PROVIDER_PRIORITY."""
+        from config import STREAMING_DOMAINS
+        from scraper import PROVIDER_PRIORITY, get_host_display_name, get_host_key, _is_streaming_link
+
+        self.assertIn("cloudfam.io", STREAMING_DOMAINS)
+        self.assertEqual(PROVIDER_PRIORITY[-1], "cloudfam")
+        self.assertTrue(_is_streaming_link("https://cloudfam.io/a014faa8d6f4"))
+        self.assertEqual(get_host_display_name("https://cloudfam.io/a014faa8d6f4"), "☁️ Cloudfam")
+        self.assertEqual(get_host_key("https://cloudfam.io/a014faa8d6f4"), "cloudfam")
+
     def test_slicing_and_ranges(self):
         """Test parse_slicing_args and apply_slice for count, range, and last-N."""
         from scraper import parse_slicing_args, apply_slice

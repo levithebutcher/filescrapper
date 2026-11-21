@@ -107,6 +107,7 @@ PROVIDER_PRIORITY = [
     "dropload",
     "mixdrop",
     "streamruby",
+    "cloudfam",
 ]
 
 
@@ -140,6 +141,8 @@ def get_host_display_name(url: str) -> str:
             return "💧 Mixdrop"
         elif "streamruby" in domain:
             return "💎 Streamruby"
+        elif "cloudfam" in domain:
+            return "☁️ Cloudfam"
         else:
             clean = domain.replace("www.", "").split(".")[0].capitalize()
             return f"🎬 {clean}"
@@ -179,6 +182,8 @@ def get_host_key(url: str) -> str:
             return "mixdrop"
         elif "streamruby" in domain:
             return "streamruby"
+        elif "cloudfam" in domain:
+            return "cloudfam"
         else:
             return domain.replace("www.", "").split(".")[0]
     except Exception:
@@ -938,6 +943,79 @@ def _extract_streaming_links_from_html(soup: BeautifulSoup, post_url: str) -> li
             add_link(raw)
 
     return links
+
+
+def resolve_cloudfam_url(url: str, timeout: int = 15) -> str | None:
+    """
+    Resolve a cloudfam.io download page to its direct pre-signed S3 download URL.
+    Follows the multi-step redirect chain:
+    preload.php -> redirection0.php -> redirection1.php -> premium_upsell.php -> step=2 -> download_handler.php
+    Returns the direct download link (e.g. AWS/R2 S3 signed URL) or None if resolution fails.
+    """
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        session.headers["Referer"] = "https://dropmms.com/"
+
+        # Step 1: Initial URL -> preload.php
+        resp = session.get(url, timeout=timeout, allow_redirects=True)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Step 2: redirection0.php
+        next_a = soup.find("a", href=lambda h: h and "redirection" in h)
+        if not next_a:
+            return None
+        red0_url = urljoin(str(resp.url), next_a["href"])
+        resp2 = session.get(red0_url, timeout=timeout, allow_redirects=True)
+        if resp2.status_code != 200:
+            return None
+        soup2 = BeautifulSoup(resp2.text, "html.parser")
+
+        # Step 3: redirection1.php via #cf-btn-free
+        btn_free = soup2.find(id="cf-btn-free")
+        if not btn_free or not btn_free.get("href"):
+            return None
+        red1_url = urljoin(str(resp2.url), btn_free["href"])
+        resp3 = session.get(red1_url, timeout=timeout, allow_redirects=True)
+        if resp3.status_code != 200:
+            return None
+        soup3 = BeautifulSoup(resp3.text, "html.parser")
+
+        # Step 4: premium_upsell.php via #free-btn
+        btn_upsell = soup3.find(id="free-btn")
+        if not btn_upsell or not btn_upsell.get("href"):
+            return None
+        upsell_url = urljoin(str(resp3.url), btn_upsell["href"])
+        resp4 = session.get(upsell_url, timeout=timeout, allow_redirects=True)
+        if resp4.status_code != 200:
+            return None
+        soup4 = BeautifulSoup(resp4.text, "html.parser")
+
+        # Step 5: step=2 via #free-continue
+        btn_continue = soup4.find(id="free-continue")
+        if not btn_continue or not btn_continue.get("href"):
+            return None
+        step2_url = urljoin(str(resp4.url), btn_continue["href"])
+        resp5 = session.get(step2_url, timeout=timeout, allow_redirects=True)
+        if resp5.status_code != 200:
+            return None
+        soup5 = BeautifulSoup(resp5.text, "html.parser")
+
+        # Step 6: download_handler.php via #cf-dl-btn
+        btn_dl = soup5.find(id="cf-dl-btn")
+        if not btn_dl or not btn_dl.get("href"):
+            return None
+        dl_handler_url = urljoin(str(resp5.url), btn_dl["href"])
+        resp_final = session.get(dl_handler_url, timeout=timeout, allow_redirects=True)
+        if resp_final.status_code == 200:
+            return str(resp_final.url)
+        return None
+    except Exception as e:
+        logger.warning(f"Error resolving cloudfam URL {url}: {e}")
+        return None
+
 
 
 def _is_valid_thumbnail_url(url: str) -> bool:

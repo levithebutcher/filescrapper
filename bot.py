@@ -755,6 +755,7 @@ def get_host_settings_keyboard(current_pref: str = "streamtape") -> InlineKeyboa
         ("uqload", "⚡ Uqload"),
         ("doodstream", "🎥 Doodstream"),
         ("streamwish", "✨ Streamwish"),
+        ("cloudfam", "☁️ Cloudfam"),
         ("all", "🌐 All Providers"),
     ]
     buttons = []

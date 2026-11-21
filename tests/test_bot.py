@@ -157,6 +157,17 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(badges[2], "📥 Streamfiles")
         self.assertEqual(badges[3], "🎥 Doodstream")
 
+    def test_get_host_settings_keyboard_includes_cloudfam(self):
+        """Test that get_host_settings_keyboard includes cloudfam button."""
+        from bot import get_host_settings_keyboard
+        kb = get_host_settings_keyboard(current_pref="cloudfam")
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("sethost_cloudfam", callbacks)
+        # Verify checkmark appears on active host
+        cloudfam_btn = [btn for row in kb.inline_keyboard for btn in row if btn.callback_data == "sethost_cloudfam"][0]
+        self.assertIn("✅", cloudfam_btn.text)
+        self.assertIn("Cloudfam", cloudfam_btn.text)
+
     def test_slicing_args_and_apply_slice(self):
         """Test parse_slicing_args and apply_slice helper functions."""
         from scraper import parse_slicing_args, apply_slice
