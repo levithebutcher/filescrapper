@@ -5,7 +5,7 @@ import io
 import html
 import logging
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urljoin, urlparse, quote_plus
+from urllib.parse import urljoin, urlparse, quote, quote_plus
 from PIL import Image
 import requests
 from requests.adapters import HTTPAdapter
@@ -1604,4 +1604,71 @@ def format_livecam_card(details: dict) -> str:
         lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{video_url}</code>")
 
     return "\n".join(lines)
+
+
+def search_livecam_models(query: str, limit: int = 10) -> list[dict]:
+    """
+    Search LiveCamRips for models matching the given query.
+    Returns list of dicts: [{'name': 'GoddessAnna', 'url': 'https://livecamrips.to/model/36773/GoddessAnna', 'thumb': '...'}, ...]
+    """
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    queries_to_try = []
+    if " " in clean_q:
+        queries_to_try.append(clean_q.replace(" ", ""))
+    queries_to_try.append(clean_q)
+
+    results = []
+    seen_urls = set()
+
+    for q in queries_to_try:
+        search_url = f"https://livecamrips.to/search/{quote(q)}"
+        soup = _fetch_soup(search_url)
+        if not soup:
+            continue
+
+        links = soup.find_all("a", href=lambda h: h and "/model/" in h)
+        for a in links:
+            href = a.get("href", "").strip()
+            if not href:
+                continue
+            full_url = urljoin("https://livecamrips.to", href)
+            clean_url = full_url.split("?")[0].split("#")[0].rstrip("/")
+
+            parts = clean_url.split("/")
+            if len(parts) < 5 or parts[-3] != "model":
+                continue
+
+            if clean_url in seen_urls:
+                continue
+
+            name = a.get_text(strip=True)
+            if not name:
+                name = parts[-1]
+
+            name = clean_livecam_title(name)
+            if not name or name.lower() == "models":
+                continue
+
+            img = a.find("img")
+            if not img and a.parent:
+                img = a.parent.find("img")
+            thumb = img.get("src") if img else None
+
+            seen_urls.add(clean_url)
+            results.append({
+                "name": name,
+                "url": clean_url,
+                "thumb": thumb,
+            })
+            if len(results) >= limit:
+                break
+
+        if results:
+            break
+
+    return results
+
 

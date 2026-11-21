@@ -50,6 +50,7 @@ from scraper import (
     get_forum_topics,
     get_post_details,
     search_forum,
+    search_livecam_models,
     is_forum_url,
     is_topic_url,
     get_host_display_name,
@@ -121,6 +122,15 @@ def end_scrape_for_chat(chat_id: int | str):
         logger.info(f"🏁 [SCRAPE_END] Cleaned up scrape state for chat {cid}")
     except Exception as e:
         logger.error(f"Error ending scrape for {chat_id}: {e}")
+
+
+def is_chat_busy(chat_id: int | str) -> bool:
+    """Check if an active scrape is currently running for this chat."""
+    try:
+        return bool(active_scrapes.get(int(chat_id), False))
+    except Exception:
+        return False
+
 
 
 async def cancellable_sleep(duration: float, chat_id: int | str, step: float = 0.2):
@@ -415,6 +425,95 @@ async def process_livecam_scrape(bot, chat_id: int | str, video_item: dict):
             text=f"⚠️ <b>Could not extract LiveCam video:</b>\n<code>{html.escape(video_item.get('video_url', ''))}</code>\n<i>Reason: {safe_err}</i>",
             parse_mode=ParseMode.HTML,
         )
+
+
+async def run_livecam_model_scrape(
+    bot,
+    chat_id: int | str,
+    target_url: str,
+    only_today: bool = False,
+    req_limit: int = 25,
+    status_msg=None,
+):
+    """
+    Standardized worker to scrape and deliver videos from a LiveCamRips model page.
+    Supports stopping, status updates, and graceful error handling.
+    """
+    cid = int(chat_id)
+    if is_chat_busy(cid):
+        txt = "⚠️ Another scrape is currently running in this chat. Use /stop first."
+        if status_msg:
+            try:
+                await status_msg.edit_text(txt)
+            except Exception:
+                await bot.send_message(chat_id=cid, text=txt)
+        else:
+            await bot.send_message(chat_id=cid, text=txt)
+        return
+
+    start_scrape_for_chat(cid)
+    clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
+    parts = [p for p in clean_u.split("/") if p]
+    page_num = 1
+    if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
+        page_num = int(parts[-1])
+    page_label = f" (Page {page_num})" if page_num > 1 else ""
+
+    loading_text = f"📂 <i>Scanning LiveCam model page{page_label}...</i>"
+    if status_msg:
+        try:
+            await status_msg.edit_text(loading_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+    else:
+        status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+
+    try:
+        videos = await asyncio.to_thread(get_livecam_model_videos, target_url, only_today, req_limit)
+        videos = videos[:req_limit]
+
+        if not videos:
+            msg_text = (
+                "📅 <b>No uploads found today for this model!</b>"
+                if only_today
+                else f"❌ No videos found on this model page{page_label}."
+            )
+            await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML)
+            end_scrape_for_chat(cid)
+            return
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        await status_msg.edit_text(f"✅ Found {len(videos)} video(s){page_label}! Extracting...", reply_markup=stop_markup)
+
+        for idx, v in enumerate(videos, start=1):
+            if is_scrape_cancelled(cid):
+                logger.info(f"Model scrape cancelled by user in chat {cid}")
+                await bot.send_message(
+                    chat_id=cid,
+                    text=f"🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.",
+                    parse_mode=ParseMode.HTML,
+                )
+                break
+            await process_livecam_scrape(bot, cid, v)
+            if is_scrape_cancelled(cid):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, cid)
+    except Exception as e:
+        logger.error(f"Error scraping LiveCam model {target_url}: {e}", exc_info=True)
+        try:
+            await status_msg.edit_text(f"❌ Error: {html.escape(str(e))}")
+        except Exception:
+            pass
+    finally:
+        end_scrape_for_chat(cid)
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
 
 
 # --- Command Handlers ---
@@ -781,43 +880,150 @@ async def latest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def execute_platform_search(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    plat: str,
+    query: str,
+    edit_msg=None,
+):
+    """Execute search on the selected platform (lc = LiveCam, fm = DropMMS) and display button results."""
+    clean_query = query.strip()
+    if not clean_query:
+        if edit_msg:
+            await edit_msg.edit_text("⚠️ Search query cannot be empty.")
+        else:
+            await update.effective_message.reply_text("⚠️ Search query cannot be empty.")
+        return
+
+    plat_label = "LiveCam Models" if plat == "lc" else "DropMMS Forum"
+    status_text = f"🔍 <i>Searching {plat_label} for '<b>{html.escape(clean_query)}</b>'...</i>"
+
+    if edit_msg:
+        try:
+            status_msg = await edit_msg.edit_text(status_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            status_msg = await update.effective_message.reply_text(status_text, parse_mode=ParseMode.HTML)
+    else:
+        status_msg = await update.effective_message.reply_text(status_text, parse_mode=ParseMode.HTML)
+
+    if plat == "lc":
+        try:
+            results = await asyncio.to_thread(search_livecam_models, clean_query, 8)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search LiveCam Again", callback_data="sp_choose:lc")],
+                [InlineKeyboardButton("💬 Search Forum Instead", callback_data="sp_switch:fm")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"❌ No LiveCam models found for <b>{html.escape(clean_query)}</b>.\n\n"
+                "<i>Tip: Check spelling or try a shorter name.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        text = f"🔎 <b>LiveCam Models Matching '{html.escape(clean_query)}':</b>\n\n"
+        buttons = []
+        for idx, m in enumerate(results, start=1):
+            name = m["name"]
+            url = m["url"]
+            text += f"{idx}. <b>{html.escape(name)}</b>\n"
+            short_id = db.get_or_create_short_id(url)
+            btn = InlineKeyboardButton(f"📹 {name}", callback_data=f"sp_mdl:{short_id}")
+            buttons.append([btn])
+
+        buttons.append([
+            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:lc"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ])
+        await status_msg.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    else:
+        try:
+            results = await asyncio.to_thread(search_forum, clean_query, 6)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Forum Again", callback_data="sp_choose:fm")],
+                [InlineKeyboardButton("📹 Search LiveCam Instead", callback_data="sp_switch:lc")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"❌ No forum topics found for <b>{html.escape(clean_query)}</b>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        text = f"🔎 <b>Forum Topics Matching '{html.escape(clean_query)}':</b>\n\n"
+        buttons = []
+        for idx, r in enumerate(results, start=1):
+            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
+            short_id = db.get_or_create_short_id(r["url"])
+            btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{short_id}")
+            buttons.append([btn])
+
+        buttons.append([
+            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:fm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ])
+        await status_msg.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search the forum by keyword."""
+    """Interactive universal search engine with platform & result buttons."""
     msg = update.effective_message
     if not context.args:
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
+                InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_choose:fm"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
         await msg.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/search &lt;keyword&gt;</code>\n"
-            "Example: <code>/search 1080p video</code>",
+            "🔍 <b>Universal Search Engine</b>\n\n"
+            "Select which platform you would like to search:",
             parse_mode=ParseMode.HTML,
+            reply_markup=markup,
         )
         return
 
     query = " ".join(context.args).strip()
-    status_msg = await msg.reply_text(f"🔍 <i>Searching for '{html.escape(query)}'...</i>", parse_mode=ParseMode.HTML)
-
-    try:
-        results = await asyncio.to_thread(search_forum, query, 5)
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
-        return
-
-    if not results:
-        await status_msg.edit_text(f"❌ No matching videos found for <b>{html.escape(query)}</b>.", parse_mode=ParseMode.HTML)
-        return
-
-    text = f"🔎 <b>Search Results for '{html.escape(query)}':</b>\n\n"
-    buttons = []
-    for idx, r in enumerate(results, start=1):
-        text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
-        short_id = db.get_or_create_short_id(r["url"])
-        btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{short_id}")
-        buttons.append([btn])
-
-    await status_msg.edit_text(
-        text,
+    context.user_data["search_query"] = query
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_do:lc"),
+            InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_do:fm"),
+        ],
+        [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+    ])
+    await msg.reply_text(
+        f"🔍 <b>Search Query:</b> <code>{html.escape(query)}</code>\n\n"
+        "Choose a platform to search:",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
+        reply_markup=markup,
     )
+
 
 
 async def domains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1220,6 +1426,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await stop_command(update, context)
         return
 
+    # Check if user is in an interactive search flow
+    awaiting_plat = context.user_data.pop("awaiting_search", None)
+    if awaiting_plat:
+        await execute_platform_search(update, context, awaiting_plat, text)
+        return
+
     if text.startswith("http://") or text.startswith("https://") or "dropmms.com" in text or "livecamrips.to" in text:
         await handle_raw_url(update, context, text)
 
@@ -1248,16 +1460,91 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "cb_latest":
         await latest_command(update, context)
     elif data == "cb_search":
-        await query.message.reply_text(
-            "🔍 <b>How to Search Videos:</b>\n\n"
-            "Use the <code>/search</code> command followed by a movie title or keyword:\n\n"
-            "<b>Examples:</b>\n"
-            "• <code>/search 1080p</code>\n"
-            "• <code>/search action</code>\n"
-            "• <code>/search sample</code>\n\n"
-            "<i>Just type /search &lt;keyword&gt; to search instantly!</i>",
+        await search_command(update, context)
+    elif data.startswith("sp_choose:"):
+        plat = data.split(":")[1]
+        plat_label = "📹 LiveCam Models" if plat == "lc" else "💬 DropMMS Forum"
+        example_q = "GoddessAnna" if plat == "lc" else "1080p video"
+        context.user_data["awaiting_search"] = plat
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"🔍 <b>Searching:</b> {plat_label}\n\n"
+            f"✏️ <i>Please send the keyword or name in your next message (e.g. <code>{example_q}</code>):</i>",
             parse_mode=ParseMode.HTML,
+            reply_markup=markup,
         )
+    elif data.startswith("sp_do:"):
+        plat = data.split(":")[1]
+        query_text = context.user_data.get("search_query", "").strip()
+        if not query_text:
+            await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
+            return
+        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message)
+    elif data.startswith("sp_switch:"):
+        plat = data.split(":")[1]
+        query_text = context.user_data.get("search_query", "").strip()
+        if not query_text:
+            await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
+            return
+        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message)
+    elif data.startswith("sp_mdl:"):
+        short_id = int(data.split(":")[1])
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("⚠️ Model link expired. Please search again.")
+            return
+
+        parts = url.rstrip("/").split("/")
+        model_name = parts[-1] if len(parts) >= 3 else "Model"
+        model_name = clean_livecam_title(model_name)
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_run:{short_id}:10"),
+                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_run:{short_id}:today"),
+            ],
+            [
+                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_run:{short_id}:25"),
+                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_run:{short_id}:50"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
+        await query.edit_message_text(
+            f"📹 <b>Model Selected:</b> <code>{html.escape(model_name)}</code>\n"
+            f"🔗 <code>{html.escape(url)}</code>\n\n"
+            "<i>Choose an extraction mode to start scraping:</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data.startswith("sp_run:"):
+        _, short_id_str, mode = data.split(":")
+        short_id = int(short_id_str)
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("⚠️ Model link expired. Please search again.")
+            return
+
+        chat_id = query.message.chat_id
+        only_today = (mode == "today")
+        req_limit = 10 if mode == "10" else (25 if mode == "25" else 50)
+
+        await run_livecam_model_scrape(
+            bot=context.bot,
+            chat_id=chat_id,
+            target_url=url,
+            only_today=only_today,
+            req_limit=req_limit,
+            status_msg=query.message,
+        )
+    elif data == "sp_cancel":
+        context.user_data.pop("awaiting_search", None)
+        context.user_data.pop("search_query", None)
+        try:
+            await query.edit_message_text("❌ <i>Search closed.</i>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
     elif data == "cb_help":
         await help_command(update, context)
     elif data == "cb_domains":

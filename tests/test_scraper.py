@@ -665,6 +665,40 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(len(videos), 4)
         self.assertEqual([v["video_id"] for v in videos], ["101", "102", "103", "104"])
 
+    @patch("scraper._fetch_soup")
+    def test_search_livecam_models(self, mock_fetch_soup):
+        """Test searching LiveCamRips models."""
+        from scraper import search_livecam_models
+
+        search_html = """
+        <html><body>
+            <figure class="tm-video-item">
+                <a href="https://livecamrips.to/model/36773/GoddessAnna">
+                    <img src="https://images.livecamrips.to/1292/12922696.png" />
+                </a>
+            </figure>
+            <div>
+                <a href="https://livecamrips.to/model/36773/GoddessAnna">
+                    <span class="tm-text-gray-light">GoddessAnna</span>
+                </a>
+            </div>
+            <figure class="tm-video-item">
+                <a href="https://livecamrips.to/model/231613/GoddessAnnaxxx">
+                    <img src="https://images.livecamrips.to/283/2832444.png" />
+                </a>
+            </figure>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(search_html, "html.parser")
+
+        models = search_livecam_models("GoddessAnna", limit=5)
+        self.assertEqual(len(models), 2)
+        self.assertEqual(models[0]["name"], "GoddessAnna")
+        self.assertEqual(models[0]["url"], "https://livecamrips.to/model/36773/GoddessAnna")
+        self.assertEqual(models[0]["thumb"], "https://images.livecamrips.to/1292/12922696.png")
+        self.assertEqual(models[1]["name"], "GoddessAnnaxxx")
+
+
 
 if __name__ == "__main__":
     unittest.main()

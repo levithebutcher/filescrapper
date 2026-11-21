@@ -5,12 +5,13 @@ Unit tests for bot message formatting, UI buttons, and database integration.
 
 import uuid
 import unittest
+from unittest.mock import MagicMock, AsyncMock
 from bot import format_post_card, group_links_by_host
 from scraper import get_host_display_name
 import db
 
 
-class TestBot(unittest.TestCase):
+class TestBot(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         db.init_db()
@@ -200,6 +201,47 @@ class TestBot(unittest.TestCase):
         url_no_page = "https://dropmms.com/forum/4-desi/"
         m_none = re.search(r"/page/(\d+)", url_no_page, re.I) or re.search(r"[?&]page=(\d+)", url_no_page, re.I)
         self.assertIsNone(m_none)
+
+    async def test_search_command_no_args_shows_platforms(self):
+        """Test /search with no args displays platform selection buttons."""
+        from bot import search_command
+
+        update = MagicMock()
+        context = MagicMock()
+        context.args = []
+        msg = AsyncMock()
+        update.effective_message = msg
+
+        await search_command(update, context)
+        msg.reply_text.assert_called_once()
+        args, kwargs = msg.reply_text.call_args
+        self.assertIn("Universal Search Engine", args[0])
+        reply_markup = kwargs.get("reply_markup")
+        self.assertIsNotNone(reply_markup)
+        # Check that both buttons exist
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn("sp_choose:lc", button_data)
+        self.assertIn("sp_choose:fm", button_data)
+
+    async def test_search_command_with_args(self):
+        """Test /search with args displays platform buttons and stores search query."""
+        from bot import search_command
+
+        update = MagicMock()
+        context = MagicMock()
+        context.args = ["GoddessAnna"]
+        context.user_data = {}
+        msg = AsyncMock()
+        update.effective_message = msg
+
+        await search_command(update, context)
+        self.assertEqual(context.user_data.get("search_query"), "GoddessAnna")
+        msg.reply_text.assert_called_once()
+        args, kwargs = msg.reply_text.call_args
+        self.assertIn("GoddessAnna", args[0])
+        button_data = [btn.callback_data for row in kwargs.get("reply_markup").inline_keyboard for btn in row]
+        self.assertIn("sp_do:lc", button_data)
+        self.assertIn("sp_do:fm", button_data)
 
 
 if __name__ == "__main__":
