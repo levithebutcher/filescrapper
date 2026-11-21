@@ -243,6 +243,51 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sp_do:lc", button_data)
         self.assertIn("sp_do:fm", button_data)
 
+    async def test_setlink_command_no_args(self):
+        """Test /setlink command displays link mode selection keyboard."""
+        from bot import setlink_command
+
+        update = MagicMock()
+        context = MagicMock()
+        context.args = []
+        msg = AsyncMock()
+        update.effective_message = msg
+        update.effective_user.id = 12345
+
+        await setlink_command(update, context)
+        msg.reply_text.assert_called_once()
+        args, kwargs = msg.reply_text.call_args
+        self.assertIn("LiveCam Link Display Settings", args[0])
+        button_data = [btn.callback_data for row in kwargs.get("reply_markup").inline_keyboard for btn in row]
+        self.assertIn("setlink_streaming", button_data)
+        self.assertIn("setlink_both", button_data)
+        self.assertIn("setlink_page", button_data)
+
+    async def test_setlink_command_with_args(self):
+        """Test /setlink <mode> saves user preference directly."""
+        from bot import setlink_command
+
+        update = MagicMock()
+        context = MagicMock()
+        msg = AsyncMock()
+        update.effective_message = msg
+        update.effective_user.id = 556677
+
+        # Set to both
+        context.args = ["both"]
+        await setlink_command(update, context)
+        self.assertEqual(db.get_user_link_mode(556677), "both")
+
+        # Set to page
+        context.args = ["page"]
+        await setlink_command(update, context)
+        self.assertEqual(db.get_user_link_mode(556677), "page")
+
+        # Set to streaming
+        context.args = ["streaming"]
+        await setlink_command(update, context)
+        self.assertEqual(db.get_user_link_mode(556677), "streaming")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -323,12 +323,14 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         logger.error(f"Failed to send post card to {chat_id}: {e}")
 
 
-async def send_livecam_card(bot, chat_id: int | str, details: dict):
+async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int | str = None):
     """Deliver a clean LiveCamRips card with uncropped HD thumbnail and copyable links."""
     if is_scrape_cancelled(chat_id):
         return
 
-    caption = format_livecam_card(details)
+    uid = user_id or chat_id
+    link_mode = db.get_user_link_mode(uid)
+    caption = format_livecam_card(details, link_mode=link_mode)
     thumb_url = details.get("thumbnail")
 
     image_bytes = None
@@ -395,7 +397,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict):
         logger.error(f"Failed to send LiveCamRips card: {e}")
 
 
-async def process_livecam_scrape(bot, chat_id: int | str, video_item: dict):
+async def process_livecam_scrape(bot, chat_id: int | str, video_item: dict, user_id: int | str = None):
     """Extract streaming links and deliver LiveCamRips card."""
     if is_scrape_cancelled(chat_id):
         return
@@ -414,7 +416,7 @@ async def process_livecam_scrape(bot, chat_id: int | str, video_item: dict):
         if is_scrape_cancelled(chat_id):
             return
 
-        await send_livecam_card(bot, chat_id, details)
+        await send_livecam_card(bot, chat_id, details, user_id=user_id)
     except Exception as e:
         if is_scrape_cancelled(chat_id):
             return
@@ -434,12 +436,14 @@ async def run_livecam_model_scrape(
     only_today: bool = False,
     req_limit: int = 25,
     status_msg=None,
+    user_id: int | str = None,
 ):
     """
     Standardized worker to scrape and deliver videos from a LiveCamRips model page.
     Supports stopping, status updates, and graceful error handling.
     """
     cid = int(chat_id)
+    uid = user_id or cid
     if is_chat_busy(cid):
         txt = "⚠️ Another scrape is currently running in this chat. Use /stop first."
         if status_msg:
@@ -496,7 +500,7 @@ async def run_livecam_model_scrape(
                     parse_mode=ParseMode.HTML,
                 )
                 break
-            await process_livecam_scrape(bot, cid, v)
+            await process_livecam_scrape(bot, cid, v, user_id=uid)
             if is_scrape_cancelled(cid):
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
@@ -565,6 +569,64 @@ async def sethost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMarkup:
+    """Generate keyboard for selecting preferred LiveCam link display mode."""
+    modes = [
+        ("streaming", "🍿 Streaming Only (Default)"),
+        ("both", "🔗 Both (Page + Stream)"),
+        ("page", "🌐 Video Page Only"),
+    ]
+    buttons = []
+    for key, label in modes:
+        check = " ✅" if key == current_mode else ""
+        buttons.append([InlineKeyboardButton(f"{label}{check}", callback_data=f"setlink_{key}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def setlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow user to choose which links to include in LiveCam video cards."""
+    user = update.effective_user
+    uid = user.id if user else update.effective_chat.id
+
+    if context.args:
+        chosen = context.args[0].lower().strip()
+        if chosen in ["streaming", "stream", "embed"]:
+            mode = "streaming"
+        elif chosen in ["both", "all", "2"]:
+            mode = "both"
+        elif chosen in ["page", "video", "1"]:
+            mode = "page"
+        else:
+            mode = None
+
+        if mode:
+            db.set_user_link_mode(uid, mode)
+            label = "🍿 Streaming Only (Default)" if mode == "streaming" else ("🔗 Both (Page + Stream)" if mode == "both" else "🌐 Video Page Only")
+            await update.effective_message.reply_text(
+                f"✅ <b>LiveCam Link Mode Updated to {label}!</b>\n\n"
+                "All future LiveCam video cards will use this link format.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_link_mode_keyboard(mode),
+            )
+            return
+
+    current_mode = db.get_user_link_mode(uid) or "streaming"
+    label = "🍿 Streaming Only (Default)" if current_mode == "streaming" else ("🔗 Both (Page + Stream)" if current_mode == "both" else "🌐 Video Page Only")
+    text = (
+        "⚙️ <b>LiveCam Link Display Settings</b>\n\n"
+        f"Current format: <b>{label}</b>\n\n"
+        "Choose which link(s) to include in LiveCam video cards:\n\n"
+        "• <b>🍿 Streaming Only (Default):</b> Direct embed link only (cleanest)\n"
+        "• <b>🔗 Both:</b> Video page link + Direct streaming link\n"
+        "• <b>🌐 Video Page Only:</b> Video page link only"
+    )
+    await update.effective_message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_link_mode_keyboard(current_mode),
+    )
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Minimal, elegant greeting."""
     user_name = update.effective_user.first_name if update.effective_user else "Friend"
@@ -579,7 +641,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>/today last 5</code> — Get last 5 uploads\n"
         "• <code>/latest</code> — Latest forum releases\n"
         "• <code>/sethost</code> — Set preferred video player (Streamtape/Vidara/etc.)\n"
-        "• <code>/search &lt;name&gt;</code> — Find videos by keyword\n"
+        "• <code>/setlink</code> — LiveCam link format (Streaming/Both/Page)\n"
+        "• <code>/search &lt;name&gt;</code> — Find videos or models\n"
         "• <code>/scrape &lt;url&gt;</code> — Extract any topic, category, or model\n"
         "• <code>/stop</code> — Immediately cancel active extraction\n"
         "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
@@ -593,10 +656,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("⚙️ Preferred Player", callback_data="cb_sethost"),
-            InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search"),
+            InlineKeyboardButton("🔗 LiveCam Links", callback_data="cb_setlink"),
         ],
         [
+            InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search"),
             InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
+        ],
+        [
             InlineKeyboardButton("📖 User Guide", callback_data="cb_help"),
         ],
     ]
@@ -624,8 +690,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>/today last 5</code> — Last 5 uploads\n"
         "• <code>/latest</code> — Top 5 newest topics\n\n"
         "<b>3️⃣ Keyword Search:</b>\n"
-        "• <code>/search sample video</code>\n\n"
-        "<b>4️⃣ 24/7 Channel Auto-Poster:</b>\n"
+        "• <code>/search</code> — Universal search with interactive buttons\n"
+        "• <code>/search GoddessAnna</code> — Search models or topics directly\n\n"
+        "<b>4️⃣ Preferences:</b>\n"
+        "• <code>/sethost</code> — Set preferred streaming player (Streamtape, etc.)\n"
+        "• <code>/setlink</code> — Choose LiveCam card links (streaming only / both / page only)\n\n"
+        "<b>5️⃣ 24/7 Channel Auto-Poster:</b>\n"
         "1. Add this bot to your Telegram Channel as <b>Administrator</b>.\n"
         "2. The bot will automatically link the channel and broadcast new drops every 15 minutes!\n"
         "3. Or use <code>/setchannel &lt;category_url&gt;</code> inside the channel."
@@ -691,7 +761,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("🔍 <i>Extracting LiveCam video streaming link...</i>", parse_mode=ParseMode.HTML)
             try:
                 details = await asyncio.to_thread(get_livecam_video_details, target_url)
-                await send_livecam_card(context.bot, chat_id, details)
+                await send_livecam_card(context.bot, chat_id, details, user_id=user_id)
             except Exception as e:
                 await status_msg.edit_text(f"❌ Error extracting LiveCam video: {html.escape(str(e))}")
                 return
@@ -746,7 +816,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode=ParseMode.HTML,
                     )
                     break
-                await process_livecam_scrape(context.bot, chat_id, v)
+                await process_livecam_scrape(context.bot, chat_id, v, user_id=user_id)
                 if is_scrape_cancelled(chat_id):
                     break
                 await cancellable_sleep(POST_SEND_DELAY, chat_id)
@@ -1285,7 +1355,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         status = await msg.reply_text("🔍 <i>Extracting LiveCam video streaming link...</i>", parse_mode=ParseMode.HTML)
         try:
             details = await asyncio.to_thread(get_livecam_video_details, target_url)
-            await send_livecam_card(context.bot, chat_id, details)
+            await send_livecam_card(context.bot, chat_id, details, user_id=user_id)
         except Exception as e:
             await status.edit_text(f"❌ Error extracting LiveCam video: {html.escape(str(e))}")
         finally:
@@ -1333,7 +1403,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                         parse_mode=ParseMode.HTML,
                     )
                     break
-                await process_livecam_scrape(context.bot, chat_id, v)
+                await process_livecam_scrape(context.bot, chat_id, v, user_id=user_id)
                 if is_scrape_cancelled(chat_id):
                     break
                 await cancellable_sleep(POST_SEND_DELAY, chat_id)
@@ -1537,6 +1607,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             only_today=only_today,
             req_limit=req_limit,
             status_msg=query.message,
+            user_id=query.from_user.id,
         )
     elif data == "sp_cancel":
         context.user_data.pop("awaiting_search", None)
@@ -1553,6 +1624,23 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await setchannel_command(update, context)
     elif data == "cb_sethost":
         await sethost_command(update, context)
+    elif data == "cb_setlink":
+        await setlink_command(update, context)
+    elif data.startswith("setlink_"):
+        new_mode = data[8:]
+        user_id = query.from_user.id
+        db.set_user_link_mode(user_id, new_mode)
+        label = "🍿 Streaming Only (Default)" if new_mode == "streaming" else ("🔗 Both (Page + Stream)" if new_mode == "both" else "🌐 Video Page Only")
+        try:
+            await query.edit_message_text(
+                f"✅ <b>LiveCam Link Mode Updated to {label}!</b>\n\n"
+                "All future LiveCam video cards will use this link format.\n\n"
+                "You can change your selection anytime below:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_link_mode_keyboard(new_mode),
+            )
+        except Exception:
+            pass
     elif data.startswith("sethost_"):
         new_pref = data[8:]
         user_id = query.from_user.id
@@ -1612,6 +1700,7 @@ async def post_init(application: Application):
         BotCommand("today", "Today's fresh uploads"),
         BotCommand("latest", "Latest releases from forum"),
         BotCommand("sethost", "Choose preferred video player"),
+        BotCommand("setlink", "LiveCam link mode (streaming/both/page)"),
         BotCommand("search", "Search videos by keyword"),
         BotCommand("scrape", "Extract links from URL"),
         BotCommand("domains", "Supported streaming hosts"),
@@ -1649,6 +1738,7 @@ def main():
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("latest", latest_command))
     app.add_handler(CommandHandler("sethost", sethost_command))
+    app.add_handler(CommandHandler("setlink", setlink_command))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("scrape", scrape_command))
     app.add_handler(CommandHandler("domains", domains_command))

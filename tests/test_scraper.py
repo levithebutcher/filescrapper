@@ -572,7 +572,7 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(clean_livecam_title("GoddessAnna - Stripchat - 2026-11-19 00:19"), "GoddessAnna")
         self.assertEqual(clean_livecam_title("livecamrips.to GoddessAnna - Stripchat"), "GoddessAnna")
 
-        # Card formatting
+        # Card formatting - Default mode ('streaming')
         details = {
             "model_name": "GoddessAnna - Stripchat Recording",
             "title": "GoddessAnna - Stripchat Recording",
@@ -582,14 +582,24 @@ class TestScraper(unittest.TestCase):
             "video_url": "https://livecamrips.to/video/16877744",
             "streaming_links": ["https://abstream.to/embed-kpmvtq4znbl6.html"],
         }
-        card = format_livecam_card(details)
-        self.assertIn("<blockquote>📹 <b>GoddessAnna</b>", card)
-        self.assertNotIn("Stripchat Recording", card)
-        self.assertIn("📅 <b>Date:</b> 19 Nov 2026, 00:19", card)
-        self.assertIn("⏱️ <b>Duration:</b> 10:34", card)
-        self.assertIn("#GoddessAnna", card)
-        self.assertIn("<code>https://livecamrips.to/video/16877744</code>", card)
-        self.assertIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card)
+        card_default = format_livecam_card(details)
+        self.assertIn("<blockquote>📹 <b>GoddessAnna</b>", card_default)
+        self.assertNotIn("Stripchat Recording", card_default)
+        self.assertIn("📅 <b>Date:</b> 19 Nov 2026, 00:19", card_default)
+        self.assertIn("⏱️ <b>Duration:</b> 10:34", card_default)
+        self.assertIn("#GoddessAnna", card_default)
+        self.assertIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card_default)
+        self.assertNotIn("<code>https://livecamrips.to/video/16877744</code>", card_default)
+
+        # Card formatting - 'both' mode
+        card_both = format_livecam_card(details, link_mode="both")
+        self.assertIn("<code>https://livecamrips.to/video/16877744</code>", card_both)
+        self.assertIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card_both)
+
+        # Card formatting - 'page' mode
+        card_page = format_livecam_card(details, link_mode="page")
+        self.assertIn("<code>https://livecamrips.to/video/16877744</code>", card_page)
+        self.assertNotIn("<code>https://abstream.to/embed-kpmvtq4znbl6.html</code>", card_page)
 
     def test_title_words_not_triggering_cutoff(self):
         """Test that words like 'week', 'month', 'year' in titles do NOT trigger cutoff."""

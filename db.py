@@ -79,10 +79,17 @@ def init_db():
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_id INTEGER PRIMARY KEY,
                 preferred_host TEXT DEFAULT 'streamtape',
+                livecam_link_mode TEXT DEFAULT 'streaming',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Ensure livecam_link_mode column exists in user_preferences for existing databases
+        cursor.execute("PRAGMA table_info(user_preferences)")
+        cols = [r[1] for r in cursor.fetchall()]
+        if "livecam_link_mode" not in cols:
+            cursor.execute("ALTER TABLE user_preferences ADD COLUMN livecam_link_mode TEXT DEFAULT 'streaming'")
+
         # Auto-migrate any existing rows with legacy default 'vidara' to 'streamtape'
         cursor.execute("UPDATE user_preferences SET preferred_host = 'streamtape' WHERE preferred_host = 'vidara'")
 
@@ -282,3 +289,52 @@ def set_user_host_preference(user_id: int, host: str) -> bool:
     except Exception as e:
         logger.error(f"Error saving host preference for {user_id}: {e}")
         return False
+
+
+def get_user_link_mode(user_id: int | str) -> str:
+    """
+    Get user's preferred LiveCam link display mode (default: 'streaming').
+    Possible values: 'streaming', 'both', 'page'
+    """
+    try:
+        uid = int(user_id)
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT livecam_link_mode FROM user_preferences WHERE user_id = ?", (uid,))
+            row = cursor.fetchone()
+            if row and row["livecam_link_mode"]:
+                return row["livecam_link_mode"].lower().strip()
+            return "streaming"
+    except Exception as e:
+        logger.error(f"Error fetching livecam link mode for {user_id}: {e}")
+        return "streaming"
+
+
+def set_user_link_mode(user_id: int | str, mode: str) -> bool:
+    """
+    Save user's preferred LiveCam link display mode ('streaming', 'both', or 'page').
+    """
+    try:
+        uid = int(user_id)
+        clean_mode = mode.lower().strip()
+        if clean_mode not in ["streaming", "both", "page"]:
+            clean_mode = "streaming"
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_preferences (user_id, livecam_link_mode, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    livecam_link_mode = excluded.livecam_link_mode,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (uid, clean_mode),
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error saving livecam link mode for {user_id}: {e}")
+        return False
+

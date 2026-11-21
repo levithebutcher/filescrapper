@@ -1547,20 +1547,13 @@ def get_livecam_video_details(video_url: str) -> dict:
     }
 
 
-def format_livecam_card(details: dict) -> str:
+def format_livecam_card(details: dict, link_mode: str = "streaming") -> str:
     """
     Format LiveCamRips video card with Telegram blockquote and copyable links.
-    Layout:
-    <blockquote>📹 <b>{model_name}</b>
-    📅 <b>Date:</b> {date_str}
-    ⏱️ <b>Duration:</b> {duration}
-    🏷️ #{model_name} #{platform}</blockquote>
-
-    🌐 <b>Video Page:</b>
-    🔗 <code>{video_url}</code>
-
-    🍿 <b>Streaming Link:</b>
-    🔗 <code>{streaming_link}</code>
+    link_mode options:
+      - 'streaming' (default): Show only the streaming embed link(s)
+      - 'page': Show only the LiveCamRips video page link
+      - 'both': Show both Video Page and Streaming Link(s)
     """
     model_name = html.escape(clean_livecam_title(details.get("model_name") or details.get("title") or "Model"))
     date_str = html.escape(details.get("date") or "Recent")
@@ -1589,19 +1582,25 @@ def format_livecam_card(details: dict) -> str:
         lines.append(f"⏱️ <b>Duration:</b> {duration}")
     lines.append(f"🏷️ {tags_line}</blockquote>")
 
-    if video_url:
+    mode = (link_mode or "streaming").lower().strip()
+
+    # 1. Video Page Link (if mode is 'both' or 'page')
+    if mode in ["both", "page"] and video_url:
         lines.append(f"\n🌐 <b>Video Page:</b>\n🔗 <code>{video_url}</code>")
 
-    if streaming_links:
-        if len(streaming_links) == 1:
-            lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{html.escape(streaming_links[0])}</code>")
-        else:
-            lines.append("\n🍿 <b>Streaming Links:</b>")
-            for i, l in enumerate(streaming_links, 1):
-                badge = get_host_display_name(l)
-                lines.append(f"{i}. {badge}: <code>{html.escape(l)}</code>")
-    else:
-        lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{video_url}</code>")
+    # 2. Streaming Link (if mode is 'both' or 'streaming')
+    if mode in ["both", "streaming"]:
+        if streaming_links:
+            if len(streaming_links) == 1:
+                lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{html.escape(streaming_links[0])}</code>")
+            else:
+                lines.append("\n🍿 <b>Streaming Links:</b>")
+                for i, l in enumerate(streaming_links, 1):
+                    badge = get_host_display_name(l)
+                    lines.append(f"{i}. {badge}: <code>{html.escape(l)}</code>")
+        elif not (mode == "page" and video_url):
+            # Fallback to video_url if no iframe streaming link was resolved
+            lines.append(f"\n🍿 <b>Streaming Link:</b>\n🔗 <code>{video_url}</code>")
 
     return "\n".join(lines)
 

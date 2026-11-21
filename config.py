@@ -60,6 +60,9 @@ POST_SEND_DELAY = float(os.getenv("POST_SEND_DELAY", "1.5"))
 # HTTP Request Timeout (seconds)
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
 
+# Default LiveCamRips link mode: "streaming" (default), "both", "page"
+DEFAULT_LIVECAM_LINK_MODE = os.getenv("DEFAULT_LIVECAM_LINK_MODE", "streaming").strip().lower()
+
 # Proxy configuration
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip()
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "").strip()
