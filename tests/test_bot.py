@@ -5,7 +5,7 @@ Unit tests for bot message formatting, UI buttons, and database integration.
 
 import uuid
 import unittest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 from bot import format_post_card, group_links_by_host
 from scraper import get_host_display_name
 import db
@@ -288,8 +288,48 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         await setlink_command(update, context)
         self.assertEqual(db.get_user_link_mode(556677), "streaming")
 
-    async def test_callback_query_sp_mdl(self):
-        """Test callback_query_handler for model button (sp_mdl:) displays mode options without error."""
+    @patch("bot.get_livecam_model_stats")
+    async def test_callback_query_sp_mdl(self, mock_stats):
+        """Test callback_query_handler for model button (sp_mdl:) displays sorting options in blockquote."""
+        from bot import callback_query_handler
+
+        test_url = "https://livecamrips.to/model/36773/GoddessAnna"
+        short_id = db.get_or_create_short_id(test_url)
+        mock_stats.return_value = {
+            "name": "GoddessAnna",
+            "total_pages": 19,
+            "total_videos_str": "304 (19 Pages)",
+            "url": test_url,
+        }
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = f"sp_mdl:{short_id}"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        self.assertEqual(query.edit_message_text.call_count, 2)
+        final_call = query.edit_message_text.call_args_list[-1]
+        text = final_call[0][0]
+        self.assertTrue(text.startswith("<blockquote>"))
+        self.assertTrue(text.endswith("</blockquote>"))
+        self.assertIn("GoddessAnna", text)
+        self.assertIn("304 (19 Pages)", text)
+        self.assertNotIn("Sort chunein", text)
+
+        reply_markup = final_call[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn(f"sp_sort:{short_id}:newest", button_data)
+        self.assertIn(f"sp_sort:{short_id}:most_viewed", button_data)
+        self.assertIn(f"sp_sort:{short_id}:most_liked", button_data)
+        self.assertIn(f"sp_sort:{short_id}:oldest", button_data)
+        self.assertIn("sp_cancel", button_data)
+
+    async def test_callback_query_sp_sort(self):
+        """Test clicking sort button (sp_sort:) asks for range/count/page and sets user_data."""
         from bot import callback_query_handler
 
         test_url = "https://livecamrips.to/model/36773/GoddessAnna"
@@ -297,18 +337,119 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
 
         update = MagicMock()
         context = MagicMock()
+        context.user_data = {
+            f"model_stats_{short_id}": {
+                "name": "GoddessAnna",
+                "total_str": "304 (19 Pages)",
+                "url": test_url,
+            }
+        }
         query = AsyncMock()
-        query.data = f"sp_mdl:{short_id}"
+        query.data = f"sp_sort:{short_id}:most_viewed"
         query.message.chat_id = 12345
+        query.message.message_id = 67890
         update.callback_query = query
 
         await callback_query_handler(update, context)
         query.edit_message_text.assert_called_once()
-        args, kwargs = query.edit_message_text.call_args
-        self.assertIn("GoddessAnna", args[0])
-        button_data = [btn.callback_data for row in kwargs.get("reply_markup").inline_keyboard for btn in row]
-        self.assertIn(f"sp_run:{short_id}:10", button_data)
-        self.assertIn(f"sp_run:{short_id}:today", button_data)
+        text = query.edit_message_text.call_args[0][0]
+        self.assertTrue(text.startswith("<blockquote>"))
+        self.assertTrue(text.endswith("</blockquote>"))
+        self.assertIn("Most Viewed", text)
+        self.assertIn("Enter Range, Count or Page", text)
+
+        # Verify state stored in user_data
+        flow = context.user_data.get("awaiting_model_range")
+        self.assertIsNotNone(flow)
+        self.assertEqual(flow["short_id"], short_id)
+        self.assertEqual(flow["sort_by"], "most_viewed")
+        self.assertEqual(flow["chat_id"], 12345)
+        self.assertEqual(flow["message_id"], 67890)
+
+    @patch("bot.run_livecam_model_scrape")
+    async def test_handle_message_model_range_valid(self, mock_run_scrape):
+        """Test entering a valid range (e.g. 5-10) deletes user message and triggers scrape."""
+        from bot import handle_message
+
+        test_url = "https://livecamrips.to/model/36773/GoddessAnna"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "5-10"
+        msg.delete = AsyncMock()
+        update.message = msg
+        update.effective_message = msg
+        update.effective_chat.id = 12345
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot.edit_message_text = AsyncMock()
+        context.user_data = {
+            "awaiting_model_range": {
+                "short_id": short_id,
+                "url": test_url,
+                "model_name": "GoddessAnna",
+                "total_str": "304 (19 Pages)",
+                "sort_by": "most_liked",
+                "chat_id": 12345,
+                "message_id": 67890,
+            }
+        }
+
+        await handle_message(update, context)
+        # Message was deleted to keep chat clean
+        msg.delete.assert_called_once()
+        # Card edited in place
+        context.bot.edit_message_text.assert_called_once()
+        # State cleared
+        self.assertNotIn("awaiting_model_range", context.user_data)
+        # Scrape worker launched with correct args
+        mock_run_scrape.assert_called_once()
+        _, kwargs = mock_run_scrape.call_args
+        self.assertEqual(kwargs["sort_by"], "most_liked")
+        self.assertEqual(kwargs["start_idx"], 5)
+        self.assertEqual(kwargs["end_idx"], 10)
+        self.assertIsNone(kwargs["page_num"])
+
+    async def test_handle_message_model_range_invalid(self):
+        """Test entering invalid range updates the card with warning and retains prompt."""
+        from bot import handle_message
+
+        test_url = "https://livecamrips.to/model/36773/GoddessAnna"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "invalid_text"
+        msg.delete = AsyncMock()
+        update.message = msg
+        update.effective_message = msg
+        update.effective_chat.id = 12345
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot.edit_message_text = AsyncMock()
+        context.user_data = {
+            "awaiting_model_range": {
+                "short_id": short_id,
+                "url": test_url,
+                "model_name": "GoddessAnna",
+                "total_str": "304 (19 Pages)",
+                "sort_by": "newest",
+                "chat_id": 12345,
+                "message_id": 67890,
+            }
+        }
+
+        await handle_message(update, context)
+        msg.delete.assert_called_once()
+        context.bot.edit_message_text.assert_called_once()
+        args, kwargs = context.bot.edit_message_text.call_args
+        self.assertIn("Invalid format", kwargs["text"])
+        self.assertIn("invalid_text", kwargs["text"])
+        # State should still be active for user to retry
+        self.assertIn("awaiting_model_range", context.user_data)
 
 
 if __name__ == "__main__":

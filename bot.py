@@ -52,6 +52,8 @@ from scraper import (
     search_forum,
     search_livecam_models,
     clean_livecam_title,
+    get_livecam_model_stats,
+    parse_model_range_input,
     is_forum_url,
     is_topic_url,
     get_host_display_name,
@@ -435,36 +437,73 @@ async def run_livecam_model_scrape(
     chat_id: int | str,
     target_url: str,
     only_today: bool = False,
-    req_limit: int = 25,
+    sort_by: str = "newest",
+    start_idx: int = 1,
+    end_idx: int | None = None,
+    page_num: int | None = None,
+    req_limit: int | None = None,
     status_msg=None,
     user_id: int | str = None,
 ):
     """
     Standardized worker to scrape and deliver videos from a LiveCamRips model page.
-    Supports stopping, status updates, and graceful error handling.
+    Supports sorting, flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
     """
     cid = int(chat_id)
     uid = user_id or cid
     if is_chat_busy(cid):
-        txt = "⚠️ Another scrape is currently running in this chat. Use /stop first."
+        txt = "<blockquote>⚠️ Another scrape is currently running in this chat. Use /stop first.</blockquote>"
         if status_msg:
             try:
-                await status_msg.edit_text(txt)
+                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
             except Exception:
-                await bot.send_message(chat_id=cid, text=txt)
+                await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
         else:
-            await bot.send_message(chat_id=cid, text=txt)
+            await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
         return
 
     start_scrape_for_chat(cid)
     clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
     parts = [p for p in clean_u.split("/") if p]
-    page_num = 1
-    if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
-        page_num = int(parts[-1])
-    page_label = f" (Page {page_num})" if page_num > 1 else ""
+    model_name = clean_livecam_title(parts[-1] if len(parts) >= 3 else "Model")
 
-    loading_text = f"📂 <i>Scanning LiveCam model page{page_label}...</i>"
+    sort_labels = {
+        "newest": "Newest",
+        "most_viewed": "Most Viewed",
+        "most_liked": "Most Liked",
+        "oldest": "Oldest",
+    }
+    sort_label = sort_labels.get(sort_by, "Newest")
+
+    # Determine range and fetch params
+    if page_num is not None:
+        start_page = page_num
+        offset = 0
+        count = 16
+        limit_needed = 16
+        range_label = f"Page {page_num}"
+    elif end_idx is not None:
+        s_idx = max(1, start_idx or 1)
+        e_idx = max(s_idx, end_idx)
+        start_page = 1 + (s_idx - 1) // 16
+        offset = (s_idx - 1) % 16
+        count = e_idx - s_idx + 1
+        limit_needed = offset + count
+        range_label = f"{s_idx} to {e_idx}"
+    else:
+        count = req_limit or (50 if not only_today else 200)
+        start_page = 1
+        offset = 0
+        limit_needed = count
+        range_label = f"Top {count}" if not only_today else "Today's Uploads"
+
+    loading_text = (
+        "<blockquote>"
+        f"📹 <b>{html.escape(model_name)}</b>\n"
+        f"🎯 <b>Sort:</b> {sort_label}\n"
+        f"🔢 <b>Range:</b> {range_label}\n"
+        "⏳ <b>Status:</b> Scanning model page...</blockquote>"
+    )
     if status_msg:
         try:
             await status_msg.edit_text(loading_text, parse_mode=ParseMode.HTML)
@@ -474,14 +513,27 @@ async def run_livecam_model_scrape(
         status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
 
     try:
-        videos = await asyncio.to_thread(get_livecam_model_videos, target_url, only_today, req_limit)
-        videos = videos[:req_limit]
+        raw_videos = await asyncio.to_thread(
+            get_livecam_model_videos,
+            target_url,
+            only_today=only_today,
+            limit=limit_needed,
+            sort_by=sort_by,
+            start_page=start_page,
+        )
+        videos = raw_videos[offset : offset + count]
 
         if not videos:
             msg_text = (
-                "📅 <b>No uploads found today for this model!</b>"
+                "<blockquote>"
+                f"📹 <b>{html.escape(model_name)}</b>\n"
+                "📅 <b>No uploads found today for this model!</b></blockquote>"
                 if only_today
-                else f"❌ No videos found on this model page{page_label}."
+                else (
+                    "<blockquote>"
+                    f"📹 <b>{html.escape(model_name)}</b>\n"
+                    f"❌ No videos found for {range_label}.</blockquote>"
+                )
             )
             await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML)
             end_scrape_for_chat(cid)
@@ -490,14 +542,21 @@ async def run_livecam_model_scrape(
         stop_markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
         ]])
-        await status_msg.edit_text(f"✅ Found {len(videos)} video(s){page_label}! Extracting...", reply_markup=stop_markup)
+        extracting_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n"
+            f"🔢 <b>Range:</b> {range_label} ({len(videos)} videos)\n"
+            "⏳ <b>Status:</b> Extracting streaming links...</blockquote>"
+        )
+        await status_msg.edit_text(extracting_text, parse_mode=ParseMode.HTML, reply_markup=stop_markup)
 
         for idx, v in enumerate(videos, start=1):
             if is_scrape_cancelled(cid):
                 logger.info(f"Model scrape cancelled by user in chat {cid}")
                 await bot.send_message(
                     chat_id=cid,
-                    text=f"🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.",
+                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.</blockquote>",
                     parse_mode=ParseMode.HTML,
                 )
                 break
@@ -505,19 +564,19 @@ async def run_livecam_model_scrape(
             if is_scrape_cancelled(cid):
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Error scraping LiveCam model {target_url}: {e}", exc_info=True)
         try:
-            await status_msg.edit_text(f"❌ Error: {html.escape(str(e))}")
+            await status_msg.edit_text(f"<blockquote>❌ Error: {html.escape(str(e))}</blockquote>", parse_mode=ParseMode.HTML)
         except Exception:
             pass
     finally:
         end_scrape_for_chat(cid)
-
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
 
 
 
@@ -1369,54 +1428,65 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
     # 2. LiveCamRips Model Page
     if is_livecam_model_url(target_url):
+        if start_idx is not None or end_idx is not None or is_last_n:
+            end_scrape_for_chat(chat_id)
+            await run_livecam_model_scrape(
+                bot=context.bot,
+                chat_id=chat_id,
+                target_url=target_url,
+                start_idx=start_idx or 1,
+                end_idx=end_idx,
+                req_limit=(end_idx if (start_idx is None and end_idx) else None),
+                user_id=user_id,
+            )
+            return
+
+        end_scrape_for_chat(chat_id)
         clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
         parts = [p for p in clean_u.split("/") if p]
-        page_num = 1
-        if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
-            page_num = int(parts[-1])
-        page_label = f" (Page {page_num})" if page_num > 1 else ""
+        if parts and parts[-1].isdigit() and len(parts) >= 2 and not parts[-2].isdigit() and parts[-2] != "model":
+            clean_u = "/".join(clean_u.split("/")[:-1])
+            parts = [p for p in clean_u.split("/") if p]
 
-        status = await msg.reply_text(f"📂 <i>Scanning LiveCam model page{page_label}...</i>", parse_mode=ParseMode.HTML)
-        try:
-            req_limit = MAX_POSTS_PER_FORUM if (start_idx is None and end_idx is None and not is_last_n) else (end_idx or 50)
-            videos = await asyncio.to_thread(get_livecam_model_videos, target_url, False, req_limit)
-            if start_idx is not None or end_idx is not None or is_last_n:
-                videos = apply_slice(videos, start_idx, end_idx, is_last_n)
-            else:
-                videos = videos[:MAX_POSTS_PER_FORUM]
+        model_name = clean_livecam_title(parts[-1] if parts else "Model")
+        short_id = db.get_or_create_short_id(clean_u)
 
-            if not videos:
-                await status.edit_text(f"❌ No videos found on this model page{page_label}.")
-                end_scrape_for_chat(chat_id)
-                return
+        init_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            "⏳ <i>Loading model information...</i>"
+            "</blockquote>"
+        )
+        status_msg = await msg.reply_text(init_text, parse_mode=ParseMode.HTML)
+        stats = await asyncio.to_thread(get_livecam_model_stats, clean_u)
+        model_name = stats.get("name") or model_name
+        total_str = stats.get("total_videos_str") or "Available"
 
-            stop_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-            ]])
-            await status.edit_text(f"✅ Found {len(videos)} video(s){page_label}! Extracting...", reply_markup=stop_markup)
+        context.user_data[f"model_stats_{short_id}"] = {
+            "name": model_name,
+            "total_str": total_str,
+            "url": stats.get("url") or clean_u,
+        }
 
-            for idx, v in enumerate(videos, start=1):
-                if is_scrape_cancelled(chat_id):
-                    logger.info(f"Model scrape cancelled by user in chat {chat_id}")
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.",
-                        parse_mode=ParseMode.HTML,
-                    )
-                    break
-                await process_livecam_scrape(context.bot, chat_id, v, user_id=user_id)
-                if is_scrape_cancelled(chat_id):
-                    break
-                await cancellable_sleep(POST_SEND_DELAY, chat_id)
-        except Exception as e:
-            await status.edit_text(f"❌ Error: {html.escape(str(e))}")
-        finally:
-            end_scrape_for_chat(chat_id)
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🆕 Newest", callback_data=f"sp_sort:{short_id}:newest"),
+                InlineKeyboardButton("🔥 Most Viewed", callback_data=f"sp_sort:{short_id}:most_viewed"),
+            ],
+            [
+                InlineKeyboardButton("❤️ Most Liked", callback_data=f"sp_sort:{short_id}:most_liked"),
+                InlineKeyboardButton("⏳ Oldest", callback_data=f"sp_sort:{short_id}:oldest"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
 
-        try:
-            await status.delete()
-        except Exception:
-            pass
+        card_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            f"📊 <b>Total Videos:</b> {total_str}"
+            "</blockquote>"
+        )
+        await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
     # 3. DropMMS Single Topic
@@ -1492,6 +1562,120 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logger.info(f"📩 [handle_message] Received text from Chat {update.effective_chat.id} (User: {update.effective_user.id if update.effective_user else None}): {text!r}")
 
+    # 1. Interactive Model Range Input Flow
+    model_flow = context.user_data.get("awaiting_model_range")
+    if model_flow:
+        sort_labels = {
+            "newest": "Newest",
+            "most_viewed": "Most Viewed",
+            "most_liked": "Most Liked",
+            "oldest": "Oldest",
+        }
+        if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+            context.user_data.pop("awaiting_model_range", None)
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=model_flow["chat_id"],
+                    message_id=model_flow["message_id"],
+                    text="<blockquote>❌ Model extraction cancelled.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+            return
+
+        start_idx, end_idx, page_num = parse_model_range_input(text)
+        if start_idx is None and end_idx is None and page_num is None:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            sort_label = sort_labels.get(model_flow.get("sort_by", "newest"), "Newest")
+            invalid_text = (
+                "<blockquote>"
+                f"📹 <b>{html.escape(model_flow.get('model_name', 'Model'))}</b>\n"
+                f"📊 <b>Total Videos:</b> {model_flow.get('total_str', 'Available')}\n"
+                f"🎯 <b>Sort:</b> {sort_label}\n\n"
+                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n"
+                "Please enter a valid count, range, or page:\n"
+                "• <code>5</code> ➔ First 5 videos\n"
+                "• <code>1-5</code> ➔ Videos 1 to 5\n"
+                "• <code>5-10</code> ➔ Videos 5 to 10\n"
+                "• <code>page 1</code> ➔ Full Page 1"
+                "</blockquote>"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 Back", callback_data=f"sp_mdl:{model_flow['short_id']}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ]
+            ])
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=model_flow["chat_id"],
+                    message_id=model_flow["message_id"],
+                    text=invalid_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception:
+                pass
+            return
+
+        # Valid input provided: clean up state and user message
+        context.user_data.pop("awaiting_model_range", None)
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        sort_label = sort_labels.get(model_flow.get("sort_by", "newest"), "Newest")
+        if page_num is not None:
+            range_label = f"Page {page_num}"
+        elif end_idx is not None:
+            range_label = f"{start_idx} to {end_idx}"
+        else:
+            range_label = "Top 50"
+
+        loading_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_flow.get('model_name', 'Model'))}</b>\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n"
+            f"🔢 <b>Range:</b> {range_label}\n"
+            "⏳ <b>Status:</b> Scanning model page...</blockquote>"
+        )
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+
+        try:
+            status_msg = await context.bot.edit_message_text(
+                chat_id=model_flow["chat_id"],
+                message_id=model_flow["message_id"],
+                text=loading_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=stop_markup,
+            )
+        except Exception:
+            status_msg = None
+
+        await run_livecam_model_scrape(
+            bot=context.bot,
+            chat_id=model_flow["chat_id"],
+            target_url=model_flow["url"],
+            sort_by=model_flow.get("sort_by", "newest"),
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
+            page_num=page_num,
+            status_msg=status_msg,
+            user_id=update.effective_user.id if update.effective_user else None,
+        )
+        return
+
     # Allow users to stop simply by typing 'stop' or 'cancel' without slash
     if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
         await stop_command(update, context)
@@ -1561,31 +1745,112 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
         await execute_platform_search(update, context, plat, query_text, edit_msg=query.message)
     elif data.startswith("sp_mdl:"):
+        context.user_data.pop("awaiting_model_range", None)
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)
         if not url:
-            await query.edit_message_text("⚠️ Model link expired. Please search again.")
+            await query.edit_message_text("<blockquote>⚠️ Model link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
             return
 
         parts = url.rstrip("/").split("/")
-        model_name = parts[-1] if len(parts) >= 3 else "Model"
-        model_name = clean_livecam_title(model_name)
+        model_name = clean_livecam_title(parts[-1] if len(parts) >= 3 else "Model")
+
+        # Give immediate feedback while stats are fetched
+        try:
+            await query.edit_message_text(
+                f"<blockquote>📹 <b>{html.escape(model_name)}</b>\n⏳ <i>Fetching model stats...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+        stats = await asyncio.to_thread(get_livecam_model_stats, url)
+        model_name = stats.get("name") or model_name
+        total_str = stats.get("total_videos_str") or "Available"
+
+        context.user_data[f"model_stats_{short_id}"] = {
+            "name": model_name,
+            "total_str": total_str,
+            "url": stats.get("url") or url,
+        }
 
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_run:{short_id}:10"),
-                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_run:{short_id}:today"),
+                InlineKeyboardButton("🆕 Newest", callback_data=f"sp_sort:{short_id}:newest"),
+                InlineKeyboardButton("🔥 Most Viewed", callback_data=f"sp_sort:{short_id}:most_viewed"),
             ],
             [
-                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_run:{short_id}:25"),
-                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_run:{short_id}:50"),
+                InlineKeyboardButton("❤️ Most Liked", callback_data=f"sp_sort:{short_id}:most_liked"),
+                InlineKeyboardButton("⏳ Oldest", callback_data=f"sp_sort:{short_id}:oldest"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
         ])
+        card_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            f"📊 <b>Total Videos:</b> {total_str}"
+            "</blockquote>"
+        )
         await query.edit_message_text(
-            f"📹 <b>Model Selected:</b> <code>{html.escape(model_name)}</code>\n"
-            f"🔗 <code>{html.escape(url)}</code>\n\n"
-            "<i>Choose an extraction mode to start scraping:</i>",
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data.startswith("sp_sort:"):
+        _, short_id_str, sort_val = data.split(":")
+        short_id = int(short_id_str)
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Model link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        cached_stats = context.user_data.get(f"model_stats_{short_id}", {})
+        model_name = cached_stats.get("name")
+        total_str = cached_stats.get("total_str")
+        if not model_name or not total_str:
+            parts = url.rstrip("/").split("/")
+            model_name = clean_livecam_title(parts[-1] if len(parts) >= 3 else "Model")
+            total_str = "Available"
+
+        sort_labels = {
+            "newest": "Newest",
+            "most_viewed": "Most Viewed",
+            "most_liked": "Most Liked",
+            "oldest": "Oldest",
+        }
+        sort_label = sort_labels.get(sort_val, "Newest")
+
+        context.user_data["awaiting_model_range"] = {
+            "short_id": short_id,
+            "url": url,
+            "model_name": model_name,
+            "total_str": total_str,
+            "sort_by": sort_val,
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back", callback_data=f"sp_mdl:{short_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ]
+        ])
+
+        prompt_text = (
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            f"📊 <b>Total Videos:</b> {total_str}\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n\n"
+            "✏️ <b>Enter Range, Count or Page:</b>\n"
+            "• <code>5</code> ➔ First 5 videos\n"
+            "• <code>1-5</code> ➔ Videos 1 to 5\n"
+            "• <code>5-10</code> ➔ Videos 5 to 10\n"
+            "• <code>page 1</code> ➔ Full Page 1 (16 videos)"
+            "</blockquote>"
+        )
+        await query.edit_message_text(
+            prompt_text,
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
@@ -1613,8 +1878,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "sp_cancel":
         context.user_data.pop("awaiting_search", None)
         context.user_data.pop("search_query", None)
+        context.user_data.pop("awaiting_model_range", None)
         try:
-            await query.edit_message_text("❌ <i>Search closed.</i>", parse_mode=ParseMode.HTML)
+            await query.edit_message_text("<blockquote>❌ Cancelled.</blockquote>", parse_mode=ParseMode.HTML)
         except Exception:
             pass
     elif data == "cb_help":

@@ -708,6 +708,56 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(models[0]["thumb"], "https://images.livecamrips.to/1292/12922696.png")
         self.assertEqual(models[1]["name"], "GoddessAnnaxxx")
 
+    def test_parse_model_range_input(self):
+        """Test parsing various range/count/page input formats."""
+        from scraper import parse_model_range_input
+
+        # Single numbers
+        self.assertEqual(parse_model_range_input("5"), (1, 5, None))
+        self.assertEqual(parse_model_range_input("10"), (1, 10, None))
+        self.assertEqual(parse_model_range_input("0"), (None, None, None))
+
+        # Ranges
+        self.assertEqual(parse_model_range_input("1-5"), (1, 5, None))
+        self.assertEqual(parse_model_range_input("5-10"), (5, 10, None))
+        self.assertEqual(parse_model_range_input("5 to 10"), (5, 10, None))
+        self.assertEqual(parse_model_range_input("10-5"), (5, 10, None))
+
+        # Pages
+        self.assertEqual(parse_model_range_input("page 1"), (None, None, 1))
+        self.assertEqual(parse_model_range_input("page 2"), (None, None, 2))
+        self.assertEqual(parse_model_range_input("p2"), (None, None, 2))
+        self.assertEqual(parse_model_range_input("p 3"), (None, None, 3))
+        self.assertEqual(parse_model_range_input("page 0"), (None, None, None))
+
+        # Invalid
+        self.assertEqual(parse_model_range_input("invalid text"), (None, None, None))
+        self.assertEqual(parse_model_range_input("-5"), (None, None, None))
+
+    @patch("scraper._fetch_soup")
+    def test_get_livecam_model_stats(self, mock_fetch_soup):
+        """Test fetching and computing model statistics and total video counts."""
+        from scraper import get_livecam_model_stats
+
+        html = """
+        <html><body>
+            <h1>GoddessAnna</h1>
+            <figure class="tm-video-item" video-id="1"></figure>
+            <figure class="tm-video-item" video-id="2"></figure>
+            <ul class="pagination">
+                <li><a href="/model/36773/GoddessAnna/1">1</a></li>
+                <li><a href="/model/36773/GoddessAnna/2">2</a></li>
+                <li><a href="/model/36773/GoddessAnna/19">19</a></li>
+            </ul>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+        stats = get_livecam_model_stats("https://livecamrips.to/model/36773/GoddessAnna/2")
+        self.assertEqual(stats["name"], "GoddessAnna")
+        self.assertEqual(stats["total_pages"], 19)
+        self.assertEqual(stats["total_videos_str"], "304 (19 Pages)")
+        self.assertEqual(stats["url"], "https://livecamrips.to/model/36773/GoddessAnna")
+
 
 
 if __name__ == "__main__":

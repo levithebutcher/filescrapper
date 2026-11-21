@@ -1340,35 +1340,129 @@ def is_livecam_older_than_today(date_str: str | None) -> bool:
         return False
 
 
+def get_livecam_model_stats(model_url: str) -> dict:
+    """
+    Fetch model page metadata: model name, total pages, and estimated total videos.
+    Returns:
+      {
+        "name": "GoddessAnna",
+        "total_pages": 19,
+        "total_videos_str": "304 (19 Pages)",
+        "url": clean_base,
+      }
+    """
+    clean_base = model_url.split("?")[0].split("#")[0].rstrip("/")
+    parts = [p for p in clean_base.split("/") if p]
+    if parts and parts[-1].isdigit() and len(parts) >= 2 and not parts[-2].isdigit() and parts[-2] != "model":
+        clean_base = "/".join(clean_base.split("/")[:-1])
+        parts = [p for p in clean_base.split("/") if p]
+
+    soup = _fetch_soup(f"{clean_base}?sort=newest")
+    if not soup:
+        name = parts[-1] if parts else "Model"
+        return {"name": clean_livecam_title(name), "total_pages": 1, "total_videos_str": "Available", "url": clean_base}
+
+    h1 = soup.find("h1")
+    name = h1.get_text(strip=True) if h1 else (parts[-1] if parts else "Model")
+    name = clean_livecam_title(name)
+
+    pages = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/model/" in href:
+            p_parts = href.split("?")[0].rstrip("/").split("/")
+            if p_parts and p_parts[-1].isdigit():
+                pages.append(int(p_parts[-1]))
+
+    max_page = max(pages) if pages else 1
+    figs_on_p1 = len(soup.find_all("figure"))
+
+    if max_page == 1:
+        total_str = f"{figs_on_p1} (1 Page)" if figs_on_p1 > 0 else "Available"
+    else:
+        total_str = f"{max_page * 16} ({max_page} Pages)"
+
+    return {
+        "name": name,
+        "total_pages": max_page,
+        "total_videos_str": total_str,
+        "url": clean_base,
+    }
+
+
+def parse_model_range_input(text: str) -> tuple[int | None, int | None, int | None]:
+    """
+    Parse user range input for model scraping.
+    Returns: (start_idx, end_idx, page_num)
+      - "5" -> (1, 5, None)
+      - "1-5" -> (1, 5, None)
+      - "5-10" -> (5, 10, None)
+      - "page 2" or "p2" -> (None, None, 2)
+    """
+    t = text.strip().lower()
+
+    # Page format: page 2, p2, page2, p 2
+    m_page = re.match(r"^(?:page\s*|p\s*)(\d+)$", t)
+    if m_page:
+        p = int(m_page.group(1))
+        return (None, None, p) if p > 0 else (None, None, None)
+
+    # Range format: 1-5, 5-10, 5 to 10, 5:10, 5..10
+    m_range = re.match(r"^(\d+)\s*(?:-|to|:|\.\.)\s*(\d+)$", t)
+    if m_range:
+        s, e = int(m_range.group(1)), int(m_range.group(2))
+        if s > e:
+            s, e = e, s
+        if e < 1:
+            return (None, None, None)
+        s = max(1, s)
+        return (s, e, None)
+
+    # Single number: 5, 10
+    if t.isdigit():
+        n = int(t)
+        return (1, n, None) if n > 0 else (None, None, None)
+
+    return (None, None, None)
+
+
 def get_livecam_model_videos(
     model_url: str,
     only_today: bool = False,
     limit: int | None = None,
+    sort_by: str = "newest",
+    start_page: int | None = None,
 ) -> list[dict]:
     """
-    Extract video items from a LiveCamRips model page in date-wise order (Newest -> Oldest).
+    Extract video items from a LiveCamRips model page in sorted order.
+    sort_by options: 'newest', 'most_viewed', 'most_liked', 'oldest'
     If only_today=True, strictly filters for videos posted today and breaks on older videos.
     """
     clean_base = model_url.split("?")[0].split("#")[0].rstrip("/")
-    start_page = 1
+    detected_start = 1
     parts = [p for p in clean_base.split("/") if p]
-    if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
-        start_page = max(1, int(parts[-1]))
+    if parts and parts[-1].isdigit() and len(parts) >= 2 and not parts[-2].isdigit() and parts[-2] != "model":
+        detected_start = max(1, int(parts[-1]))
         clean_base = "/".join(clean_base.split("/")[:-1])
+
+    page_to_start = start_page if start_page is not None else detected_start
+    clean_sort = (sort_by or "newest").lower().strip()
+    if clean_sort not in ["newest", "most_viewed", "most_liked", "oldest"]:
+        clean_sort = "newest"
 
     req_limit = limit or (50 if not only_today else 200)
     pages_to_scan = 10 if only_today else max(5, (req_limit + 15) // 16)
-    max_pages = start_page + pages_to_scan - 1
+    max_pages = page_to_start + pages_to_scan - 1
 
     videos = []
     seen_ids = set()
-    current_page = start_page
+    current_page = page_to_start
 
     while len(videos) < req_limit and current_page <= max_pages:
         if current_page == 1:
-            target_url = f"{clean_base}?sort=newest"
+            target_url = f"{clean_base}?sort={clean_sort}"
         else:
-            target_url = f"{clean_base}/{current_page}?sort=newest"
+            target_url = f"{clean_base}/{current_page}?sort={clean_sort}"
 
         try:
             logger.info(f"📄 Fetching LiveCam model page {current_page}: {target_url}")
