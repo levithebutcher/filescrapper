@@ -639,6 +639,32 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(len(topics), 5)
         self.assertEqual([t["title"] for t in topics], ["Post 1", "Post 2", "Post 3", "Post 4", "Post 5"])
 
+    @patch("scraper._fetch_soup")
+    def test_get_livecam_model_videos_multipage(self, mock_fetch_soup):
+        """Test multi-page crawling for LiveCamRips model pages."""
+        from scraper import get_livecam_model_videos
+
+        p1_html = """
+        <html><body>
+            <figure video-id="101" class="tm-video-item"><a href="/video/101"></a></figure>
+            <figure video-id="102" class="tm-video-item"><a href="/video/102"></a></figure>
+        </body></html>
+        """
+        p2_html = """
+        <html><body>
+            <figure video-id="103" class="tm-video-item"><a href="/video/103"></a></figure>
+            <figure video-id="104" class="tm-video-item"><a href="/video/104"></a></figure>
+        </body></html>
+        """
+        mock_fetch_soup.side_effect = [
+            BeautifulSoup(p1_html, "html.parser"),
+            BeautifulSoup(p2_html, "html.parser"),
+        ]
+
+        videos = get_livecam_model_videos("https://livecamrips.to/model/36773/GoddessAnna", only_today=False, limit=4)
+        self.assertEqual(len(videos), 4)
+        self.assertEqual([v["video_id"] for v in videos], ["101", "102", "103", "104"])
+
 
 if __name__ == "__main__":
     unittest.main()

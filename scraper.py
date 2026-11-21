@@ -17,8 +17,15 @@ try:
     from curl_cffi import requests as cffi_requests
     HAS_CURL_CFFI = True
 except ImportError:
-    cffi_requests = None
-    HAS_CURL_CFFI = False
+    try:
+        import subprocess
+        import sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "curl_cffi>=0.7.0"])
+        from curl_cffi import requests as cffi_requests
+        HAS_CURL_CFFI = True
+    except Exception:
+        cffi_requests = None
+        HAS_CURL_CFFI = False
 
 try:
     import cloudscraper
@@ -243,63 +250,95 @@ def extract_tags_and_quality(title: str) -> tuple[str, list[str]]:
     return title, tags
 
 
+_cffi_session = None
+
+
+def get_cffi_session():
+    """Get or create persistent curl_cffi Session with cookies preserved across requests."""
+    global _cffi_session, HAS_CURL_CFFI, cffi_requests
+    if _cffi_session is not None:
+        return _cffi_session
+
+    if not HAS_CURL_CFFI:
+        try:
+            from curl_cffi import requests as cffi_req
+            cffi_requests = cffi_req
+            HAS_CURL_CFFI = True
+        except ImportError:
+            try:
+                import subprocess
+                import sys
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "curl_cffi>=0.7.0"])
+                from curl_cffi import requests as cffi_req
+                cffi_requests = cffi_req
+                HAS_CURL_CFFI = True
+            except Exception as e:
+                logger.warning(f"Could not initialize curl_cffi: {e}")
+                return None
+
+    if HAS_CURL_CFFI and cffi_requests is not None:
+        try:
+            _cffi_session = cffi_requests.Session(impersonate="chrome120")
+            if PROXIES:
+                _cffi_session.proxies.update(PROXIES)
+            return _cffi_session
+        except Exception as e:
+            logger.debug(f"Failed to create cffi Session: {e}")
+            return None
+    return None
+
+
 def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
     """
     Intelligent multi-tier HTTP fetcher:
-    - Bypasses Cloudflare anti-bot 403 on Google Colab / datacenter IPs using curl_cffi
-      with Chrome 124 TLS and HTTP/2 browser fingerprint impersonation.
+    - Bypasses Cloudflare anti-bot 403 on Google Colab / datacenter IPs using persistent curl_cffi Session
+      with authentic browser TLS/HTTP-2 fingerprint and session cookie persistence.
     - Falls back to cloudscraper if curl_cffi is unavailable or fails.
     - Uses robust requests.Session for standard sites with connection pooling.
     """
     is_cf_target = "livecamrips.to" in url.lower()
 
-    # Priority 1: curl_cffi for Cloudflare-protected domains (livecamrips.to)
-    if is_cf_target and HAS_CURL_CFFI:
-        try:
-            resp = cffi_requests.get(
-                url,
-                impersonate="chrome124",
-                timeout=timeout,
-                headers=HEADERS,
-                proxies=PROXIES if PROXIES else None,
-            )
-            if resp.status_code < 400:
-                return resp
-        except Exception as e:
-            logger.debug(f"curl_cffi fetch note for {url}: {e}")
+    # Priority 1: curl_cffi Session for Cloudflare-protected domains (livecamrips.to)
+    if is_cf_target:
+        session = get_cffi_session()
+        if session:
+            for browser in ["chrome120", "chrome124", "safari17_0", "edge101"]:
+                try:
+                    resp = session.get(url, impersonate=browser, timeout=timeout)
+                    if resp.status_code < 400:
+                        return resp
+                    logger.debug(f"curl_cffi ({browser}) returned status {resp.status_code} for {url}")
+                except Exception as e:
+                    logger.debug(f"curl_cffi ({browser}) note for {url}: {e}")
 
-    # Priority 2: cloudscraper
-    if is_cf_target and HAS_CLOUDSCRAPER:
-        try:
-            scraper = cloudscraper.create_scraper()
-            resp = scraper.get(
-                url,
-                timeout=timeout,
-                headers=HEADERS,
-                proxies=PROXIES if PROXIES else None,
-            )
-            if resp.status_code < 400:
-                return resp
-        except Exception as e:
-            logger.debug(f"cloudscraper fetch note for {url}: {e}")
-
-    # Priority 3: Standard requests.Session
-    resp = _session.get(url, timeout=timeout)
-    if resp.status_code == 403 and (HAS_CURL_CFFI or HAS_CLOUDSCRAPER):
-        # Auto-retry with curl_cffi if standard requests encountered 403 Forbidden
-        if HAS_CURL_CFFI:
+        # Priority 2: cloudscraper fallback
+        if HAS_CLOUDSCRAPER:
             try:
-                cffi_resp = cffi_requests.get(
+                scraper = cloudscraper.create_scraper()
+                resp = scraper.get(
                     url,
-                    impersonate="chrome124",
                     timeout=timeout,
                     headers=HEADERS,
                     proxies=PROXIES if PROXIES else None,
                 )
-                if cffi_resp.status_code < 400:
-                    return cffi_resp
-            except Exception:
-                pass
+                if resp.status_code < 400:
+                    return resp
+            except Exception as e:
+                logger.debug(f"cloudscraper fetch note for {url}: {e}")
+
+    # Priority 3: Standard requests.Session
+    resp = _session.get(url, timeout=timeout)
+    if resp.status_code == 403:
+        # Auto-retry with curl_cffi session if standard requests encountered 403 Forbidden
+        session = get_cffi_session()
+        if session:
+            for browser in ["chrome120", "chrome124"]:
+                try:
+                    cffi_resp = session.get(url, impersonate=browser, timeout=timeout)
+                    if cffi_resp.status_code < 400:
+                        return cffi_resp
+                except Exception:
+                    pass
         if HAS_CLOUDSCRAPER:
             try:
                 scraper = cloudscraper.create_scraper()
@@ -1310,78 +1349,119 @@ def get_livecam_model_videos(
     Extract video items from a LiveCamRips model page in date-wise order (Newest -> Oldest).
     If only_today=True, strictly filters for videos posted today and breaks on older videos.
     """
-    target_url = model_url.strip()
-    if "sort=" not in target_url:
-        sep = "&" if "?" in target_url else "?"
-        target_url = f"{target_url}{sep}sort=newest"
+    clean_base = model_url.split("?")[0].split("#")[0].rstrip("/")
+    start_page = 1
+    parts = [p for p in clean_base.split("/") if p]
+    if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
+        start_page = max(1, int(parts[-1]))
+        clean_base = "/".join(clean_base.split("/")[:-1])
 
-    soup = _fetch_soup(target_url)
+    req_limit = limit or (50 if not only_today else 200)
+    pages_to_scan = 10 if only_today else max(5, (req_limit + 15) // 16)
+    max_pages = start_page + pages_to_scan - 1
+
     videos = []
+    seen_ids = set()
+    current_page = start_page
 
-    figures = soup.find_all("figure", class_=re.compile(r"\btm-video-item\b", re.I))
-    for fig in figures:
-        video_id = fig.get("video-id")
-        a_tag = fig.find("a", href=True)
-        video_url = urljoin(model_url, a_tag["href"].strip()) if a_tag else f"https://livecamrips.to/video/{video_id}"
+    while len(videos) < req_limit and current_page <= max_pages:
+        if current_page == 1:
+            target_url = f"{clean_base}?sort=newest"
+        else:
+            target_url = f"{clean_base}/{current_page}?sort=newest"
 
-        img_tag = fig.find("img")
-        thumb = img_tag.get("src") if img_tag else None
+        try:
+            logger.info(f"📄 Fetching LiveCam model page {current_page}: {target_url}")
+            soup = _fetch_soup(target_url)
+        except Exception as e:
+            logger.warning(f"Could not fetch LiveCam model page {current_page} ({target_url}): {e}")
+            break
 
-        dur_tag = fig.find("span", class_=re.compile(r"\btm-bg-dark\b", re.I))
-        duration = dur_tag.get_text(strip=True) if dur_tag else None
+        figures = soup.find_all("figure", class_=re.compile(r"\btm-video-item\b", re.I))
+        if not figures:
+            figures = soup.find_all("figure", attrs={"video-id": True})
+        if not figures:
+            break
 
-        parent = fig.parent
-        date_str = None
-        model_name = None
-        platform = None
+        hit_older = False
+        new_on_page = 0
 
-        if parent:
-            date_span = parent.find("span", string=re.compile(r"\d{4}-\d{2}-\d{2}", re.I))
-            if date_span:
-                date_str = date_span.get_text(strip=True)
-
-            model_tag = parent.find("span", class_=re.compile(r"\btm-text-gray-light\b", re.I))
-            if model_tag:
-                model_name = model_tag.get_text(strip=True)
-
-            plat_a = parent.find("a", href=re.compile(r"/website/", re.I))
-            if plat_a:
-                platform = plat_a.get_text(strip=True)
-
-        if not model_name:
-            parts = [p for p in urlparse(model_url).path.split("/") if p]
-            if len(parts) >= 3 and parts[0] == "model":
-                model_name = parts[2]
-            else:
-                model_name = "Model"
-
-        model_name = clean_livecam_title(model_name)
-        date_display = format_livecam_date(date_str)
-
-        # Date-wise cutoff when filtering for today's uploads
-        if only_today and date_str:
-            if is_livecam_older_than_today(date_str):
-                logger.info(f"Hit LiveCamRips date cutoff at older video: {date_str}. Stopping scan.")
-                break
-            if not is_livecam_today(date_str):
+        for fig in figures:
+            video_id = fig.get("video-id")
+            if video_id and video_id in seen_ids:
                 continue
 
-        videos.append({
-            "video_id": video_id,
-            "video_url": video_url,
-            "url": video_url,
-            "thumb": thumb,
-            "thumbnail": thumb,
-            "duration": duration,
-            "raw_date": date_str,
-            "date": date_display,
-            "model_name": model_name,
-            "title": model_name,
-            "platform": platform or "Stripchat",
-        })
+            a_tag = fig.find("a", href=True)
+            video_url = urljoin(model_url, a_tag["href"].strip()) if a_tag else f"https://livecamrips.to/video/{video_id}"
 
-        if limit and len(videos) >= limit:
+            img_tag = fig.find("img")
+            thumb = img_tag.get("src") if img_tag else None
+
+            dur_tag = fig.find("span", class_=re.compile(r"\btm-bg-dark\b", re.I))
+            duration = dur_tag.get_text(strip=True) if dur_tag else None
+
+            parent = fig.parent
+            date_str = None
+            model_name = None
+            platform = None
+
+            if parent:
+                date_span = parent.find("span", string=re.compile(r"\d{4}-\d{2}-\d{2}", re.I))
+                if date_span:
+                    date_str = date_span.get_text(strip=True)
+
+                model_tag = parent.find("span", class_=re.compile(r"\btm-text-gray-light\b", re.I))
+                if model_tag:
+                    model_name = model_tag.get_text(strip=True)
+
+                plat_a = parent.find("a", href=re.compile(r"/website/", re.I))
+                if plat_a:
+                    platform = plat_a.get_text(strip=True)
+
+            if not model_name:
+                parts_path = [p for p in urlparse(clean_base).path.split("/") if p]
+                if len(parts_path) >= 3 and parts_path[0] == "model":
+                    model_name = parts_path[2]
+                else:
+                    model_name = "Model"
+
+            model_name = clean_livecam_title(model_name)
+            date_display = format_livecam_date(date_str)
+
+            # Date-wise cutoff when filtering for today's uploads
+            if only_today and date_str:
+                if is_livecam_older_than_today(date_str):
+                    logger.info(f"Hit LiveCamRips date cutoff at older video: {date_str}. Stopping scan.")
+                    hit_older = True
+                    break
+                if not is_livecam_today(date_str):
+                    continue
+
+            if video_id:
+                seen_ids.add(video_id)
+            new_on_page += 1
+
+            videos.append({
+                "video_id": video_id,
+                "video_url": video_url,
+                "url": video_url,
+                "thumb": thumb,
+                "thumbnail": thumb,
+                "duration": duration,
+                "raw_date": date_str,
+                "date": date_display,
+                "model_name": model_name,
+                "title": model_name,
+                "platform": platform or "Stripchat",
+            })
+
+            if len(videos) >= req_limit:
+                break
+
+        if hit_older or new_on_page == 0:
             break
+
+        current_page += 1
 
     return videos
 

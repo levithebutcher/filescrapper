@@ -1092,23 +1092,31 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
     # 2. LiveCamRips Model Page
     if is_livecam_model_url(target_url):
-        status = await msg.reply_text("📂 <i>Scanning LiveCam model page...</i>", parse_mode=ParseMode.HTML)
+        clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
+        parts = [p for p in clean_u.split("/") if p]
+        page_num = 1
+        if len(parts) >= 4 and parts[0] == "model" and parts[-1].isdigit():
+            page_num = int(parts[-1])
+        page_label = f" (Page {page_num})" if page_num > 1 else ""
+
+        status = await msg.reply_text(f"📂 <i>Scanning LiveCam model page{page_label}...</i>", parse_mode=ParseMode.HTML)
         try:
-            videos = await asyncio.to_thread(get_livecam_model_videos, target_url, False, 50)
+            req_limit = MAX_POSTS_PER_FORUM if (start_idx is None and end_idx is None and not is_last_n) else (end_idx or 50)
+            videos = await asyncio.to_thread(get_livecam_model_videos, target_url, False, req_limit)
             if start_idx is not None or end_idx is not None or is_last_n:
                 videos = apply_slice(videos, start_idx, end_idx, is_last_n)
             else:
                 videos = videos[:MAX_POSTS_PER_FORUM]
 
             if not videos:
-                await status.edit_text("❌ No videos found on this model page.")
+                await status.edit_text(f"❌ No videos found on this model page{page_label}.")
                 end_scrape_for_chat(chat_id)
                 return
 
             stop_markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
             ]])
-            await status.edit_text(f"✅ Found {len(videos)} video(s)! Extracting...", reply_markup=stop_markup)
+            await status.edit_text(f"✅ Found {len(videos)} video(s){page_label}! Extracting...", reply_markup=stop_markup)
 
             for idx, v in enumerate(videos, start=1):
                 if is_scrape_cancelled(chat_id):
