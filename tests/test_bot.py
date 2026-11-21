@@ -288,6 +288,28 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         await setlink_command(update, context)
         self.assertEqual(db.get_user_link_mode(556677), "streaming")
 
+    async def test_callback_query_sp_mdl(self):
+        """Test callback_query_handler for model button (sp_mdl:) displays mode options without error."""
+        from bot import callback_query_handler
+
+        test_url = "https://livecamrips.to/model/36773/GoddessAnna"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        context = MagicMock()
+        query = AsyncMock()
+        query.data = f"sp_mdl:{short_id}"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        args, kwargs = query.edit_message_text.call_args
+        self.assertIn("GoddessAnna", args[0])
+        button_data = [btn.callback_data for row in kwargs.get("reply_markup").inline_keyboard for btn in row]
+        self.assertIn(f"sp_run:{short_id}:10", button_data)
+        self.assertIn(f"sp_run:{short_id}:today", button_data)
+
 
 if __name__ == "__main__":
     unittest.main()
