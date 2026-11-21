@@ -451,6 +451,133 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         # State should still be active for user to retry
         self.assertIn("awaiting_model_range", context.user_data)
 
+    @patch("bot.get_dropmms_forums")
+    async def test_callback_query_sp_choose_fm(self, mock_forums):
+        """Test clicking DropMMS Forum in /search displays category buttons and keyword search option."""
+        from bot import callback_query_handler
+
+        mock_forums.return_value = [
+            {"title": "Desi Videos & MMS", "url": "https://dropmms.com/forum/4-desi/"},
+            {"title": "General Discussion", "url": "https://dropmms.com/forum/2-general/"},
+        ]
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = "sp_choose:fm"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        self.assertEqual(query.edit_message_text.call_count, 2)
+        final_call = query.edit_message_text.call_args_list[-1]
+        text = final_call[0][0]
+        self.assertIn("DropMMS Forums", text)
+        self.assertIn("Select a forum category", text)
+
+        reply_markup = final_call[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertTrue(any(b.startswith("sp_cat:") for b in button_data))
+        self.assertIn("sp_choose_kw:fm", button_data)
+        self.assertIn("cb_search", button_data)
+        self.assertIn("sp_cancel", button_data)
+
+    async def test_callback_query_sp_cat(self):
+        """Test clicking a forum category button displays extraction modes."""
+        from bot import callback_query_handler
+
+        test_url = "https://dropmms.com/forum/4-desi/"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = f"sp_cat:{short_id}"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args[0][0]
+        self.assertTrue(text.startswith("<blockquote>"))
+        self.assertIn("Desi", text)
+
+        reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn(f"sp_crun:{short_id}:10", button_data)
+        self.assertIn(f"sp_crun:{short_id}:today", button_data)
+        self.assertIn(f"sp_crun:{short_id}:25", button_data)
+        self.assertIn(f"sp_crun:{short_id}:50", button_data)
+        self.assertIn(f"sp_cstm:{short_id}", button_data)
+
+    async def test_callback_query_sp_cstm(self):
+        """Test clicking Custom Range button for a forum category sets user_data prompt."""
+        from bot import callback_query_handler
+
+        test_url = "https://dropmms.com/forum/4-desi/"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {
+            f"cat_info_{short_id}": {"title": "Desi Videos & MMS", "url": test_url}
+        }
+        query = AsyncMock()
+        query.data = f"sp_cstm:{short_id}"
+        query.message.chat_id = 12345
+        query.message.message_id = 77777
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args[0][0]
+        self.assertIn("Enter Range, Count or Page", text)
+
+        cat_flow = context.user_data.get("awaiting_category_range")
+        self.assertIsNotNone(cat_flow)
+        self.assertEqual(cat_flow["short_id"], short_id)
+        self.assertEqual(cat_flow["chat_id"], 12345)
+        self.assertEqual(cat_flow["message_id"], 77777)
+
+    @patch("bot.run_forum_category_scrape")
+    async def test_handle_message_category_range_valid(self, mock_cat_scrape):
+        """Test entering a valid range for forum category deletes user message and triggers scrape."""
+        from bot import handle_message
+
+        test_url = "https://dropmms.com/forum/4-desi/"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "page 2"
+        msg.delete = AsyncMock()
+        update.message = msg
+        update.effective_message = msg
+        update.effective_chat.id = 12345
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot.edit_message_text = AsyncMock()
+        context.user_data = {
+            "awaiting_category_range": {
+                "short_id": short_id,
+                "url": test_url,
+                "cat_title": "Desi Videos & MMS",
+                "chat_id": 12345,
+                "message_id": 77777,
+            }
+        }
+
+        await handle_message(update, context)
+        msg.delete.assert_called_once()
+        context.bot.edit_message_text.assert_called_once()
+        self.assertNotIn("awaiting_category_range", context.user_data)
+        mock_cat_scrape.assert_called_once()
+        _, kwargs = mock_cat_scrape.call_args
+        self.assertEqual(kwargs["page_num"], 2)
+        self.assertIsNone(kwargs["end_idx"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -758,6 +758,48 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(stats["total_videos_str"], "304 (19 Pages)")
         self.assertEqual(stats["url"], "https://livecamrips.to/model/36773/GoddessAnna")
 
+    @patch("scraper._fetch_soup")
+    def test_get_dropmms_forums(self, mock_fetch_soup):
+        """Test dynamic extraction and fallback for DropMMS forum categories."""
+        from scraper import get_dropmms_forums
+
+        html = """
+        <html><body>
+            <ol>
+                <li class="ipsDataItem">
+                    <h4 class="ipsDataItem_title">
+                        <a href="https://dropmms.com/forum/4-desi-new-semi-nude-masked-no-face-videos-pics/">Desi Videos & MMS</a>
+                    </h4>
+                </li>
+                <li class="ipsDataItem">
+                    <h4 class="ipsDataItem_title">
+                        <a href="/forum/2-general/">General Discussion</a>
+                    </h4>
+                </li>
+                <li class="ipsDataItem">
+                    <h4 class="ipsDataItem_title">
+                        <a href="/forum/6-exclusive/">Exclusive Drops (12)</a>
+                    </h4>
+                </li>
+            </ol>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+        forums = get_dropmms_forums()
+        titles = [f["title"] for f in forums]
+        self.assertIn("Desi Videos & MMS", titles)
+        self.assertIn("General Discussion", titles)
+        self.assertIn("Exclusive Drops", titles)
+
+    @patch("scraper._fetch_soup")
+    def test_get_dropmms_forums_fallback(self, mock_fetch_soup):
+        """Test fallback when DropMMS home page fails to load."""
+        from scraper import get_dropmms_forums, DEFAULT_DROP_FORUMS
+
+        mock_fetch_soup.return_value = None
+        forums = get_dropmms_forums()
+        self.assertEqual(forums, DEFAULT_DROP_FORUMS)
+
 
 
 if __name__ == "__main__":

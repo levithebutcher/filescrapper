@@ -54,6 +54,7 @@ from scraper import (
     clean_livecam_title,
     get_livecam_model_stats,
     parse_model_range_input,
+    get_dropmms_forums,
     is_forum_url,
     is_topic_url,
     get_host_display_name,
@@ -571,6 +572,156 @@ async def run_livecam_model_scrape(
             pass
     except Exception as e:
         logger.error(f"Error scraping LiveCam model {target_url}: {e}", exc_info=True)
+        try:
+            await status_msg.edit_text(f"<blockquote>❌ Error: {html.escape(str(e))}</blockquote>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    finally:
+        end_scrape_for_chat(cid)
+
+
+async def run_forum_category_scrape(
+    bot,
+    chat_id: int | str,
+    target_url: str,
+    only_today: bool = False,
+    start_idx: int | None = None,
+    end_idx: int | None = None,
+    page_num: int | None = None,
+    req_limit: int | None = None,
+    is_last_n: bool = False,
+    status_msg=None,
+    user_id: int | str = None,
+    cat_title: str | None = None,
+):
+    """
+    Standardized worker to scrape and deliver topics from a DropMMS forum category.
+    Supports today-only, flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
+    """
+    cid = int(chat_id)
+    uid = user_id or cid
+    if is_chat_busy(cid):
+        txt = "<blockquote>⚠️ Another scrape is currently running in this chat. Use /stop first.</blockquote>"
+        if status_msg:
+            try:
+                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
+            except Exception:
+                await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        return
+
+    start_scrape_for_chat(cid)
+
+    # Clean target URL and determine title
+    clean_base = target_url.split("?")[0].split("#")[0].rstrip("/")
+    if not cat_title:
+        parts = [p for p in clean_base.split("/") if p]
+        raw_slug = parts[-1] if parts else "Forum"
+        if raw_slug.isdigit() and len(parts) >= 2 and parts[-2] == "page":
+            raw_slug = parts[-3] if len(parts) >= 3 else "Forum"
+        slug_clean = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title()
+        cat_title = slug_clean or "Forum Category"
+
+    # Construct URL if page_num specified
+    effective_url = target_url
+    if page_num is not None:
+        effective_url = re.sub(r"/page/\d+/?", "/", clean_base)
+        effective_url = f"{effective_url.rstrip('/')}/page/{page_num}/"
+        range_label = f"Page {page_num}"
+        limit_needed = req_limit or 25
+    elif end_idx is not None:
+        s_idx = max(1, start_idx or 1)
+        range_label = f"{s_idx} to {end_idx}"
+        limit_needed = max(end_idx, 25)
+    elif is_last_n and end_idx is not None:
+        range_label = f"Last {end_idx}"
+        limit_needed = max(end_idx, 25)
+    elif only_today:
+        range_label = "Today's Uploads"
+        limit_needed = req_limit or 100
+    else:
+        count = req_limit or 25
+        range_label = f"Top {count}"
+        limit_needed = count
+
+    loading_text = (
+        "<blockquote>"
+        f"💬 <b>{html.escape(cat_title)}</b>\n"
+        f"🔢 <b>Range:</b> {range_label}\n"
+        "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
+    )
+    if status_msg:
+        try:
+            await status_msg.edit_text(loading_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    else:
+        status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+
+    try:
+        raw_topics = await asyncio.to_thread(
+            get_forum_topics,
+            effective_url,
+            sort_by="start_date",
+            limit=limit_needed,
+            only_today=only_today,
+        )
+
+        if start_idx is not None or end_idx is not None or is_last_n:
+            topics = apply_slice(raw_topics, start_idx, end_idx, is_last_n)
+        elif not only_today:
+            topics = raw_topics[:limit_needed]
+        else:
+            topics = raw_topics
+
+        if not topics:
+            msg_text = (
+                "<blockquote>"
+                f"💬 <b>{html.escape(cat_title)}</b>\n"
+                "📅 <b>No uploads found today in this category!</b></blockquote>"
+                if only_today
+                else (
+                    "<blockquote>"
+                    f"💬 <b>{html.escape(cat_title)}</b>\n"
+                    f"❌ No topics found for {range_label}.</blockquote>"
+                )
+            )
+            await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML)
+            end_scrape_for_chat(cid)
+            return
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        extracting_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🔢 <b>Range:</b> {range_label} ({len(topics)} topics)\n"
+            "⏳ <b>Status:</b> Extracting streaming links...</blockquote>"
+        )
+        await status_msg.edit_text(extracting_text, parse_mode=ParseMode.HTML, reply_markup=stop_markup)
+
+        for idx, t in enumerate(topics, start=1):
+            if is_scrape_cancelled(cid):
+                logger.info(f"Category scrape cancelled by user in chat {cid}")
+                await bot.send_message(
+                    chat_id=cid,
+                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(topics)} topics.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+                break
+            await process_topic_scrape(bot, cid, t["url"], user_id=uid)
+            if is_scrape_cancelled(cid):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, cid)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Error scraping forum category {target_url}: {e}", exc_info=True)
         try:
             await status_msg.edit_text(f"<blockquote>❌ Error: {html.escape(str(e))}</blockquote>", parse_mode=ParseMode.HTML)
         except Exception:
@@ -1504,51 +1655,52 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
     # 4. DropMMS Forum Category
     if is_forum_url(target_url):
-        m_p = re.search(r"/page/(\d+)", target_url, re.I) or re.search(r"[?&]page=(\d+)", target_url, re.I)
-        page_num = int(m_p.group(1)) if m_p else 1
-        page_label = f" (Page {page_num})" if page_num > 1 else ""
+        end_scrape_for_chat(chat_id)
+        if start_idx is not None or end_idx is not None or is_last_n:
+            await run_forum_category_scrape(
+                bot=context.bot,
+                chat_id=chat_id,
+                target_url=target_url,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                is_last_n=is_last_n,
+                user_id=user_id,
+            )
+            return
 
-        status = await msg.reply_text(f"📂 <i>Scanning forum category{page_label}...</i>", parse_mode=ParseMode.HTML)
-        try:
-            req_limit = MAX_POSTS_PER_FORUM if (start_idx is None and end_idx is None and not is_last_n) else (end_idx or 50)
-            topics = await asyncio.to_thread(get_forum_topics, target_url, "start_date", req_limit, False)
-            if start_idx is not None or end_idx is not None or is_last_n:
-                topics = apply_slice(topics, start_idx, end_idx, is_last_n)
-            else:
-                topics = topics[:MAX_POSTS_PER_FORUM]
+        # No slice provided: show interactive category action card!
+        clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
+        parts = [p for p in clean_u.split("/") if p]
+        raw_slug = parts[-1] if parts else "Forum"
+        if raw_slug.isdigit() and len(parts) >= 2 and parts[-2] == "page":
+            raw_slug = parts[-3] if len(parts) >= 3 else "Forum"
+        cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
+        short_id = db.get_or_create_short_id(clean_u)
 
-            if not topics:
-                await status.edit_text(f"❌ No topics found in this category{page_label}.")
-                end_scrape_for_chat(chat_id)
-                return
+        context.user_data[f"cat_info_{short_id}"] = {"title": cat_title, "url": clean_u}
 
-            stop_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-            ]])
-            await status.edit_text(f"✅ Found {len(topics)} topics{page_label}! Extracting...", reply_markup=stop_markup)
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_crun:{short_id}:10"),
+                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_crun:{short_id}:today"),
+            ],
+            [
+                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_crun:{short_id}:25"),
+                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_crun:{short_id}:50"),
+            ],
+            [
+                InlineKeyboardButton("✏️ Custom Range / Page", callback_data=f"sp_cstm:{short_id}"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
 
-            for idx, t in enumerate(topics, start=1):
-                if is_scrape_cancelled(chat_id):
-                    logger.info(f"Category scrape cancelled by user in chat {chat_id}")
-                    await context.bot.send_message(
-                        chat_id=msg.chat_id,
-                        text=f"🛑 <b>Scraping stopped!</b> Processed {idx-1}/{len(topics)} topics.",
-                        parse_mode=ParseMode.HTML,
-                    )
-                    break
-                await process_topic_scrape(context.bot, msg.chat_id, t["url"], user_id=user_id)
-                if is_scrape_cancelled(chat_id):
-                    break
-                await cancellable_sleep(POST_SEND_DELAY, chat_id)
-        except Exception as e:
-            await status.edit_text(f"❌ Error: {html.escape(str(e))}")
-        finally:
-            end_scrape_for_chat(chat_id)
-
-        try:
-            await status.delete()
-        except Exception:
-            pass
+        card_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🔗 <code>{html.escape(clean_u)}</code>\n\n"
+            "Choose an extraction mode or enter custom range:</blockquote>"
+        )
+        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
     end_scrape_for_chat(chat_id)
@@ -1676,6 +1828,110 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # 2. Interactive Category Range Input Flow
+    cat_flow = context.user_data.get("awaiting_category_range")
+    if cat_flow:
+        if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+            context.user_data.pop("awaiting_category_range", None)
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=cat_flow["chat_id"],
+                    message_id=cat_flow["message_id"],
+                    text="<blockquote>❌ Category extraction cancelled.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+            return
+
+        start_idx, end_idx, page_num = parse_model_range_input(text)
+        if start_idx is None and end_idx is None and page_num is None:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            invalid_text = (
+                "<blockquote>"
+                f"💬 <b>{html.escape(cat_flow.get('cat_title', 'Forum Category'))}</b>\n"
+                f"🔗 <code>{html.escape(cat_flow.get('url', ''))}</code>\n\n"
+                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n"
+                "Please enter a valid count, range, or page:\n"
+                "• <code>5</code> ➔ First 5 topics\n"
+                "• <code>1-5</code> ➔ Topics 1 to 5\n"
+                "• <code>5-10</code> ➔ Topics 5 to 10\n"
+                "• <code>page 2</code> ➔ Full Page 2"
+                "</blockquote>"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{cat_flow['short_id']}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ]
+            ])
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=cat_flow["chat_id"],
+                    message_id=cat_flow["message_id"],
+                    text=invalid_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception:
+                pass
+            return
+
+        # Valid input provided: clean up state and user message
+        context.user_data.pop("awaiting_category_range", None)
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        if page_num is not None:
+            range_label = f"Page {page_num}"
+        elif end_idx is not None:
+            range_label = f"{start_idx} to {end_idx}"
+        else:
+            range_label = "Top 25"
+
+        loading_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_flow.get('cat_title', 'Forum Category'))}</b>\n"
+            f"🔢 <b>Range:</b> {range_label}\n"
+            "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
+        )
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+
+        try:
+            status_msg = await context.bot.edit_message_text(
+                chat_id=cat_flow["chat_id"],
+                message_id=cat_flow["message_id"],
+                text=loading_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=stop_markup,
+            )
+        except Exception:
+            status_msg = None
+
+        await run_forum_category_scrape(
+            bot=context.bot,
+            chat_id=cat_flow["chat_id"],
+            target_url=cat_flow["url"],
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
+            page_num=page_num,
+            status_msg=status_msg,
+            user_id=update.effective_user.id if update.effective_user else None,
+            cat_title=cat_flow.get("cat_title"),
+        )
+        return
+
     # Allow users to stop simply by typing 'stop' or 'cancel' without slash
     if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
         await stop_command(update, context)
@@ -1718,17 +1974,169 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await search_command(update, context)
     elif data.startswith("sp_choose:"):
         plat = data.split(":")[1]
-        plat_label = "📹 LiveCam Models" if plat == "lc" else "💬 DropMMS Forum"
-        example_q = "GoddessAnna" if plat == "lc" else "1080p video"
+        if plat == "fm":
+            try:
+                await query.edit_message_text(
+                    "<blockquote>💬 <b>DropMMS Forums</b>\n⏳ <i>Fetching forum categories...</i></blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+            forums = await asyncio.to_thread(get_dropmms_forums)
+            buttons = []
+            for f in forums:
+                sid = db.get_or_create_short_id(f["url"])
+                context.user_data[f"cat_info_{sid}"] = {"title": f["title"], "url": f["url"]}
+                buttons.append([InlineKeyboardButton(f"📁 {f['title']}", callback_data=f"sp_cat:{sid}")])
+
+            buttons.append([InlineKeyboardButton("🔍 Search Topics by Keyword", callback_data="sp_choose_kw:fm")])
+            buttons.append([
+                InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ])
+
+            card_text = (
+                "<blockquote>"
+                "💬 <b>DropMMS Forums</b>\n"
+                "Select a forum category to browse or scrape:"
+                "</blockquote>"
+            )
+            await query.edit_message_text(
+                card_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        plat_label = "📹 LiveCam Models"
+        example_q = "GoddessAnna"
         context.user_data["awaiting_search"] = plat
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            [InlineKeyboardButton("🔙 Back", callback_data="cb_search"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
         await query.edit_message_text(
-            f"🔍 <b>Searching:</b> {plat_label}\n\n"
-            f"✏️ <i>Please send the keyword or name in your next message (e.g. <code>{example_q}</code>):</i>",
+            f"<blockquote>🔍 <b>Searching:</b> {plat_label}\n\n"
+            f"✏️ <i>Please send the keyword or name in your next message (e.g. <code>{example_q}</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
+        )
+    elif data == "sp_choose_kw:fm":
+        context.user_data["awaiting_search"] = "fm"
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:fm"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            "<blockquote>🔍 <b>Searching:</b> 💬 DropMMS Forum\n\n"
+            "✏️ <i>Please send the keyword or title in your next message (e.g. <code>1080p video</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data.startswith("sp_cat:"):
+        context.user_data.pop("awaiting_category_range", None)
+        short_id = int(data.split(":")[1])
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Forum category link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        cat_info = context.user_data.get(f"cat_info_{short_id}", {})
+        cat_title = cat_info.get("title")
+        if not cat_title:
+            parts = [p for p in url.split("?")[0].rstrip("/").split("/") if p]
+            raw_slug = parts[-1] if parts else "Forum"
+            cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
+            context.user_data[f"cat_info_{short_id}"] = {"title": cat_title, "url": url}
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_crun:{short_id}:10"),
+                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_crun:{short_id}:today"),
+            ],
+            [
+                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_crun:{short_id}:25"),
+                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_crun:{short_id}:50"),
+            ],
+            [
+                InlineKeyboardButton("✏️ Custom Range / Page", callback_data=f"sp_cstm:{short_id}"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:fm"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ],
+        ])
+
+        card_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🔗 <code>{html.escape(url)}</code>\n\n"
+            "Choose an extraction mode or enter custom range:</blockquote>"
+        )
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("sp_cstm:"):
+        short_id = int(data.split(":")[1])
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Forum category link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        cat_info = context.user_data.get(f"cat_info_{short_id}", {})
+        cat_title = cat_info.get("title")
+        if not cat_title:
+            parts = [p for p in url.split("?")[0].rstrip("/").split("/") if p]
+            raw_slug = parts[-1] if parts else "Forum"
+            cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
+
+        context.user_data["awaiting_category_range"] = {
+            "short_id": short_id,
+            "url": url,
+            "cat_title": cat_title,
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{short_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ]
+        ])
+
+        prompt_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🔗 <code>{html.escape(url)}</code>\n\n"
+            "✏️ <b>Enter Range, Count or Page:</b>\n"
+            "• <code>5</code> ➔ First 5 topics\n"
+            "• <code>1-5</code> ➔ Topics 1 to 5\n"
+            "• <code>5-10</code> ➔ Topics 5 to 10\n"
+            "• <code>page 2</code> ➔ Full Page 2"
+            "</blockquote>"
+        )
+        await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("sp_crun:"):
+        _, short_id_str, mode = data.split(":")
+        short_id = int(short_id_str)
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Forum category link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        chat_id = query.message.chat_id
+        only_today = (mode == "today")
+        req_limit = 10 if mode == "10" else (25 if mode == "25" else 50)
+        cat_info = context.user_data.get(f"cat_info_{short_id}", {})
+        cat_title = cat_info.get("title")
+
+        await run_forum_category_scrape(
+            bot=context.bot,
+            chat_id=chat_id,
+            target_url=url,
+            only_today=only_today,
+            req_limit=req_limit,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            cat_title=cat_title,
         )
     elif data.startswith("sp_do:"):
         plat = data.split(":")[1]
@@ -1879,6 +2287,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("awaiting_search", None)
         context.user_data.pop("search_query", None)
         context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_category_range", None)
         try:
             await query.edit_message_text("<blockquote>❌ Cancelled.</blockquote>", parse_mode=ParseMode.HTML)
         except Exception:

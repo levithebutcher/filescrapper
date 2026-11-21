@@ -734,6 +734,59 @@ def get_forum_topics(
     return topics
 
 
+DEFAULT_DROP_FORUMS = [
+    {
+        "title": "Desi Videos & MMS",
+        "url": "https://dropmms.com/forum/4-desi-new-semi-nude-masked-no-face-videos-pics/",
+    },
+    {
+        "title": "General Discussion",
+        "url": "https://dropmms.com/forum/2-general/",
+    },
+]
+
+
+def get_dropmms_forums() -> list[dict]:
+    """
+    Fetch active forum categories from DropMMS index.
+    Returns list of dicts: [{'title': '...', 'url': '...'}, ...]
+    Falls back to curated default categories if unreachable or empty.
+    """
+    forums = []
+    seen = set()
+    try:
+        soup = _fetch_soup(f"{BASE_URL}/")
+        if soup:
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                full_url = urljoin(BASE_URL, href).split("?")[0].rstrip("/")
+                if "/forum/" in full_url and not is_topic_url(full_url):
+                    parts = [p for p in full_url.split("/") if p]
+                    if len(parts) >= 4 and parts[2] == "forum":
+                        slug = parts[3]
+                        if slug.split("-")[0].isdigit() and len(parts) == 4:
+                            title = a.get_text(strip=True)
+                            if not title:
+                                parent_h = a.find_parent(["h4", "h3", "h2", "span"])
+                                if parent_h:
+                                    title = parent_h.get_text(strip=True)
+                            if title and len(title) > 2 and full_url not in seen:
+                                clean_title = re.sub(r"\s*\(\d+\)\s*$", "", title).strip()
+                                if clean_title.lower() not in ["forums", "categories", "home"]:
+                                    seen.add(full_url)
+                                    forums.append({"title": clean_title, "url": f"{full_url}/"})
+    except Exception as e:
+        logger.warning(f"Could not fetch dynamic DropMMS forums: {e}")
+
+    # Ensure curated default categories are always included if not found
+    for df in DEFAULT_DROP_FORUMS:
+        df_clean = df["url"].split("?")[0].rstrip("/")
+        if not any(f["url"].split("?")[0].rstrip("/") == df_clean for f in forums):
+            forums.append(df)
+
+    return forums
+
+
 def search_forum(query: str, limit: int = 5) -> list[dict]:
     """
     Search the forum by keyword and return top matching topics.
