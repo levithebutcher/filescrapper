@@ -540,6 +540,8 @@ def get_forum_topics(
             query_str = "sortby=forums_topics.start_date&sortdirection=desc"
         elif sort_by == "views":
             query_str = "sortby=views&sortdirection=desc"
+        elif sort_by == "updated":
+            query_str = "sortby=last_post&sortdirection=desc"
 
     clean_base = forum_url.split("?")[0].split("#")[0]
     clean_base = re.sub(r"/page/\d+/?$", "/", clean_base)
@@ -734,26 +736,38 @@ def get_forum_topics(
     return topics
 
 
-DEFAULT_DROP_FORUMS = [
-    {
-        "title": "Desi Videos & MMS",
-        "url": "https://dropmms.com/forum/4-desi-new-semi-nude-masked-no-face-videos-pics/",
-    },
-    {
-        "title": "General Discussion",
-        "url": "https://dropmms.com/forum/2-general/",
-    },
-]
+CURATED_FORUM_IDS = [20, 2, 31, 4, 5, 6, 21, 58, 34, 64, 35, 40, 9, 23, 24, 10, 28, 54]
+
+CURATED_DROP_FORUMS = {
+    2: {"title": "General Discussion", "url": "https://dropmms.com/forum/2-general/"},
+    4: {"title": "Desi Videos & MMS", "url": "https://dropmms.com/forum/4-desi-new-semi-nude-masked-no-face-videos-pics/"},
+    5: {"title": "Forum 5", "url": "https://dropmms.com/forum/5-category/"},
+    6: {"title": "Forum 6", "url": "https://dropmms.com/forum/6-category/"},
+    9: {"title": "Forum 9", "url": "https://dropmms.com/forum/9-category/"},
+    10: {"title": "Forum 10", "url": "https://dropmms.com/forum/10-category/"},
+    20: {"title": "Forum 20", "url": "https://dropmms.com/forum/20-category/"},
+    21: {"title": "Forum 21", "url": "https://dropmms.com/forum/21-category/"},
+    23: {"title": "Forum 23", "url": "https://dropmms.com/forum/23-category/"},
+    24: {"title": "Forum 24", "url": "https://dropmms.com/forum/24-category/"},
+    28: {"title": "Forum 28", "url": "https://dropmms.com/forum/28-category/"},
+    31: {"title": "Forum 31", "url": "https://dropmms.com/forum/31-category/"},
+    34: {"title": "Forum 34", "url": "https://dropmms.com/forum/34-category/"},
+    35: {"title": "Forum 35", "url": "https://dropmms.com/forum/35-category/"},
+    40: {"title": "Forum 40", "url": "https://dropmms.com/forum/40-category/"},
+    54: {"title": "Forum 54", "url": "https://dropmms.com/forum/54-category/"},
+    58: {"title": "Forum 58", "url": "https://dropmms.com/forum/58-category/"},
+    64: {"title": "Forum 64", "url": "https://dropmms.com/forum/64-category/"},
+}
+
+DEFAULT_DROP_FORUMS = [CURATED_DROP_FORUMS[4], CURATED_DROP_FORUMS[2]]
 
 
 def get_dropmms_forums() -> list[dict]:
     """
-    Fetch active forum categories from DropMMS index.
-    Returns list of dicts: [{'title': '...', 'url': '...'}, ...]
-    Falls back to curated default categories if unreachable or empty.
+    Fetch active forum categories from DropMMS index, filtered strictly to CURATED_FORUM_IDS.
+    Returns list of dicts: [{'title': '...', 'url': '...', 'id': 4}, ...]
     """
-    forums = []
-    seen = set()
+    id_map = {}
     try:
         soup = _fetch_soup(f"{BASE_URL}/")
         if soup:
@@ -764,27 +778,105 @@ def get_dropmms_forums() -> list[dict]:
                     parts = [p for p in full_url.split("/") if p]
                     if len(parts) >= 4 and parts[2] == "forum":
                         slug = parts[3]
-                        if slug.split("-")[0].isdigit() and len(parts) == 4:
-                            title = a.get_text(strip=True)
-                            if not title:
-                                parent_h = a.find_parent(["h4", "h3", "h2", "span"])
-                                if parent_h:
-                                    title = parent_h.get_text(strip=True)
-                            if title and len(title) > 2 and full_url not in seen:
-                                clean_title = re.sub(r"\s*\(\d+\)\s*$", "", title).strip()
-                                if clean_title.lower() not in ["forums", "categories", "home"]:
-                                    seen.add(full_url)
-                                    forums.append({"title": clean_title, "url": f"{full_url}/"})
+                        prefix = slug.split("-")[0]
+                        if prefix.isdigit() and len(parts) == 4:
+                            f_id = int(prefix)
+                            if f_id in CURATED_FORUM_IDS:
+                                title = a.get_text(strip=True)
+                                if not title:
+                                    parent_h = a.find_parent(["h4", "h3", "h2", "span"])
+                                    if parent_h:
+                                        title = parent_h.get_text(strip=True)
+                                if title:
+                                    clean_title = re.sub(r"\s*\(\d+\)\s*$", "", title).strip()
+                                    if clean_title.lower() not in ["forums", "categories", "home"]:
+                                        if f_id not in id_map:
+                                            id_map[f_id] = {"title": clean_title, "url": f"{full_url}/", "id": f_id}
     except Exception as e:
         logger.warning(f"Could not fetch dynamic DropMMS forums: {e}")
 
-    # Ensure curated default categories are always included if not found
-    for df in DEFAULT_DROP_FORUMS:
-        df_clean = df["url"].split("?")[0].rstrip("/")
-        if not any(f["url"].split("?")[0].rstrip("/") == df_clean for f in forums):
-            forums.append(df)
+    result = []
+    for f_id in CURATED_FORUM_IDS:
+        if f_id in id_map:
+            result.append(id_map[f_id])
+        else:
+            default_entry = CURATED_DROP_FORUMS.get(f_id)
+            if default_entry:
+                result.append({
+                    "title": default_entry["title"],
+                    "url": default_entry["url"],
+                    "id": f_id,
+                })
+            else:
+                result.append({
+                    "title": f"Forum {f_id}",
+                    "url": f"{BASE_URL}/forum/{f_id}-category/",
+                    "id": f_id,
+                })
 
-    return forums
+    return result
+
+
+def get_dropmms_category_stats(category_url: str) -> dict:
+    """
+    Fetch DropMMS forum category metadata: clean title, total pages, and estimated total topics.
+    Returns:
+      {
+        "title": "Desi Videos & MMS",
+        "total_pages": 45,
+        "total_topics_str": "1125 (45 Pages)",
+        "url": clean_base,
+      }
+    """
+    clean_base = category_url.split("?")[0].split("#")[0].rstrip("/")
+    clean_base = re.sub(r"/page/\d+/?$", "", clean_base)
+    if not clean_base.endswith("/"):
+        clean_base += "/"
+
+    parts = [p for p in clean_base.split("/") if p]
+    raw_slug = parts[-1] if parts else "Forum"
+    fallback_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
+
+    soup = _fetch_soup(clean_base)
+    if not soup:
+        return {
+            "title": fallback_title,
+            "total_pages": 1,
+            "total_topics_str": "Available",
+            "url": clean_base,
+        }
+
+    h1 = soup.find("h1", class_=re.compile(r"\bipsType_pageTitle\b", re.I)) or soup.find("h1")
+    title = h1.get_text(strip=True) if h1 else fallback_title
+    title = re.sub(r"\s*\(\d+\)\s*$", "", title).strip() or fallback_title
+
+    pages = []
+    for ul in soup.find_all("ul", class_=re.compile(r"\bipsPagination\b", re.I)):
+        dp = ul.get("data-pages")
+        if dp and dp.isdigit():
+            pages.append(int(dp))
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        m_page = re.search(r"/page/(\d+)", href, re.I) or re.search(r"[?&]page=(\d+)", href, re.I)
+        if m_page:
+            pages.append(int(m_page.group(1)))
+
+    max_page = max(pages) if pages else 1
+    items = soup.find_all("li", class_=re.compile(r"\bipsDataItem\b", re.I))
+    count_on_p1 = len(items) if items else 25
+
+    if max_page == 1:
+        total_str = f"{count_on_p1} (1 Page)" if count_on_p1 > 0 else "Available"
+    else:
+        total_str = f"{max_page * 25} ({max_page} Pages)"
+
+    return {
+        "title": title,
+        "total_pages": max_page,
+        "total_topics_str": total_str,
+        "url": clean_base,
+    }
 
 
 def search_forum(query: str, limit: int = 5) -> list[dict]:

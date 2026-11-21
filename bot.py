@@ -55,6 +55,7 @@ from scraper import (
     get_livecam_model_stats,
     parse_model_range_input,
     get_dropmms_forums,
+    get_dropmms_category_stats,
     is_forum_url,
     is_topic_url,
     get_host_display_name,
@@ -585,6 +586,7 @@ async def run_forum_category_scrape(
     chat_id: int | str,
     target_url: str,
     only_today: bool = False,
+    sort_by: str = "start_date",
     start_idx: int | None = None,
     end_idx: int | None = None,
     page_num: int | None = None,
@@ -596,7 +598,7 @@ async def run_forum_category_scrape(
 ):
     """
     Standardized worker to scrape and deliver topics from a DropMMS forum category.
-    Supports today-only, flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
+    Supports sorting, today-only, flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
     """
     cid = int(chat_id)
     uid = user_id or cid
@@ -612,6 +614,13 @@ async def run_forum_category_scrape(
         return
 
     start_scrape_for_chat(cid)
+
+    sort_labels = {
+        "start_date": "Upload Date (Start Date)",
+        "updated": "Recently Updated",
+        "views": "Most Viewed",
+    }
+    sort_label = sort_labels.get(sort_by, "Upload Date")
 
     # Clean target URL and determine title
     clean_base = target_url.split("?")[0].split("#")[0].rstrip("/")
@@ -648,6 +657,7 @@ async def run_forum_category_scrape(
     loading_text = (
         "<blockquote>"
         f"💬 <b>{html.escape(cat_title)}</b>\n"
+        f"🎯 <b>Sort:</b> {sort_label}\n"
         f"🔢 <b>Range:</b> {range_label}\n"
         "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
     )
@@ -663,7 +673,7 @@ async def run_forum_category_scrape(
         raw_topics = await asyncio.to_thread(
             get_forum_topics,
             effective_url,
-            sort_by="start_date",
+            sort_by=sort_by,
             limit=limit_needed,
             only_today=only_today,
         )
@@ -697,6 +707,7 @@ async def run_forum_category_scrape(
         extracting_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n"
             f"🔢 <b>Range:</b> {range_label} ({len(topics)} topics)\n"
             "⏳ <b>Status:</b> Extracting streaming links...</blockquote>"
         )
@@ -1668,7 +1679,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             )
             return
 
-        # No slice provided: show interactive category action card!
+        # No slice provided: show interactive category card with 2 sorting options!
         clean_u = target_url.split("?")[0].split("#")[0].rstrip("/")
         parts = [p for p in clean_u.split("/") if p]
         raw_slug = parts[-1] if parts else "Forum"
@@ -1677,19 +1688,27 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
         short_id = db.get_or_create_short_id(clean_u)
 
-        context.user_data[f"cat_info_{short_id}"] = {"title": cat_title, "url": clean_u}
+        init_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            "⏳ <i>Loading category information...</i>"
+            "</blockquote>"
+        )
+        status_msg = await msg.reply_text(init_text, parse_mode=ParseMode.HTML)
+        stats = await asyncio.to_thread(get_dropmms_category_stats, clean_u)
+        cat_title = stats.get("title") or cat_title
+        total_str = stats.get("total_topics_str") or "Available"
+
+        context.user_data[f"cat_stats_{short_id}"] = {
+            "title": cat_title,
+            "total_str": total_str,
+            "url": stats.get("url") or clean_u,
+        }
 
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_crun:{short_id}:10"),
-                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_crun:{short_id}:today"),
-            ],
-            [
-                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_crun:{short_id}:25"),
-                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_crun:{short_id}:50"),
-            ],
-            [
-                InlineKeyboardButton("✏️ Custom Range / Page", callback_data=f"sp_cstm:{short_id}"),
+                InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
+                InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
         ])
@@ -1697,10 +1716,10 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         card_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
-            f"🔗 <code>{html.escape(clean_u)}</code>\n\n"
-            "Choose an extraction mode or enter custom range:</blockquote>"
+            f"📊 <b>Total Topics:</b> {total_str}"
+            "</blockquote>"
         )
-        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
     end_scrape_for_chat(chat_id)
@@ -1898,9 +1917,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             range_label = "Top 25"
 
+        sort_val = cat_flow.get("sort_by", "start_date")
+        sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
+
         loading_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_flow.get('cat_title', 'Forum Category'))}</b>\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n"
             f"🔢 <b>Range:</b> {range_label}\n"
             "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
         )
@@ -1923,6 +1946,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bot=context.bot,
             chat_id=cat_flow["chat_id"],
             target_url=cat_flow["url"],
+            sort_by=sort_val,
             start_idx=start_idx or 1,
             end_idx=end_idx,
             page_num=page_num,
@@ -1985,10 +2009,20 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
             forums = await asyncio.to_thread(get_dropmms_forums)
             buttons = []
-            for f in forums:
-                sid = db.get_or_create_short_id(f["url"])
-                context.user_data[f"cat_info_{sid}"] = {"title": f["title"], "url": f["url"]}
-                buttons.append([InlineKeyboardButton(f"📁 {f['title']}", callback_data=f"sp_cat:{sid}")])
+            for i in range(0, len(forums), 2):
+                row = []
+                f1 = forums[i]
+                sid1 = db.get_or_create_short_id(f1["url"])
+                context.user_data[f"cat_info_{sid1}"] = {"title": f1["title"], "url": f1["url"]}
+                row.append(InlineKeyboardButton(f"📁 {f1['title']}", callback_data=f"sp_cat:{sid1}"))
+
+                if i + 1 < len(forums):
+                    f2 = forums[i + 1]
+                    sid2 = db.get_or_create_short_id(f2["url"])
+                    context.user_data[f"cat_info_{sid2}"] = {"title": f2["title"], "url": f2["url"]}
+                    row.append(InlineKeyboardButton(f"📁 {f2['title']}", callback_data=f"sp_cat:{sid2}"))
+
+                buttons.append(row)
 
             buttons.append([InlineKeyboardButton("🔍 Search Topics by Keyword", callback_data="sp_choose_kw:fm")])
             buttons.append([
@@ -2046,19 +2080,29 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             parts = [p for p in url.split("?")[0].rstrip("/").split("/") if p]
             raw_slug = parts[-1] if parts else "Forum"
             cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
-            context.user_data[f"cat_info_{short_id}"] = {"title": cat_title, "url": url}
+
+        try:
+            await query.edit_message_text(
+                f"<blockquote>💬 <b>{html.escape(cat_title)}</b>\n⏳ <i>Fetching category stats...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+        stats = await asyncio.to_thread(get_dropmms_category_stats, url)
+        cat_title = stats.get("title") or cat_title
+        total_str = stats.get("total_topics_str") or "Available"
+
+        context.user_data[f"cat_stats_{short_id}"] = {
+            "title": cat_title,
+            "total_str": total_str,
+            "url": stats.get("url") or url,
+        }
 
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ Latest (10)", callback_data=f"sp_crun:{short_id}:10"),
-                InlineKeyboardButton("📅 Today Only", callback_data=f"sp_crun:{short_id}:today"),
-            ],
-            [
-                InlineKeyboardButton("🔢 First 25", callback_data=f"sp_crun:{short_id}:25"),
-                InlineKeyboardButton("🚀 All (50)", callback_data=f"sp_crun:{short_id}:50"),
-            ],
-            [
-                InlineKeyboardButton("✏️ Custom Range / Page", callback_data=f"sp_cstm:{short_id}"),
+                InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
+                InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
             ],
             [
                 InlineKeyboardButton("🔙 Back", callback_data="sp_choose:fm"),
@@ -2069,10 +2113,59 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         card_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
-            f"🔗 <code>{html.escape(url)}</code>\n\n"
-            "Choose an extraction mode or enter custom range:</blockquote>"
+            f"📊 <b>Total Topics:</b> {total_str}"
+            "</blockquote>"
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("sp_csort:"):
+        _, short_id_str, sort_val = data.split(":")
+        short_id = int(short_id_str)
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Forum category link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        cached_stats = context.user_data.get(f"cat_stats_{short_id}", {})
+        cat_title = cached_stats.get("title")
+        total_str = cached_stats.get("total_str")
+        if not cat_title or not total_str:
+            parts = [p for p in url.split("?")[0].rstrip("/").split("/") if p]
+            raw_slug = parts[-1] if parts else "Forum"
+            cat_title = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title() or "Forum Category"
+            total_str = "Available"
+
+        sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
+
+        context.user_data["awaiting_category_range"] = {
+            "short_id": short_id,
+            "url": url,
+            "cat_title": cat_title,
+            "total_str": total_str,
+            "sort_by": sort_val,
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{short_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ]
+        ])
+
+        prompt_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"📊 <b>Total Topics:</b> {total_str}\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n\n"
+            "✏️ <b>Enter Range, Count or Page:</b>\n"
+            "• <code>10</code> ➔ First 10 topics\n"
+            "• <code>1-10</code> ➔ Topics 1 to 10\n"
+            "• <code>10-20</code> ➔ Topics 10 to 20\n"
+            "• <code>page 2</code> ➔ Full Page 2 (25 topics)"
+            "</blockquote>"
+        )
+        await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=markup)
     elif data.startswith("sp_cstm:"):
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)

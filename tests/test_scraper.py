@@ -794,11 +794,37 @@ class TestScraper(unittest.TestCase):
     @patch("scraper._fetch_soup")
     def test_get_dropmms_forums_fallback(self, mock_fetch_soup):
         """Test fallback when DropMMS home page fails to load."""
-        from scraper import get_dropmms_forums, DEFAULT_DROP_FORUMS
+        from scraper import get_dropmms_forums, CURATED_FORUM_IDS
 
         mock_fetch_soup.return_value = None
         forums = get_dropmms_forums()
-        self.assertEqual(forums, DEFAULT_DROP_FORUMS)
+        self.assertEqual(len(forums), len(CURATED_FORUM_IDS))
+        self.assertEqual([f["id"] for f in forums], CURATED_FORUM_IDS)
+
+    @patch("scraper._fetch_soup")
+    def test_get_dropmms_category_stats(self, mock_fetch_soup):
+        """Test fetching topic count, pages, and clean title for a DropMMS category."""
+        from scraper import get_dropmms_category_stats
+
+        html = """
+        <html><body>
+            <h1 class="ipsType_pageTitle">Desi Videos & MMS</h1>
+            <ul class="ipsPagination" data-pages="45">
+                <li><a href="/forum/4-desi/page/1/">1</a></li>
+                <li><a href="/forum/4-desi/page/45/">45</a></li>
+            </ul>
+            <ol>
+                <li class="ipsDataItem">Topic 1</li>
+                <li class="ipsDataItem">Topic 2</li>
+            </ol>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+        stats = get_dropmms_category_stats("https://dropmms.com/forum/4-desi/page/2/")
+        self.assertEqual(stats["title"], "Desi Videos & MMS")
+        self.assertEqual(stats["total_pages"], 45)
+        self.assertEqual(stats["total_topics_str"], "1125 (45 Pages)")
+        self.assertEqual(stats["url"], "https://dropmms.com/forum/4-desi/")
 
 
 
