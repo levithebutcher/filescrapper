@@ -556,7 +556,13 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         query.edit_message_text.assert_called_once()
         text = query.edit_message_text.call_args[0][0]
         self.assertIn("Upload Date (Start Date)", text)
-        self.assertIn("Enter Range, Count or Page", text)
+        self.assertIn("Range, Count or Page", text)
+        self.assertIn("Quick Filter by Date (IST)", text)
+        # Check date filter buttons in markup
+        reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
+        callbacks = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn(f"sp_cdate:{short_id}:start_date:today", callbacks)
+        self.assertIn(f"sp_cdate:{short_id}:start_date:yesterday", callbacks)
 
         cat_flow = context.user_data.get("awaiting_category_range")
         self.assertIsNotNone(cat_flow)
@@ -605,6 +611,80 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["page_num"], 2)
         self.assertEqual(kwargs["sort_by"], "start_date")
         self.assertIsNone(kwargs["end_idx"])
+
+    @patch("bot.run_forum_category_scrape")
+    async def test_callback_query_sp_cdate(self, mock_cat_scrape):
+        """Test clicking sp_cdate:today button triggers category scrape with date_filter=today."""
+        from bot import callback_query_handler
+
+        test_url = "https://dropmms.com/forum/4-desi/"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {
+            f"cat_stats_{short_id}": {
+                "title": "Desi Videos & MMS",
+                "total_str": "1125 (45 Pages)",
+                "url": test_url,
+            }
+        }
+        query = AsyncMock()
+        query.data = f"sp_cdate:{short_id}:start_date:today"
+        query.message.chat_id = 12345
+        query.message.message_id = 77777
+        query.from_user.id = 99999
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        self.assertNotIn("awaiting_category_range", context.user_data)
+        mock_cat_scrape.assert_called_once()
+        _, kwargs = mock_cat_scrape.call_args
+        self.assertEqual(kwargs["date_filter"], "today")
+        self.assertTrue(kwargs["only_today"])
+        self.assertEqual(kwargs["sort_by"], "start_date")
+
+    @patch("bot.run_forum_category_scrape")
+    async def test_handle_message_category_range_date_word(self, mock_cat_scrape):
+        """Test typing 'today' or 'yesterday' triggers category scrape with date_filter."""
+        from bot import handle_message
+
+        test_url = "https://dropmms.com/forum/4-desi/"
+        short_id = db.get_or_create_short_id(test_url)
+
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "yesterday"
+        msg.delete = AsyncMock()
+        msg.chat_id = 12345
+        update.message = msg
+        update.effective_message = msg
+        update.effective_chat.id = 12345
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot.edit_message_text = AsyncMock()
+        context.user_data = {
+            "awaiting_category_range": {
+                "short_id": short_id,
+                "url": test_url,
+                "cat_title": "Desi Videos & MMS",
+                "total_str": "1125 (45 Pages)",
+                "sort_by": "start_date",
+                "chat_id": 12345,
+                "message_id": 77777,
+            }
+        }
+
+        await handle_message(update, context)
+        msg.delete.assert_called_once()
+        context.bot.edit_message_text.assert_called_once()
+        self.assertNotIn("awaiting_category_range", context.user_data)
+        mock_cat_scrape.assert_called_once()
+        _, kwargs = mock_cat_scrape.call_args
+        self.assertEqual(kwargs["date_filter"], "yesterday")
+        self.assertEqual(kwargs["sort_by"], "start_date")
 
 
 if __name__ == "__main__":

@@ -192,6 +192,10 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         tag_str = " ".join([f"<code>#{html.escape(t)}</code>" for t in tags[:5]])
         caption_lines.append(f"🏷️ {tag_str}")
 
+    date_ist = details.get("date_ist")
+    if date_ist:
+        caption_lines.append(f"🕒 <code>{html.escape(date_ist)}</code>")
+
     if not raw_links:
         caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
     elif user_pref == "all":
@@ -586,6 +590,7 @@ async def run_forum_category_scrape(
     chat_id: int | str,
     target_url: str,
     only_today: bool = False,
+    date_filter: str | None = None,
     sort_by: str = "start_date",
     start_idx: int | None = None,
     end_idx: int | None = None,
@@ -598,7 +603,7 @@ async def run_forum_category_scrape(
 ):
     """
     Standardized worker to scrape and deliver topics from a DropMMS forum category.
-    Supports sorting, today-only, flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
+    Supports sorting, date filtering (today, yesterday), flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
     """
     cid = int(chat_id)
     uid = user_id or cid
@@ -632,9 +637,17 @@ async def run_forum_category_scrape(
         slug_clean = re.sub(r"^\d+-", "", raw_slug).replace("-", " ").title()
         cat_title = slug_clean or "Forum Category"
 
+    active_date_filter = date_filter or ("today" if only_today else None)
+
     # Construct URL if page_num specified
     effective_url = target_url
-    if page_num is not None:
+    if active_date_filter == "today":
+        range_label = "Today's Uploads (IST)"
+        limit_needed = req_limit or 100
+    elif active_date_filter in ["yesterday", "2days"]:
+        range_label = "Yesterday & Today (IST)"
+        limit_needed = req_limit or 150
+    elif page_num is not None:
         effective_url = re.sub(r"/page/\d+/?", "/", clean_base)
         effective_url = f"{effective_url.rstrip('/')}/page/{page_num}/"
         range_label = f"Page {page_num}"
@@ -646,9 +659,6 @@ async def run_forum_category_scrape(
     elif is_last_n and end_idx is not None:
         range_label = f"Last {end_idx}"
         limit_needed = max(end_idx, 25)
-    elif only_today:
-        range_label = "Today's Uploads"
-        limit_needed = req_limit or 100
     else:
         count = req_limit or 25
         range_label = f"Top {count}"
@@ -675,27 +685,29 @@ async def run_forum_category_scrape(
             effective_url,
             sort_by=sort_by,
             limit=limit_needed,
-            only_today=only_today,
+            only_today=(active_date_filter == "today"),
+            date_filter=active_date_filter,
         )
 
         if start_idx is not None or end_idx is not None or is_last_n:
             topics = apply_slice(raw_topics, start_idx, end_idx, is_last_n)
-        elif not only_today:
+        elif not active_date_filter:
             topics = raw_topics[:limit_needed]
         else:
             topics = raw_topics
 
         if not topics:
+            if active_date_filter == "today":
+                not_found_desc = "📅 <b>No uploads found today in this category!</b>"
+            elif active_date_filter in ["yesterday", "2days"]:
+                not_found_desc = "📅 <b>No uploads found yesterday or today in this category!</b>"
+            else:
+                not_found_desc = f"❌ No topics found for {range_label}."
+
             msg_text = (
                 "<blockquote>"
                 f"💬 <b>{html.escape(cat_title)}</b>\n"
-                "📅 <b>No uploads found today in this category!</b></blockquote>"
-                if only_today
-                else (
-                    "<blockquote>"
-                    f"💬 <b>{html.escape(cat_title)}</b>\n"
-                    f"❌ No topics found for {range_label}.</blockquote>"
-                )
+                f"{not_found_desc}</blockquote>"
             )
             await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML)
             end_scrape_for_chat(cid)
@@ -722,7 +734,7 @@ async def run_forum_category_scrape(
                     parse_mode=ParseMode.HTML,
                 )
                 break
-            await process_topic_scrape(bot, cid, t["url"], user_id=uid)
+            await process_topic_scrape(bot, cid, t["url"], user_id=uid, topic_meta=t)
             if is_scrape_cancelled(cid):
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
@@ -1510,12 +1522,17 @@ async def auto_feed_loop(app: Application):
 
 # --- URL Processing & Button Callback Handlers ---
 
-async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int = None):
+async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int = None, topic_meta: dict = None):
     """Scrape and deliver single topic card with cancellation support."""
     if is_scrape_cancelled(chat_id):
         return
     try:
         details = await asyncio.to_thread(get_post_details, url)
+        if topic_meta:
+            if topic_meta.get("date_ist") and not details.get("date_ist"):
+                details["date_ist"] = topic_meta["date_ist"]
+            if topic_meta.get("date") and not details.get("date"):
+                details["date"] = topic_meta["date"]
         if is_scrape_cancelled(chat_id):
             return
         await send_post_card(bot, chat_id, details, user_id=user_id)
@@ -1868,25 +1885,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        start_idx, end_idx, page_num = parse_model_range_input(text)
-        if start_idx is None and end_idx is None and page_num is None:
+        lower_t = text.lower().strip()
+        date_mode = None
+        if lower_t in ["today", "aaj"]:
+            date_mode = "today"
+        elif lower_t in ["yesterday", "kal"]:
+            date_mode = "yesterday"
+
+        start_idx, end_idx, page_num = (None, None, None)
+        if not date_mode:
+            start_idx, end_idx, page_num = parse_model_range_input(text)
+
+        if not date_mode and start_idx is None and end_idx is None and page_num is None:
             try:
                 await update.effective_message.delete()
             except Exception:
                 pass
+            sort_val = cat_flow.get("sort_by", "start_date")
             invalid_text = (
                 "<blockquote>"
                 f"💬 <b>{html.escape(cat_flow.get('cat_title', 'Forum Category'))}</b>\n"
                 f"🔗 <code>{html.escape(cat_flow.get('url', ''))}</code>\n\n"
-                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n"
-                "Please enter a valid count, range, or page:\n"
-                "• <code>5</code> ➔ First 5 topics\n"
-                "• <code>1-5</code> ➔ Topics 1 to 5\n"
-                "• <code>5-10</code> ➔ Topics 5 to 10\n"
+                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n\n"
+                "⚡ <b>Quick Filter by Date (IST):</b>\n"
+                "Tap a button below or type:\n"
+                "• <code>today</code> ➔ Today's uploads\n"
+                "• <code>yesterday</code> ➔ Yesterday & Today\n\n"
+                "✏️ <b>Or Enter Custom Range, Count or Page:</b>\n"
+                "• <code>10</code> ➔ First 10 topics\n"
+                "• <code>1-10</code> ➔ Topics 1 to 10\n"
+                "• <code>10-20</code> ➔ Topics 10 to 20\n"
                 "• <code>page 2</code> ➔ Full Page 2"
                 "</blockquote>"
             )
             markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⚡ Today's Posts", callback_data=f"sp_cdate:{cat_flow['short_id']}:{sort_val}:today"),
+                    InlineKeyboardButton("📆 Yesterday & Today", callback_data=f"sp_cdate:{cat_flow['short_id']}:{sort_val}:yesterday"),
+                ],
                 [
                     InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{cat_flow['short_id']}"),
                     InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
@@ -1911,7 +1947,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        if page_num is not None:
+        if date_mode:
+            range_label = "Today's Uploads (IST)" if date_mode == "today" else "Yesterday & Today (IST)"
+        elif page_num is not None:
             range_label = f"Page {page_num}"
         elif end_idx is not None:
             range_label = f"{start_idx} to {end_idx}"
@@ -1947,10 +1985,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bot=context.bot,
             chat_id=cat_flow["chat_id"],
             target_url=cat_flow["url"],
+            only_today=(date_mode == "today"),
+            date_filter=date_mode,
             sort_by=sort_val,
-            start_idx=start_idx or 1,
-            end_idx=end_idx,
-            page_num=page_num,
+            start_idx=start_idx if not date_mode else 1,
+            end_idx=end_idx if not date_mode else None,
+            page_num=page_num if not date_mode else None,
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
             cat_title=cat_flow.get("cat_title"),
@@ -2149,9 +2189,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         markup = InlineKeyboardMarkup([
             [
+                InlineKeyboardButton("⚡ Today's Posts", callback_data=f"sp_cdate:{short_id}:{sort_val}:today"),
+                InlineKeyboardButton("📆 Yesterday & Today", callback_data=f"sp_cdate:{short_id}:{sort_val}:yesterday"),
+            ],
+            [
                 InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{short_id}"),
                 InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-            ]
+            ],
         ])
 
         prompt_text = (
@@ -2159,14 +2203,59 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             f"💬 <b>{html.escape(cat_title)}</b>\n"
             f"📊 <b>Total Topics:</b> {total_str}\n"
             f"🎯 <b>Sort:</b> {sort_label}\n\n"
-            "✏️ <b>Enter Range, Count or Page:</b>\n"
+            "⚡ <b>Quick Filter by Date (IST):</b>\n"
+            "Tap a button above for instant extraction.\n\n"
+            "✏️ <b>Or Enter Custom Range, Count or Page:</b>\n"
             "• <code>10</code> ➔ First 10 topics\n"
             "• <code>1-10</code> ➔ Topics 1 to 10\n"
             "• <code>10-20</code> ➔ Topics 10 to 20\n"
-            "• <code>page 2</code> ➔ Full Page 2 (25 topics)"
+            "• <code>page 2</code> ➔ Full Page 2 (25 topics)\n"
+            "• <code>today</code> ➔ Today's uploads\n"
+            "• <code>yesterday</code> ➔ Yesterday & Today"
             "</blockquote>"
         )
         await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif data.startswith("sp_cdate:"):
+        _, short_id_str, sort_val, date_mode = data.split(":")
+        short_id = int(short_id_str)
+        url = db.get_url_from_short_id(short_id)
+        if not url:
+            await query.edit_message_text("<blockquote>⚠️ Forum category link expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+
+        context.user_data.pop("awaiting_category_range", None)
+        cached_stats = context.user_data.get(f"cat_stats_{short_id}", {})
+        cat_title = cached_stats.get("title")
+        if not cat_title:
+            cat_info = context.user_data.get(f"cat_info_{short_id}", {})
+            cat_title = cat_info.get("title") or "Forum Category"
+
+        range_label = "Today's Uploads (IST)" if date_mode == "today" else "Yesterday & Today (IST)"
+        sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        loading_text = (
+            "<blockquote>"
+            f"💬 <b>{html.escape(cat_title)}</b>\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n"
+            f"🔢 <b>Range:</b> {range_label}\n"
+            "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
+        )
+        await query.edit_message_text(loading_text, parse_mode=ParseMode.HTML, reply_markup=stop_markup)
+
+        await run_forum_category_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url=url,
+            only_today=(date_mode == "today"),
+            date_filter=date_mode,
+            sort_by=sort_val,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            cat_title=cat_title,
+        )
     elif data.startswith("sp_cstm:"):
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)

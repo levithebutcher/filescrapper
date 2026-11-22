@@ -522,6 +522,50 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(get_host_display_name("https://cloudfam.io/a014faa8d6f4"), "☁️ Cloudfam")
         self.assertEqual(get_host_key("https://cloudfam.io/a014faa8d6f4"), "cloudfam")
 
+    def test_parse_and_format_date_ist(self):
+        """Test parsing ISO timestamp to IST and human-readable string formatting."""
+        from scraper import parse_to_ist, format_date_ist
+
+        iso_str = "2026-11-20T06:20:39Z"
+        dt_ist = parse_to_ist(iso_str)
+        self.assertIsNotNone(dt_ist)
+        # 06:20:39 UTC + 5:30 = 11:50:39 IST
+        self.assertEqual(dt_ist.hour, 11)
+        self.assertEqual(dt_ist.minute, 50)
+        self.assertEqual(dt_ist.second, 39)
+        self.assertEqual(dt_ist.day, 20)
+
+        formatted = format_date_ist(iso_str)
+        self.assertIn("20 Nov 2026", formatted)
+        self.assertIn("11:50 AM IST", formatted)
+
+    def test_check_date_filter_match(self):
+        """Test check_date_filter_match for today and yesterday filters."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import check_date_filter_match, IST_TZ
+
+        now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
+        today_iso = now_ist.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Today's date with 'today' filter
+        is_match, is_older = check_date_filter_match(today_iso, None, date_filter="today")
+        self.assertTrue(is_match)
+        self.assertFalse(is_older)
+
+        # 3 days ago date with 'today' filter
+        older_dt = now_ist - timedelta(days=3)
+        older_iso = older_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        is_match, is_older = check_date_filter_match(older_iso, None, date_filter="today")
+        self.assertFalse(is_match)
+        self.assertTrue(is_older)
+
+        # Yesterday's date with 'yesterday' filter
+        yesterday_dt = now_ist - timedelta(days=1)
+        yesterday_iso = yesterday_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        is_match, is_older = check_date_filter_match(yesterday_iso, None, date_filter="yesterday")
+        self.assertTrue(is_match)
+        self.assertFalse(is_older)
+
     def test_slicing_and_ranges(self):
         """Test parse_slicing_args and apply_slice for count, range, and last-N."""
         from scraper import parse_slicing_args, apply_slice

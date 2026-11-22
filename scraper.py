@@ -397,100 +397,142 @@ def _clean_topic_url(url: str) -> str:
     return clean
 
 
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def parse_to_ist(date_str: str | None) -> datetime | None:
+    """Parse ISO UTC timestamp (or string) and convert to Indian Standard Time (IST, UTC+05:30)."""
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    try:
+        cleaned_iso = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(cleaned_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(IST_TZ)
+    except Exception:
+        return None
+
+
+def format_date_ist(date_str: str | None) -> str | None:
+    """Format timestamp into human-readable IST string: '20 Nov 2026, 11:50 AM IST'."""
+    dt_ist = parse_to_ist(date_str)
+    if not dt_ist:
+        return None
+    return dt_ist.strftime("%d %b %Y, %I:%M %p IST")
+
+
+def check_date_filter_match(
+    date_str: str | None,
+    time_text: str | None,
+    date_filter: str = "today",
+    full_row_text: str | None = None,
+) -> tuple[bool, bool]:
+    """
+    Check if a post timestamp matches the requested date filter in Indian Standard Time (IST).
+    Returns (is_match: bool, is_older: bool).
+    date_filter options:
+      - 'today': Posted today in IST (00:00 AM IST to now).
+      - 'yesterday': Posted yesterday or today in IST (Last ~48 hours).
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(IST_TZ)
+    today_ist = now_ist.date()
+    yesterday_ist = today_ist - timedelta(days=1)
+
+    # 1. Authoritative ISO from <time datetime="...">
+    dt_ist = parse_to_ist(date_str)
+    if dt_ist:
+        post_date = dt_ist.date()
+        if date_filter == "today":
+            if post_date == today_ist:
+                return True, False
+            elif post_date < today_ist:
+                return False, True
+            else:
+                return True, False
+        elif date_filter in ["yesterday", "2days"]:
+            if post_date >= yesterday_ist:
+                return True, False
+            else:
+                return False, True
+
+    # 2. Text fallback (time_text)
+    tt = str(time_text or "").strip().lower()
+    if tt:
+        if date_filter == "today":
+            if re.search(r"\byesterday\b", tt):
+                return False, True
+            if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
+                return False, True
+            if any(w in tt for w in ["today", "just now", "moment"]):
+                return True, False
+            if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", tt):
+                return True, False
+            m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", tt)
+            if m_hr:
+                hrs = int(m_hr.group(1))
+                if hrs <= 24:
+                    return True, False
+                else:
+                    return False, True
+            # Explicit calendar date in time_text (e.g. "Nov 20", "20 Nov")
+            today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
+            today_months = {
+                now_ist.strftime("%b").lower(), now_ist.strftime("%B").lower(),
+                now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()
+            }
+            for m in today_months:
+                if m in tt:
+                    for d in today_days:
+                        if re.search(rf"\b{d}\b", tt):
+                            return True, False
+                    return False, True
+            all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+            if any(m in tt for m in all_months):
+                return False, True
+        elif date_filter in ["yesterday", "2days"]:
+            # If 2 or more days ago, definitely older
+            m_day = re.search(r"\b(\d+)\s*(?:d|day|days)\b", tt)
+            if m_day and int(m_day.group(1)) >= 2:
+                return False, True
+            if re.search(r"\b\d+\s*(?:w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
+                return False, True
+            if any(w in tt for w in ["yesterday", "today", "just now", "moment"]):
+                return True, False
+            if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs|h|hr|hrs|hour|hours)\b", tt):
+                return True, False
+
+    # 3. Fallback on full_row_text only if time_text was completely absent
+    if not tt and full_row_text:
+        fr = str(full_row_text).strip().lower()
+        if date_filter == "today":
+            if re.search(r"\byesterday\b", fr):
+                return False, True
+            if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\s*ago\b", fr):
+                return False, True
+            if re.search(r"\btoday\b", fr):
+                return True, False
+        elif date_filter in ["yesterday", "2days"]:
+            m_day = re.search(r"\b(\d+)\s*(?:days?)\s*ago\b", fr)
+            if m_day and int(m_day.group(1)) >= 2:
+                return False, True
+            if re.search(r"\b\d+\s*(?:weeks?|months?|years?)\s*ago\b", fr):
+                return False, True
+            if "yesterday" in fr or "today" in fr or "just now" in fr:
+                return True, False
+
+    return False, False
+
+
 def _is_posted_today(date_str: str | None, time_text: str | None, full_row_text: str | None = None) -> tuple[bool, bool]:
     """
     Check if a post timestamp, relative text, or row text indicates it was posted today.
     Handles Indian Standard Time (IST, UTC+05:30) and UTC/server time.
     Returns: (is_today: bool, is_definitely_older: bool)
-    - is_today: Confirmed to be uploaded today (from 1:00 AM IST to now, or within ~24h).
-    - is_definitely_older: Confirmed older (yesterday or earlier).
     """
-    now_utc = datetime.now(timezone.utc)
-    IST = timezone(timedelta(hours=5, minutes=30))
-    now_ist = now_utc.astimezone(IST)
-    today_ist_date = now_ist.date()
-    today_utc_date = now_utc.date()
-
-    # 1. Authoritative ISO 8601 parsing from <time datetime="...">
-    if date_str:
-        s = str(date_str).strip()
-        try:
-            cleaned_iso = s.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(cleaned_iso)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            dt_ist = dt.astimezone(IST)
-
-            # If posted today in IST (from 00:00/01:00 AM IST to current time)
-            if dt_ist.date() == today_ist_date:
-                return True, False
-
-            # If posted before today in IST, it's definitely older
-            if dt_ist.date() < today_ist_date:
-                return False, True
-            elif dt_ist.date() > today_ist_date:
-                return True, False
-        except Exception:
-            pass
-
-    # 2. Text-based relative checks on time_text specifically (avoids false hits in post titles/usernames)
-    tt = str(time_text or "").strip().lower()
-    if tt:
-        # Check for yesterday
-        if re.search(r"\byesterday\b", tt):
-            return False, True
-
-        # Check for days / weeks / months / years ago
-        if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
-            return False, True
-
-        # Check for today / just now / moment
-        if any(w in tt for w in ["today", "just now", "moment"]):
-            return True, False
-
-        # Relative minutes or seconds ago (e.g. "10 minutes ago", "25m", "45s")
-        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", tt):
-            return True, False
-
-        # Relative hours (e.g. "2 hours ago", "5h", "14 hr")
-        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", tt)
-        if m_hr:
-            hrs = int(m_hr.group(1))
-            if hrs <= 24:
-                return True, False
-            else:
-                return False, True
-
-        # Explicit calendar date in time_text (e.g. "Nov 20", "20 Nov", "November 20")
-        today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
-        today_months = {
-            now_ist.strftime("%b").lower(), now_ist.strftime("%B").lower(),
-            now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()
-        }
-        for m in today_months:
-            if m in tt:
-                for d in today_days:
-                    if re.search(rf"\b{d}\b", tt):
-                        return True, False
-                # Mentions current month but a different day
-                return False, True
-
-        # Other months mentioned (e.g. "Oct 15", "September 3")
-        all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-        if any(m in tt for m in all_months):
-            return False, True
-
-    # 3. Fallback to full_row_text only if time_text was completely absent
-    if not tt and full_row_text:
-        fr = str(full_row_text).strip().lower()
-        if re.search(r"\byesterday\b", fr):
-            return False, True
-        if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\s*ago\b", fr):
-            return False, True
-        if re.search(r"\btoday\b", fr):
-            return True, False
-
-    return False, False
+    return check_date_filter_match(date_str, time_text, date_filter="today", full_row_text=full_row_text)
 
 
 def get_forum_topics(
@@ -498,6 +540,7 @@ def get_forum_topics(
     sort_by: str = "start_date",
     limit: int = 25,
     only_today: bool = False,
+    date_filter: str | None = None,
 ) -> list[dict]:
     """
     Fetch structured topics from a forum category with date-sorting, metadata, and multi-page pagination.
@@ -506,10 +549,12 @@ def get_forum_topics(
       - 'views': Sort by popularity/views
       - 'updated': Sort by last activity
     only_today:
-      - If True: Option 1 Live Date Cutoff. Filters for topics posted today (IST / UTC),
-        multi-page paginating until yesterday's date cutoff is hit.
-      - If False: Scrapes up to `limit` posts across forum pages (default: 25).
+      - If True: Filters for topics posted today in IST.
+    date_filter:
+      - 'today': Filter for topics posted today in IST.
+      - 'yesterday': Filter for topics posted yesterday or today in IST (Last ~48h).
     """
+    active_date_filter = date_filter or ("today" if only_today else None)
     # Detect if user specifically provided a starting page number (e.g. /page/2/ or ?page=2)
     start_page = 1
     m_path_page = re.search(r"/page/(\d+)/?", forum_url, re.I)
@@ -558,13 +603,13 @@ def get_forum_topics(
     current_page = start_page
 
     # Calculate max_pages
-    if only_today:
+    if active_date_filter:
         max_pages = start_page + 9
     else:
         pages_to_scan = max(1, (limit + 24) // 25)
         max_pages = start_page + pages_to_scan - 1
 
-    logger.info(f"🌐 [get_forum_topics] Starting topic scan for {clean_base} (start_page={start_page}, sort_by={sort_by}, limit={limit}, only_today={only_today}, max_pages={max_pages})")
+    logger.info(f"🌐 [get_forum_topics] Starting topic scan for {clean_base} (start_page={start_page}, sort_by={sort_by}, limit={limit}, date_filter={active_date_filter}, max_pages={max_pages})")
 
     while len(topics) < limit and current_page <= max_pages:
         q_part = f"?{query_str}" if query_str else ""
@@ -612,7 +657,7 @@ def get_forum_topics(
                 or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
                 or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
             )
-            if is_pinned and only_today:
+            if is_pinned and active_date_filter:
                 continue
 
             # Extract publication timestamp from the topic creation container
@@ -629,14 +674,14 @@ def get_forum_topics(
 
             row_text = meta_elem.get_text(" ", strip=True)
 
-            # Apply Option 1 Live Date Cutoff when requested via /today
-            if only_today:
-                is_today, is_older = _is_posted_today(date_str, time_text, full_row_text=row_text)
+            # Apply Live Date Cutoff when requested via date_filter
+            if active_date_filter:
+                is_match, is_older = check_date_filter_match(date_str, time_text, date_filter=active_date_filter, full_row_text=row_text)
                 if is_older:
-                    logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' (date={date_str}, time={time_text}). Stopping scan.")
+                    logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' (date={date_str}, time={time_text}, filter={active_date_filter}). Stopping scan.")
                     hit_older = True
                     break
-                if not is_today:
+                if not is_match:
                     continue
 
             seen.add(clean_url)
@@ -652,14 +697,15 @@ def get_forum_topics(
                 "title": title,
                 "url": clean_url,
                 "date": date_str,
+                "date_ist": format_date_ist(date_str),
                 "views": views_str,
             })
 
             if len(topics) >= limit:
                 break
 
-        # Fallback for ANY page if row elements yielded 0 topics (only when only_today is False)
-        if new_on_page == 0 and not only_today:
+        # Fallback for ANY page if row elements yielded 0 topics (only when active_date_filter is None)
+        if new_on_page == 0 and not active_date_filter:
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 if "/topic/" in href or "index.php?/topic/" in href:
@@ -669,12 +715,12 @@ def get_forum_topics(
                         seen.add(clean_url)
                         new_on_page += 1
                         t_title = a.get_text(strip=True) or "Untitled Post"
-                        topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
+                        topics.append({"title": t_title, "url": clean_url, "date": None, "date_ist": None, "views": None})
                         if len(topics) >= limit:
                             break
 
         # If still 0 topics and query params were present, retry without query params on this page
-        if new_on_page == 0 and query_str and not only_today:
+        if new_on_page == 0 and query_str and not active_date_filter:
             clean_page_url = f"{clean_base}page/{current_page}/" if current_page > 1 else clean_base
             if clean_page_url != target_url:
                 try:
@@ -689,7 +735,7 @@ def get_forum_topics(
                                 seen.add(clean_url)
                                 new_on_page += 1
                                 t_title = a.get_text(strip=True) or "Untitled Post"
-                                topics.append({"title": t_title, "url": clean_url, "date": None, "views": None})
+                                topics.append({"title": t_title, "url": clean_url, "date": None, "date_ist": None, "views": None})
                                 if len(topics) >= limit:
                                     break
                 except Exception as e:
@@ -704,8 +750,8 @@ def get_forum_topics(
 
         current_page += 1
 
-    # Subforum traversal: ONLY for parent categories when not only_today and no direct topics were found
-    if not topics and not only_today:
+    # Subforum traversal: ONLY for parent categories when not active_date_filter and no direct topics were found
+    if not topics and not active_date_filter:
         subforum_links = []
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
@@ -1373,6 +1419,11 @@ def get_post_details(post_url: str) -> dict:
     thumbnail = thumbnail_candidates[0] if thumbnail_candidates else None
     streaming_links = _extract_streaming_links_from_html(soup, post_url)
 
+    # Date extraction (IPS Community <time> tag)
+    time_elem = soup.find("time")
+    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+
     return {
         "title": title,
         "clean_title": clean_title,
@@ -1381,6 +1432,8 @@ def get_post_details(post_url: str) -> dict:
         "thumbnail_candidates": thumbnail_candidates,
         "streaming_links": streaming_links,
         "post_url": post_url,
+        "date": post_date_raw,
+        "date_ist": post_date_ist,
     }
 
 
