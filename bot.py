@@ -79,6 +79,7 @@ from scraper import (
     is_mmsvibex_video_url,
     is_mmsvibex_listing_url,
     get_mmsvibex_video_details,
+    get_mmsvibex_actor_videos,
     get_mmsvibex_photo_details,
     get_mmsvibex_listing_items,
     search_mmsvibex,
@@ -239,15 +240,25 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
             for i, l in enumerate(filtered_links, 1):
                 caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
 
-    attached_album = details.get("attached_album_url")
-    if attached_album:
-        caption_lines.append(f"\n📸 <a href='{attached_album}'>Attached Photo Album</a>")
+    # Attached Photo Albums
+    photo_albums = details.get("attached_photo_albums")
+    if photo_albums:
+        caption_lines.append("\n📸 <b>Attached Photo Albums:</b>")
+        for idx, alb in enumerate(photo_albums, 1):
+            alb_title = html.escape(alb.get("title", f"Album {idx}"))
+            alb_url = alb.get("url", "")
+            caption_lines.append(f"{idx}. <a href='{alb_url}'>{alb_title}</a>")
+    elif details.get("attached_album_url"):
+        caption_lines.append(f"\n📸 <a href='{details['attached_album_url']}'>Attached Photo Album</a>")
 
-    if post_url:
+    if details.get("collection_url") and not details.get("hide_collection_link"):
+        col_name = html.escape(details.get("collection_name") or "All Parts Collection")
+        caption_lines.append(f"\n📁 <b>Series Collection:</b> <a href='{details['collection_url']}'>{col_name}</a>")
+
+    # Post URL - Only for forums and WP lockers, NEVER for MMSVibex videos
+    if post_url and details.get("site") != "mmsvibex":
         site_type = details.get("site")
-        if site_type == "mmsvibex":
-            link_title = "Original Video Page"
-        elif site_type == "wp_locker":
+        if site_type == "wp_locker":
             link_title = "Original Post"
         else:
             link_title = "Original Forum Thread"
@@ -258,7 +269,7 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
 
 # --- Post Sender Engine ---
 
-async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None):
+async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None, reply_markup=None):
     """Deliver a clean post card with downloaded thumbnail bytes and copyable link(s)."""
     if is_scrape_cancelled(chat_id):
         return
@@ -296,6 +307,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
                 photo=photo_file,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
             )
             return
         except RetryAfter as e:
@@ -310,6 +322,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
                     photo=photo_file,
                     caption=caption,
                     parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
                 )
                 return
             except Exception:
@@ -345,6 +358,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
             text=caption,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
+            reply_markup=reply_markup,
         )
     except RetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
@@ -355,6 +369,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
             text=caption,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
+            reply_markup=reply_markup,
         )
     except Exception as e:
         logger.error(f"Failed to send post card to {chat_id}: {e}")
@@ -1939,10 +1954,40 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
 
     # 2. MMSVibex Single Video
     if is_mmsvibex_video_url(target_url):
-        status = await msg.reply_text("🔍 <i>Extracting MMSVibex video & direct MP4...</i>", parse_mode=ParseMode.HTML)
+        status = await msg.reply_text("🔍 <i>Inspecting MMSVibex video & collection...</i>", parse_mode=ParseMode.HTML)
         try:
             details = await asyncio.to_thread(get_mmsvibex_video_details, target_url)
-            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+            col_url = details.get("collection_url")
+
+            if col_url:
+                short_id = db.get_or_create_short_id(target_url)
+                context.user_data[f"mv_dt_{short_id}"] = details
+
+                mode_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("⚡ Normal Mode", callback_data=f"mv_opt:{short_id}:norm"),
+                        InlineKeyboardButton("🚀 Advance Mode (All Parts)", callback_data=f"mv_opt:{short_id}:adv"),
+                    ],
+                    [
+                        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                    ]
+                ])
+                card_title = html.escape(details.get("title", "Video"))
+                prompt_text = (
+                    "<blockquote>"
+                    "⚡ <b>MMSVibex Video Detected</b>\n"
+                    f"🎬 <b>{card_title}</b>\n\n"
+                    "📁 <b>Multi-Part Series Collection Available!</b>\n\n"
+                    "Select Extraction Mode:\n"
+                    "• <b>Normal Mode:</b> Single video card + <i>Extract All Parts</i> button\n"
+                    "• <b>Advance Mode:</b> Automatically extract all parts of this collection"
+                    "</blockquote>"
+                )
+                await status.edit_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=mode_markup)
+                end_scrape_for_chat(chat_id)
+                return
+            else:
+                await send_post_card(context.bot, chat_id, details, user_id=user_id)
         except Exception as e:
             await status.edit_text(f"❌ Error extracting MMSVibex video: {html.escape(str(e))}")
         finally:
@@ -1968,23 +2013,32 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             )
             return
 
-        title = "MMSVibex Photo Albums" if "/photos" in target_url else "MMSVibex Latest Videos"
+        title = "MMSVibex Photo Albums" if "/photos" in target_url else "MMSVibex Videos"
         short_id = db.get_or_create_short_id(target_url)
         context.user_data[f"vibex_url_{short_id}"] = target_url
+        context.user_data["awaiting_vibex_range"] = {
+            "url": target_url,
+            "sort_key": "custom",
+            "sort_label": title,
+            "chat_id": chat_id,
+            "message_id": None,
+        }
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔝 Latest 10", callback_data=f"sp_vrun:{short_id}:10"),
-                InlineKeyboardButton("🔝 Latest 25", callback_data=f"sp_vrun:{short_id}:25"),
+                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_vrun:{short_id}:5"),
+                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_vrun:{short_id}:10"),
+                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_vrun:{short_id}:20"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
         ])
         card_text = (
             "<blockquote>"
             f"⚡ <b>{html.escape(title)}</b>\n"
-            "Select how many items to scrape and extract:"
+            "Select how many items to scrape or reply with custom range (e.g. <code>1-15</code>):"
             "</blockquote>"
         )
-        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["awaiting_vibex_range"]["message_id"] = s_msg.message_id
         return
 
     # 4. WordPress Locker Post (Omaal63, DesiJugar, GulabiHub)
@@ -2022,20 +2076,29 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         title = f"{domain.capitalize()} Archive"
         short_id = db.get_or_create_short_id(target_url)
         context.user_data[f"wp_url_{short_id}"] = target_url
+        context.user_data["awaiting_wp_range"] = {
+            "url": target_url,
+            "site_key": "custom",
+            "site_name": title,
+            "chat_id": chat_id,
+            "message_id": None,
+        }
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔝 Latest 10", callback_data=f"sp_wprun_id:{short_id}:10"),
-                InlineKeyboardButton("🔝 Latest 25", callback_data=f"sp_wprun_id:{short_id}:25"),
+                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_wprun_id:{short_id}:5"),
+                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_wprun_id:{short_id}:10"),
+                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_wprun_id:{short_id}:20"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
         ])
         card_text = (
             "<blockquote>"
             f"🌐 <b>{html.escape(title)}</b>\n"
-            "Select how many posts to scrape and extract:"
+            "Select how many posts to scrape or reply with custom range (e.g. <code>1-15</code>):"
             "</blockquote>"
         )
-        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["awaiting_wp_range"]["message_id"] = s_msg.message_id
         return
 
     # 1. LiveCamRips Single Video
@@ -2445,6 +2508,164 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # 3. Interactive MMSVibex Range Input Flow
+    vibex_flow = context.user_data.get("awaiting_vibex_range")
+    if vibex_flow:
+        if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+            context.user_data.pop("awaiting_vibex_range", None)
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            if vibex_flow.get("message_id"):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=vibex_flow["chat_id"],
+                        message_id=vibex_flow["message_id"],
+                        text="<blockquote>❌ MMSVibex extraction cancelled.</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    pass
+            return
+
+        start_idx, end_idx, page_num = parse_model_range_input(text)
+        if start_idx is None and end_idx is None and page_num is None:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            invalid_text = (
+                "<blockquote>"
+                f"⚡ <b>{html.escape(vibex_flow.get('sort_label', 'MMSVibex'))}</b>\n\n"
+                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n\n"
+                "Please enter a valid count, range, or page:\n"
+                "• <code>5</code> ➔ First 5 items\n"
+                "• <code>1-10</code> ➔ Items 1 to 10\n"
+                "• <code>page 2</code> ➔ Full Page 2"
+                "</blockquote>"
+            )
+            if vibex_flow.get("message_id"):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=vibex_flow["chat_id"],
+                        message_id=vibex_flow["message_id"],
+                        text=invalid_text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    pass
+            return
+
+        context.user_data.pop("awaiting_vibex_range", None)
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        status_msg = None
+        if vibex_flow.get("message_id"):
+            try:
+                status_msg = await context.bot.edit_message_text(
+                    chat_id=vibex_flow["chat_id"],
+                    message_id=vibex_flow["message_id"],
+                    text=f"<blockquote>⚡ <b>{html.escape(vibex_flow.get('sort_label', 'MMSVibex'))}</b>\n⏳ <b>Status:</b> Scanning items...</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+        await run_mmsvibex_listing_scrape(
+            bot=context.bot,
+            chat_id=vibex_flow["chat_id"],
+            target_url=vibex_flow["url"],
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
+            status_msg=status_msg,
+            user_id=update.effective_user.id if update.effective_user else None,
+            listing_title=vibex_flow.get("sort_label", "MMSVibex Videos"),
+        )
+        return
+
+    # 4. Interactive WordPress Locker Range Input Flow
+    wp_flow = context.user_data.get("awaiting_wp_range")
+    if wp_flow:
+        if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+            context.user_data.pop("awaiting_wp_range", None)
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            if wp_flow.get("message_id"):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=wp_flow["chat_id"],
+                        message_id=wp_flow["message_id"],
+                        text="<blockquote>❌ Extraction cancelled.</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    pass
+            return
+
+        start_idx, end_idx, page_num = parse_model_range_input(text)
+        if start_idx is None and end_idx is None and page_num is None:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            invalid_text = (
+                "<blockquote>"
+                f"🌐 <b>{html.escape(wp_flow.get('site_name', 'Archive'))}</b>\n\n"
+                f"⚠️ <b>Invalid format:</b> <code>{html.escape(text)}</code>\n\n"
+                "Please enter a valid count, range, or page:\n"
+                "• <code>5</code> ➔ First 5 posts\n"
+                "• <code>1-10</code> ➔ Posts 1 to 10\n"
+                "• <code>page 2</code> ➔ Full Page 2"
+                "</blockquote>"
+            )
+            if wp_flow.get("message_id"):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=wp_flow["chat_id"],
+                        message_id=wp_flow["message_id"],
+                        text=invalid_text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    pass
+            return
+
+        context.user_data.pop("awaiting_wp_range", None)
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        status_msg = None
+        if wp_flow.get("message_id"):
+            try:
+                status_msg = await context.bot.edit_message_text(
+                    chat_id=wp_flow["chat_id"],
+                    message_id=wp_flow["message_id"],
+                    text=f"<blockquote>🌐 <b>{html.escape(wp_flow.get('site_name', 'Archive'))}</b>\n⏳ <b>Status:</b> Scanning posts...</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+        await run_wp_listing_scrape(
+            bot=context.bot,
+            chat_id=wp_flow["chat_id"],
+            target_url=wp_flow["url"],
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
+            status_msg=status_msg,
+            user_id=update.effective_user.id if update.effective_user else None,
+            listing_title=wp_flow.get("site_name", "Archive Posts"),
+        )
+        return
+
     # Allow users to stop simply by typing 'stop' or 'cancel' without slash
     if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
         await stop_command(update, context)
@@ -2591,11 +2812,16 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         elif plat == "vibex":
             buttons = [
                 [
-                    InlineKeyboardButton("🆕 Latest Videos (10)", callback_data="sp_vibex:latest"),
-                    InlineKeyboardButton("📸 Latest Albums (10)", callback_data="sp_vibex:photos"),
+                    InlineKeyboardButton("⚡ Newest Videos", callback_data="sp_vsort:latest"),
+                    InlineKeyboardButton("🔥 Most Viewed", callback_data="sp_vsort:most-viewed"),
                 ],
                 [
-                    InlineKeyboardButton("🔍 Search Videos by Keyword", callback_data="sp_choose_kw:vibex"),
+                    InlineKeyboardButton("⭐ Popular", callback_data="sp_vsort:popular"),
+                    InlineKeyboardButton("⏱️ Longest", callback_data="sp_vsort:longest"),
+                ],
+                [
+                    InlineKeyboardButton("📸 Photo Albums", callback_data="sp_vsort:photos"),
+                    InlineKeyboardButton("🔍 Search Videos", callback_data="sp_choose_kw:vibex"),
                 ],
                 [
                     InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
@@ -2603,7 +2829,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ],
             ]
             await query.edit_message_text(
-                "<blockquote>⚡ <b>MMSVibex Hub</b>\nSelect an option to browse or search:</blockquote>",
+                "<blockquote>⚡ <b>MMSVibex Hub</b>\nSelect sorting or browse category:</blockquote>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -2612,11 +2838,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         elif plat == "wplock":
             buttons = [
                 [
-                    InlineKeyboardButton("📁 Omaal63 (Latest 10)", callback_data="sp_wprun:omaal"),
-                    InlineKeyboardButton("📁 DesiJugar (Latest 10)", callback_data="sp_wprun:desijugar"),
+                    InlineKeyboardButton("📁 Omaal63", callback_data="sp_wpsite:omaal"),
+                    InlineKeyboardButton("📁 DesiJugar", callback_data="sp_wpsite:desijugar"),
                 ],
                 [
-                    InlineKeyboardButton("📁 GulabiHub (Latest 10)", callback_data="sp_wprun:gulabi"),
+                    InlineKeyboardButton("📁 GulabiHub", callback_data="sp_wpsite:gulabi"),
                 ],
                 [
                     InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
@@ -2624,7 +2850,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ],
             ]
             await query.edit_message_text(
-                "<blockquote>🌐 <b>WordPress Locker Hub</b>\nSelect a site to scrape the latest drops:</blockquote>",
+                "<blockquote>🌐 <b>WordPress Locker Hub</b>\nSelect a site to browse or scrape:</blockquote>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -2675,33 +2901,70 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
-    elif data == "sp_vibex:latest":
+    elif data.startswith("sp_vsort:"):
+        _, sort_key = data.split(":")
+        v_sort_labels = {
+            "latest": "Newest Videos",
+            "most-viewed": "Most Viewed",
+            "popular": "Popular",
+            "longest": "Longest",
+            "photos": "Photo Albums",
+        }
+        sort_label = v_sort_labels.get(sort_key, "Videos")
+        target_url = "https://mmsvibex.life/photos/" if sort_key == "photos" else f"https://mmsvibex.life/?filter={sort_key}"
+        context.user_data["awaiting_vibex_range"] = {
+            "url": target_url,
+            "sort_key": sort_key,
+            "sort_label": f"MMSVibex: {sort_label}",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_vapply:{sort_key}:1-5"),
+                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_vapply:{sort_key}:1-10"),
+                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_vapply:{sort_key}:1-20"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:vibex"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ],
+        ])
+        card_text = (
+            "<blockquote>"
+            f"⚡ <b>MMSVibex: {sort_label}</b>\n\n"
+            "Select quick count above or reply in chat with a custom range:\n"
+            "• <code>5</code> ➔ First 5 items\n"
+            "• <code>1-15</code> ➔ Items 1 to 15\n"
+            "• <code>page 2</code> ➔ Full Page 2"
+            "</blockquote>"
+        )
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("sp_vapply:"):
+        _, sort_key, r_str = data.split(":")
+        target_url = "https://mmsvibex.life/photos/" if sort_key == "photos" else f"https://mmsvibex.life/?filter={sort_key}"
+        start_idx, end_idx, page_num = parse_model_range_input(r_str)
+        context.user_data.pop("awaiting_vibex_range", None)
         await run_mmsvibex_listing_scrape(
             bot=context.bot,
             chat_id=query.message.chat_id,
-            target_url="https://mmsvibex.life/?filter=latest",
-            start_idx=1,
-            end_idx=10,
+            target_url=target_url,
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
             status_msg=query.message,
             user_id=query.from_user.id,
-            listing_title="MMSVibex Latest Videos",
+            listing_title=f"MMSVibex ({sort_key})",
         )
-    elif data == "sp_vibex:photos":
-        await run_mmsvibex_listing_scrape(
-            bot=context.bot,
-            chat_id=query.message.chat_id,
-            target_url="https://mmsvibex.life/photos/",
-            start_idx=1,
-            end_idx=10,
-            status_msg=query.message,
-            user_id=query.from_user.id,
-            listing_title="MMSVibex Photo Albums",
-        )
+        return
+
     elif data.startswith("sp_vrun:"):
         _, sid_str, lim_str = data.split(":")
         sid = int(sid_str)
         lim = int(lim_str)
         vurl = context.user_data.get(f"vibex_url_{sid}") or db.get_url_from_short_id(sid) or "https://mmsvibex.life/?filter=latest"
+        context.user_data.pop("awaiting_vibex_range", None)
         await run_mmsvibex_listing_scrape(
             bot=context.bot,
             chat_id=query.message.chat_id,
@@ -2711,39 +2974,161 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             status_msg=query.message,
             user_id=query.from_user.id,
         )
-    elif data == "sp_wprun:omaal":
+        return
+
+    elif data.startswith("sp_wpsite:"):
+        _, site_key = data.split(":")
+        site_map = {
+            "omaal": ("Omaal63", "https://omaal63.net/"),
+            "desijugar": ("DesiJugar", "https://desijugar.me/"),
+            "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+        }
+        s_info = site_map.get(site_key, ("Archive", "https://desijugar.me/"))
+        site_name, target_url = s_info
+        context.user_data["awaiting_wp_range"] = {
+            "url": target_url,
+            "site_key": site_key,
+            "site_name": site_name,
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_wpapply:{site_key}:1-5"),
+                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_wpapply:{site_key}:1-10"),
+                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_wpapply:{site_key}:1-20"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:wplock"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ],
+        ])
+        card_text = (
+            "<blockquote>"
+            f"🌐 <b>{site_name} Latest Drops</b>\n\n"
+            "Select quick count above or reply in chat with a custom range:\n"
+            "• <code>5</code> ➔ First 5 posts\n"
+            "• <code>1-15</code> ➔ Posts 1 to 15\n"
+            "• <code>page 2</code> ➔ Full Page 2"
+            "</blockquote>"
+        )
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("sp_wpapply:"):
+        _, site_key, r_str = data.split(":")
+        site_map = {
+            "omaal": ("Omaal63", "https://omaal63.net/"),
+            "desijugar": ("DesiJugar", "https://desijugar.me/"),
+            "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+        }
+        site_name, target_url = site_map.get(site_key, ("Archive", "https://desijugar.me/"))
+        start_idx, end_idx, page_num = parse_model_range_input(r_str)
+        context.user_data.pop("awaiting_wp_range", None)
         await run_wp_listing_scrape(
             bot=context.bot,
             chat_id=query.message.chat_id,
-            target_url="https://omaal63.net/",
-            start_idx=1,
-            end_idx=10,
+            target_url=target_url,
+            start_idx=start_idx or 1,
+            end_idx=end_idx,
             status_msg=query.message,
             user_id=query.from_user.id,
-            listing_title="Omaal63 Latest Drops",
+            listing_title=f"{site_name} Latest",
         )
-    elif data == "sp_wprun:desijugar":
+        return
+
+    elif data.startswith("sp_wprun_id:"):
+        _, sid_str, lim_str = data.split(":")
+        sid = int(sid_str)
+        lim = int(lim_str)
+        wpurl = context.user_data.get(f"wp_url_{sid}") or db.get_url_from_short_id(sid) or "https://desijugar.me/"
+        context.user_data.pop("awaiting_wp_range", None)
         await run_wp_listing_scrape(
             bot=context.bot,
             chat_id=query.message.chat_id,
-            target_url="https://desijugar.me/",
+            target_url=wpurl,
             start_idx=1,
-            end_idx=10,
+            end_idx=lim,
             status_msg=query.message,
             user_id=query.from_user.id,
-            listing_title="DesiJugar Latest Drops",
         )
-    elif data == "sp_wprun:gulabi":
-        await run_wp_listing_scrape(
-            bot=context.bot,
-            chat_id=query.message.chat_id,
-            target_url="https://gulabihub.com/",
-            start_idx=1,
-            end_idx=10,
-            status_msg=query.message,
-            user_id=query.from_user.id,
-            listing_title="GulabiHub Latest Drops",
-        )
+        return
+
+    elif data.startswith("mv_opt:"):
+        _, sid_str, mode = data.split(":")
+        sid = int(sid_str)
+        target_url = db.get_url_from_short_id(sid)
+        details = context.user_data.get(f"mv_dt_{sid}")
+        if not details and target_url:
+            details = await asyncio.to_thread(get_mmsvibex_video_details, target_url)
+
+        if not details:
+            await query.edit_message_text("❌ Session expired. Please send the link again.")
+            return
+
+        if mode == "norm":
+            col_markup = None
+            if details.get("collection_url"):
+                col_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📦 Extract All Collection Parts", callback_data=f"mv_all:{sid}")
+                ]])
+            await send_post_card(
+                context.bot,
+                query.message.chat_id,
+                details,
+                user_id=query.from_user.id,
+                reply_markup=col_markup,
+            )
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            return
+        else:
+            # Advance mode: proceed to mv_all
+            data = f"mv_all:{sid}"
+
+    if data.startswith("mv_all:"):
+        _, sid_str = data.split(":")
+        sid = int(sid_str)
+        target_url = db.get_url_from_short_id(sid)
+        details = context.user_data.get(f"mv_dt_{sid}")
+        if not details and target_url:
+            details = await asyncio.to_thread(get_mmsvibex_video_details, target_url)
+
+        col_url = details.get("collection_url") if details else None
+        if not col_url and target_url:
+            col_url = target_url
+
+        chat_id = query.message.chat_id
+        start_scrape_for_chat(chat_id)
+        status_msg = await query.message.reply_text("🚀 <i>Extracting all collection parts...</i>", parse_mode=ParseMode.HTML)
+        try:
+            col_items = await asyncio.to_thread(get_mmsvibex_actor_videos, col_url) if col_url else []
+            if not col_items and details:
+                col_items = [{"title": details.get("title", "Video"), "url": target_url}]
+
+            await status_msg.edit_text(
+                f"<blockquote>📦 <b>Found {len(col_items)} part(s) in collection!</b>\n<i>Extracting direct MP4s...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+
+            for idx, item in enumerate(col_items, 1):
+                if is_scrape_cancelled(chat_id):
+                    break
+                p_details = await asyncio.to_thread(get_mmsvibex_video_details, item["url"])
+                p_details["hide_collection_link"] = True
+                await send_post_card(context.bot, chat_id, p_details, user_id=query.from_user.id)
+                if is_scrape_cancelled(chat_id):
+                    break
+                await cancellable_sleep(POST_SEND_DELAY, chat_id)
+        finally:
+            end_scrape_for_chat(chat_id)
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        return
     elif data.startswith("sp_wprun_id:"):
         _, sid_str, lim_str = data.split(":")
         sid = int(sid_str)

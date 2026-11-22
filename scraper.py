@@ -2250,7 +2250,14 @@ def is_mmsvibex_listing_url(url: str) -> bool:
     clean_u = u.split("?")[0].rstrip("/")
     if clean_u in ["https://mmsvibex.life", "http://mmsvibex.life", "https://mmsvibex.life/photos", "http://mmsvibex.life/photos"]:
         return True
-    return bool(re.search(r"[?&]filter=", u, re.I) or "/page/" in u or "/category/" in u or "/tag/" in u or "/actors/" in u)
+    return bool(
+        re.search(r"[?&]filter=", u, re.I)
+        or "/page/" in u
+        or "/category/" in u
+        or "/tag/" in u
+        or "/actors/" in u
+        or "/actor/" in u
+    )
 
 
 def is_mmsvibex_video_url(url: str) -> bool:
@@ -2259,7 +2266,7 @@ def is_mmsvibex_video_url(url: str) -> bool:
 
 
 def get_mmsvibex_video_details(video_url: str) -> dict:
-    """Fetch video details from MMSVibex video page including direct CDN MP4 and attached photo album."""
+    """Fetch video details from MMSVibex video page including direct CDN MP4, attached photo albums, and actor collection."""
     soup = _fetch_soup(video_url)
 
     h1 = soup.find("h1") or soup.find("span", class_="title")
@@ -2288,49 +2295,89 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
     if dur_elem:
         duration = dur_elem.get_text(strip=True)
 
-    # Direct CDN MP4 links
+    # Direct CDN MP4 links: ONLY from the primary video player
     streaming_links = []
     seen = set()
 
-    for s_tag in soup.find_all("source"):
-        src = s_tag.get("src", "").strip()
-        if src and (".mp4" in src.lower() or "cdn.mmsvibex" in src.lower()):
-            if src not in seen:
-                seen.add(src)
-                streaming_links.append(src)
+    main_v = soup.find("video", id="wpst-video") or soup.find("video")
+    if main_v:
+        for s_tag in main_v.find_all("source"):
+            src = s_tag.get("src", "").strip()
+            if src and ".mp4" in src.lower() and "trailer" not in src.lower():
+                if src not in seen:
+                    seen.add(src)
+                    streaming_links.append(src)
+        if not streaming_links and main_v.get("src"):
+            vsrc = main_v["src"].strip()
+            if vsrc and ".mp4" in vsrc.lower() and "trailer" not in vsrc.lower():
+                if vsrc not in seen:
+                    seen.add(vsrc)
+                    streaming_links.append(vsrc)
 
     if not streaming_links:
-        for v in soup.find_all("video", src=True):
-            vsrc = v["src"].strip()
-            if vsrc and vsrc not in seen:
-                seen.add(vsrc)
-                streaming_links.append(vsrc)
+        content_container = soup.find("div", id=re.compile(r"video-player|wpst-video", re.I)) or soup.find("article")
+        if content_container:
+            for m in re.finditer(r'https?://[^\s"\'<>]+\.mp4(?:\?[^\s"\'<>]*)?', str(content_container)):
+                mp4_url = m.group(0)
+                if "trailer" not in mp4_url.lower() and mp4_url not in seen:
+                    seen.add(mp4_url)
+                    streaming_links.append(mp4_url)
 
-    if not streaming_links:
-        for m in re.finditer(r'https?://[^\s"\'<>]+\.mp4(?:\?[^\s"\'<>]*)?', str(soup)):
-            mp4_url = m.group(0)
-            if mp4_url not in seen:
-                seen.add(mp4_url)
-                streaming_links.append(mp4_url)
-
-    # Any other streaming links from html
-    more_links = _extract_streaming_links_from_html(soup, video_url)
-    for ml in more_links:
-        if ml not in seen:
-            seen.add(ml)
-            streaming_links.append(ml)
-
-    # Attached photo album link
-    attached_album_url = None
+    # Attached photo albums (serially listed)
+    attached_photo_albums = []
+    seen_albums = set()
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if "/photos/" in href and href != "https://mmsvibex.life/photos/":
-            attached_album_url = urljoin(video_url, href)
+        full_href = urljoin(video_url, href)
+        if "/photos/" in full_href and full_href.rstrip("/") != "https://mmsvibex.life/photos":
+            if full_href not in seen_albums:
+                seen_albums.add(full_href)
+                album_text = a.get_text(strip=True)
+                if not album_text or album_text.lower() == "photos":
+                    album_text = "Photo Album"
+                clean_album_text = re.sub(r"^Photos from this (?:video and )?album", "", album_text, flags=re.I).strip()
+                if not clean_album_text:
+                    clean_album_text = "Photo Album"
+                attached_photo_albums.append({
+                    "title": clean_album_text,
+                    "url": full_href,
+                })
+
+    # Attached collection / actor link ("View full album" / all parts)
+    collection_url = None
+    collection_name = None
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        text = a.get_text(strip=True)
+        if "/actor/" in href or "view full album" in text.lower():
+            collection_url = urljoin(video_url, href)
+            collection_name = text if text and "view" not in text.lower() else "All Parts Collection"
             break
 
-    # Date
-    time_elem = soup.find("time")
-    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    # Date extraction: check meta tags and json-ld
+    post_date_raw = None
+    pub_meta = (
+        soup.find("meta", property="article:published_time")
+        or soup.find("meta", property="uploadDate")
+        or soup.find("meta", itemprop="uploadDate")
+        or soup.find("meta", itemprop="datePublished")
+    )
+    if pub_meta and pub_meta.get("content"):
+        post_date_raw = pub_meta["content"].strip()
+
+    if not post_date_raw:
+        time_elem = soup.find("time")
+        if time_elem:
+            post_date_raw = time_elem.get("datetime") or time_elem.get("title")
+
+    if not post_date_raw:
+        for s in soup.find_all("script", type="application/ld+json"):
+            if s.string and "datePublished" in s.string:
+                m_date = re.search(r'"datePublished":\s*"([^"]+)"', s.string)
+                if m_date:
+                    post_date_raw = m_date.group(1)
+                    break
+
     post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
 
     return {
@@ -2340,13 +2387,51 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
         "thumbnail": thumbnail,
         "thumbnail_candidates": [thumbnail] if thumbnail else [],
         "streaming_links": streaming_links,
-        "attached_album_url": attached_album_url,
+        "attached_photo_albums": attached_photo_albums,
+        "attached_album_url": attached_photo_albums[0]["url"] if attached_photo_albums else None,
+        "collection_url": collection_url,
+        "collection_name": collection_name,
         "duration": duration,
         "post_url": video_url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
         "site": "mmsvibex",
     }
+
+
+def get_mmsvibex_actor_videos(actor_url: str) -> list[dict]:
+    """Fetch all video parts from an MMSVibex actor/collection page."""
+    soup = _fetch_soup(actor_url)
+    items = []
+    seen = set()
+    for block in soup.find_all(["article", "div"], class_=re.compile(r"thumb-block|video-preview-item|item", re.I)):
+        a = block.find("a", href=True)
+        if not a:
+            continue
+        href = urljoin(actor_url, a["href"].strip())
+        if href in seen or not href.startswith("http"):
+            continue
+
+        title_elem = block.find(class_=re.compile(r"title|entry-header", re.I)) or a
+        title = title_elem.get_text(strip=True) if title_elem else a.get("title", "")
+        if not title:
+            title = "Untitled Part"
+
+        dur_elem = block.find("span", class_=re.compile(r"duration", re.I))
+        duration = dur_elem.get_text(strip=True) if dur_elem else None
+
+        img = block.find("img")
+        thumb = img.get("src") or img.get("data-src") if img else None
+        thumb = _clean_highres_image_url(thumb) if thumb else None
+
+        seen.add(href)
+        items.append({
+            "title": title,
+            "url": href,
+            "duration": duration,
+            "thumbnail": thumb,
+        })
+    return items
 
 
 def get_mmsvibex_photo_details(photo_url: str) -> dict:
@@ -2383,8 +2468,19 @@ def get_mmsvibex_photo_details(photo_url: str) -> dict:
 
     streaming_links = [zip_url] if zip_url else []
 
-    time_elem = soup.find("time")
-    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    post_date_raw = None
+    pub_meta = (
+        soup.find("meta", property="article:published_time")
+        or soup.find("meta", property="uploadDate")
+        or soup.find("meta", itemprop="uploadDate")
+    )
+    if pub_meta and pub_meta.get("content"):
+        post_date_raw = pub_meta["content"].strip()
+    if not post_date_raw:
+        time_elem = soup.find("time")
+        if time_elem:
+            post_date_raw = time_elem.get("datetime") or time_elem.get("title")
+
     post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
 
     return {
@@ -2407,6 +2503,8 @@ def get_mmsvibex_listing_items(listing_url: str, page: int = 1, limit: int = 25)
     query = ""
     if "?" in listing_url:
         query = listing_url.split("?")[1].split("#")[0]
+    elif "/photos" not in clean_base and not clean_base.endswith("/photos"):
+        query = "filter=latest"
 
     if page == 1:
         target_url = f"{clean_base}/?{query}" if query else f"{clean_base}/"
@@ -2417,7 +2515,7 @@ def get_mmsvibex_listing_items(listing_url: str, page: int = 1, limit: int = 25)
     items = []
     seen = set()
 
-    for block in soup.find_all("div", class_=re.compile(r"thumb-block|video-preview-item|item", re.I)):
+    for block in soup.find_all(["article", "div"], class_=re.compile(r"thumb-block|video-preview-item|item", re.I)):
         a = block.find("a", href=True)
         if not a:
             continue

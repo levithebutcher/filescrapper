@@ -48,7 +48,6 @@ else:
         "mixdrop",
         "streamruby",
         "cloudfam.io",
-        "cdn.mmsvibex.fit",
     ]
 
 # Message clean title max length

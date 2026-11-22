@@ -719,19 +719,26 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🔙 Back to Category", btn_texts)
 
     def test_format_post_card_attached_album_and_sites(self):
-        """Test format_post_card handles attached photo albums and custom site origin links."""
+        """Test format_post_card handles attached photo albums and suppresses original video page for MMSVibex."""
         # 1. MMSVibex Video with attached album
         vibex_details = {
             "title": "Sakshi Sexy Baddie",
             "post_url": "https://mmsvibex.life/sakshi-video/",
             "tags": ["1080p"],
             "streaming_links": ["https://cdn.mmsvibex.fit/processed/1900438950_final.mp4"],
-            "attached_album_url": "https://mmsvibex.life/photos/sakshi-sexy-album/",
+            "attached_photo_albums": [
+                {"title": "Sakshi Album 1 (12 photos)", "url": "https://mmsvibex.life/photos/sakshi-1/"},
+                {"title": "Sakshi Album 2 (98 photos)", "url": "https://mmsvibex.life/photos/sakshi-2/"},
+            ],
+            "collection_url": "https://mmsvibex.life/actor/sakshi/",
             "site": "mmsvibex",
         }
         card_vibex = format_post_card(vibex_details, user_pref="all")
-        self.assertIn("📸 <a href='https://mmsvibex.life/photos/sakshi-sexy-album/'>Attached Photo Album</a>", card_vibex)
-        self.assertIn("🌐 <a href='https://mmsvibex.life/sakshi-video/'>Original Video Page</a>", card_vibex)
+        self.assertIn("📸 <b>Attached Photo Albums:</b>", card_vibex)
+        self.assertIn("1. <a href='https://mmsvibex.life/photos/sakshi-1/'>Sakshi Album 1 (12 photos)</a>", card_vibex)
+        self.assertIn("2. <a href='https://mmsvibex.life/photos/sakshi-2/'>Sakshi Album 2 (98 photos)</a>", card_vibex)
+        self.assertIn("📁 <b>Series Collection:</b>", card_vibex)
+        self.assertNotIn("Original Video Page", card_vibex)
 
         # 2. WordPress Locker Post
         wp_details = {
@@ -883,7 +890,7 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sp_cancel", button_data)
 
     async def test_callback_query_sp_choose_vibex(self):
-        """Test clicking MMSVibex button in /search displays Videos and Photo Albums options."""
+        """Test clicking MMSVibex button in /search displays dynamic sorting options."""
         from bot import callback_query_handler
 
         update = MagicMock()
@@ -901,8 +908,11 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
 
         reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
         button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
-        self.assertIn("sp_vibex:latest", button_data)
-        self.assertIn("sp_vibex:photos", button_data)
+        self.assertIn("sp_vsort:latest", button_data)
+        self.assertIn("sp_vsort:most-viewed", button_data)
+        self.assertIn("sp_vsort:popular", button_data)
+        self.assertIn("sp_vsort:longest", button_data)
+        self.assertIn("sp_vsort:photos", button_data)
         self.assertIn("sp_choose_kw:vibex", button_data)
         self.assertIn("cb_search", button_data)
 
@@ -925,8 +935,73 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
 
         reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
         button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
-        self.assertTrue(any(b.startswith("sp_wprun:") for b in button_data))
+        self.assertIn("sp_wpsite:omaal", button_data)
+        self.assertIn("sp_wpsite:desijugar", button_data)
+        self.assertIn("sp_wpsite:gulabi", button_data)
         self.assertIn("cb_search", button_data)
+
+    @patch("bot.send_post_card")
+    @patch("bot.get_mmsvibex_actor_videos")
+    async def test_mmsvibex_normal_and_advance_mode_callback(self, mock_actor_vids, mock_send):
+        """Test MMSVibex Normal mode delivers single video with extract button, and Advance mode delivers all parts."""
+        from bot import callback_query_handler
+
+        target_url = "https://mmsvibex.life/submissive-baddie-part-2/"
+        short_id = db.get_or_create_short_id(target_url)
+
+        # 1. Normal mode (mv_opt:{sid}:norm)
+        update_norm = MagicMock()
+        context_norm = MagicMock()
+        context_norm.user_data = {
+            f"mv_dt_{short_id}": {
+                "title": "Submissive Baddie Part 2",
+                "post_url": target_url,
+                "collection_url": "https://mmsvibex.life/actor/submissive-baddie/",
+                "streaming_links": ["https://cdn.mmsvibex.fit/final.mp4"],
+            }
+        }
+        query_norm = AsyncMock()
+        query_norm.data = f"mv_opt:{short_id}:norm"
+        query_norm.message.chat_id = 12345
+        update_norm.callback_query = query_norm
+
+        await callback_query_handler(update_norm, context_norm)
+        mock_send.assert_called_once()
+        _, kwargs = mock_send.call_args
+        self.assertIsNotNone(kwargs.get("reply_markup"))
+        btn_data = [btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row]
+        self.assertIn(f"mv_all:{short_id}", btn_data)
+
+        # 2. Advance mode (mv_opt:{sid}:adv / mv_all)
+        mock_send.reset_mock()
+        mock_actor_vids.return_value = [
+            {"title": "Part 1", "url": "https://mmsvibex.life/part-1/"},
+            {"title": "Part 2", "url": "https://mmsvibex.life/part-2/"},
+        ]
+        update_adv = MagicMock()
+        context_adv = MagicMock()
+        context_adv.user_data = {
+            f"mv_dt_{short_id}": {
+                "title": "Submissive Baddie Part 2",
+                "post_url": target_url,
+                "collection_url": "https://mmsvibex.life/actor/submissive-baddie/",
+                "streaming_links": ["https://cdn.mmsvibex.fit/final.mp4"],
+            }
+        }
+        query_adv = AsyncMock()
+        query_adv.data = f"mv_opt:{short_id}:adv"
+        query_adv.message.chat_id = 12345
+        status_msg = AsyncMock()
+        query_adv.message.reply_text.return_value = status_msg
+        update_adv.callback_query = query_adv
+
+        with patch("bot.get_mmsvibex_video_details") as mock_vdetails:
+            mock_vdetails.side_effect = [
+                {"title": "Part 1", "post_url": "https://mmsvibex.life/part-1/", "streaming_links": ["https://cdn.mmsvibex.fit/1.mp4"]},
+                {"title": "Part 2", "post_url": "https://mmsvibex.life/part-2/", "streaming_links": ["https://cdn.mmsvibex.fit/2.mp4"]},
+            ]
+            await callback_query_handler(update_adv, context_adv)
+            self.assertEqual(mock_send.call_count, 2)
 
 
 if __name__ == "__main__":
