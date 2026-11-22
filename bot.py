@@ -697,19 +697,49 @@ async def run_forum_category_scrape(
             topics = raw_topics
 
         if not topics:
+            short_id = db.get_or_create_short_id(clean_base)
+            buttons = []
             if active_date_filter == "today":
-                not_found_desc = "📅 <b>No uploads found today in this category!</b>"
+                not_found_desc = (
+                    "📅 <b>No uploads found today (IST) in this category!</b>\n\n"
+                    "<i>Tip: Uploads may not have started yet today. Try checking yesterday's posts or scraping recent uploads below:</i>"
+                )
+                buttons.append([
+                    InlineKeyboardButton("📆 Check Yesterday & Today", callback_data=f"sp_cdate:{short_id}:{sort_by}:yesterday"),
+                    InlineKeyboardButton("🔝 Latest 10 Posts", callback_data=f"sp_crun:{short_id}:10"),
+                ])
             elif active_date_filter in ["yesterday", "2days"]:
-                not_found_desc = "📅 <b>No uploads found yesterday or today in this category!</b>"
+                not_found_desc = (
+                    "📅 <b>No uploads found yesterday or today in this category!</b>\n\n"
+                    "<i>Tip: Try scraping recent uploads below:</i>"
+                )
+                buttons.append([
+                    InlineKeyboardButton("🔝 Latest 10 Posts", callback_data=f"sp_crun:{short_id}:10"),
+                ])
             else:
                 not_found_desc = f"❌ No topics found for {range_label}."
+                buttons.append([
+                    InlineKeyboardButton("🔝 Latest 10 Posts", callback_data=f"sp_crun:{short_id}:10"),
+                ])
+
+            buttons.append([
+                InlineKeyboardButton("🔙 Back to Category", callback_data=f"sp_cat:{short_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ])
+            markup = InlineKeyboardMarkup(buttons)
 
             msg_text = (
                 "<blockquote>"
                 f"💬 <b>{html.escape(cat_title)}</b>\n"
                 f"{not_found_desc}</blockquote>"
             )
-            await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML)
+            if status_msg:
+                try:
+                    await status_msg.edit_text(msg_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                except Exception:
+                    await bot.send_message(chat_id=cid, text=msg_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            else:
+                await bot.send_message(chat_id=cid, text=msg_text, parse_mode=ParseMode.HTML, reply_markup=markup)
             end_scrape_for_chat(cid)
             return
 

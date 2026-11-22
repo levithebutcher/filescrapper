@@ -412,7 +412,26 @@ def parse_to_ist(date_str: str | None) -> datetime | None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(IST_TZ)
     except Exception:
-        return None
+        pass
+
+    for fmt in (
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%Y %I:%M%p",
+        "%m/%d/%Y %H:%M",
+        "%d/%m/%Y %I:%M %p",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d %b %Y %I:%M %p",
+        "%d %b %Y",
+    ):
+        try:
+            dt = datetime.strptime(s, fmt)
+            dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(IST_TZ)
+        except Exception:
+            continue
+    return None
 
 
 def format_date_ist(date_str: str | None) -> str | None:
@@ -535,6 +554,124 @@ def _is_posted_today(date_str: str | None, time_text: str | None, full_row_text:
     return check_date_filter_match(date_str, time_text, date_filter="today", full_row_text=full_row_text)
 
 
+def _extract_topics_from_soup(
+    soup: BeautifulSoup,
+    clean_base: str,
+    seen: set,
+    limit: int,
+    active_date_filter: str | None = None,
+) -> tuple[list[dict], bool, int]:
+    """
+    Extract topics from a single forum page's BeautifulSoup instance.
+    Handles IPS Community row styles, extracting title, URL, IST timestamp, views,
+    and applies date cutoff filtering (today, yesterday).
+    Returns: (new_topics: list[dict], hit_older: bool, new_count: int)
+    """
+    row_elements = soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
+
+    new_topics = []
+    hit_older = False
+    consecutive_older = 0
+    new_count = 0
+
+    for row in row_elements:
+        # Find the topic title link in the row
+        title_container = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
+        if title_container:
+            link_elem = title_container.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+        else:
+            link_elem = None
+
+        if not link_elem:
+            link_elem = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
+
+        if not link_elem:
+            continue
+
+        full_url = urljoin(clean_base, link_elem["href"].strip())
+        clean_url = _clean_topic_url(full_url)
+        if clean_url in seen:
+            continue
+
+        # Skip pinned / sticky / announcement topics when filtering for date
+        row_classes = " ".join(row.get("class", [])).lower()
+        is_pinned = (
+            "pinned" in row_classes
+            or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
+            or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
+        )
+        if is_pinned and active_date_filter:
+            continue
+
+        # Extract publication timestamp from topic creation container or row
+        main_elem = row.find(class_=re.compile(r"ipsDataItem_main|cForumRow_main", re.I)) or row
+        time_tag = main_elem.find("time") or row.find("time")
+        date_str = (time_tag.get("datetime") or time_tag.get("title")) if time_tag else None
+        time_text = time_tag.get_text(strip=True) if time_tag else None
+        row_text = row.get_text(" ", strip=True)
+
+        # Apply Live Date Cutoff when requested via date_filter
+        if active_date_filter:
+            is_match, is_older = check_date_filter_match(date_str, time_text, date_filter=active_date_filter, full_row_text=row_text)
+            if is_older:
+                consecutive_older += 1
+                if consecutive_older >= 3:
+                    logger.info(f"Hit date cutoff after {consecutive_older} older topic(s): '{link_elem.get_text(strip=True)}' (date={date_str}, time={time_text}, filter={active_date_filter}). Stopping scan.")
+                    hit_older = True
+                    break
+                continue
+            else:
+                consecutive_older = 0
+
+            if not is_match:
+                continue
+
+        seen.add(clean_url)
+        new_count += 1
+        title = link_elem.get_text(strip=True) or "Untitled Post"
+
+        views_str = None
+        views_elem = row.find("span", class_=re.compile("ipsType_light|cForumRow_views", re.I))
+        if views_elem:
+            views_str = views_elem.get_text(strip=True)
+
+        new_topics.append({
+            "title": title,
+            "url": clean_url,
+            "date": date_str,
+            "date_ist": format_date_ist(date_str),
+            "views": views_str,
+        })
+
+        if len(new_topics) >= limit:
+            break
+
+    # Fallback if row_elements yielded 0 topics and date cutoff was not reached
+    if new_count == 0 and not hit_older:
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if "/topic/" in href or "index.php?/topic/" in href:
+                full_url = urljoin(clean_base, href)
+                clean_url = _clean_topic_url(full_url)
+                if clean_url not in seen:
+                    if active_date_filter:
+                        parent_row = a.find_parent(["li", "div", "article", "tr"])
+                        t_tag = parent_row.find("time") if parent_row else None
+                        d_str = (t_tag.get("datetime") or t_tag.get("title")) if t_tag else None
+                        t_txt = t_tag.get_text(strip=True) if t_tag else None
+                        m_match, _ = check_date_filter_match(d_str, t_txt, date_filter=active_date_filter)
+                        if not m_match:
+                            continue
+                    seen.add(clean_url)
+                    new_count += 1
+                    t_title = a.get_text(strip=True) or "Untitled Post"
+                    new_topics.append({"title": t_title, "url": clean_url, "date": None, "date_ist": None, "views": None})
+                    if len(new_topics) >= limit:
+                        break
+
+    return new_topics, hit_older, new_count
+
+
 def get_forum_topics(
     forum_url: str,
     sort_by: str = "start_date",
@@ -625,119 +762,34 @@ def get_forum_topics(
             logger.warning(f"Could not fetch page {current_page} ({target_url}): {e}")
             break
 
-        # Search for topic row elements (IPS Community rows)
-        row_elements = soup.find_all(["li", "div", "article", "tr"], class_=re.compile("ipsDataItem|cForumRow|cTopic", re.I))
+        page_topics, hit_older, new_on_page = _extract_topics_from_soup(
+            soup=soup,
+            clean_base=clean_base,
+            seen=seen,
+            limit=limit - len(topics),
+            active_date_filter=active_date_filter,
+        )
+        topics.extend(page_topics)
 
-        hit_older = False
-        new_on_page = 0
-
-        for row in row_elements:
-            # Find the topic title link in the row
-            title_container = row.find(class_=re.compile(r"ipsDataItem_title|ipsType_break|cForumRow_title", re.I)) or row.find("h4")
-            if title_container:
-                link_elem = title_container.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
-            else:
-                link_elem = None
-
-            if not link_elem:
-                link_elem = row.find("a", href=re.compile(r"/topic/|/topics/topic/|index\.php\?/topic/", re.I))
-
-            if not link_elem:
-                continue
-
-            full_url = urljoin(clean_base, link_elem["href"].strip())
-            clean_url = _clean_topic_url(full_url)
-            if clean_url in seen:
-                continue
-
-            # Skip pinned / sticky / announcement topics when filtering for today's uploads
-            row_classes = " ".join(row.get("class", [])).lower()
-            is_pinned = (
-                "pinned" in row_classes
-                or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
-                or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
-            )
-            if is_pinned and active_date_filter:
-                continue
-
-            # Extract publication timestamp from the topic creation container
-            date_str = None
-            time_text = None
-
-            main_elem = row.find(class_=re.compile(r"ipsDataItem_main|cForumRow_main", re.I)) or row
-            meta_elem = main_elem.find(class_=re.compile(r"ipsDataItem_meta|cForumRow_meta", re.I)) or main_elem
-
-            time_tag = meta_elem.find("time")
-            if time_tag:
-                date_str = time_tag.get("datetime") or time_tag.get("title")
-                time_text = time_tag.get_text(strip=True)
-
-            row_text = meta_elem.get_text(" ", strip=True)
-
-            # Apply Live Date Cutoff when requested via date_filter
-            if active_date_filter:
-                is_match, is_older = check_date_filter_match(date_str, time_text, date_filter=active_date_filter, full_row_text=row_text)
-                if is_older:
-                    logger.info(f"Hit date cutoff at older topic: '{link_elem.get_text(strip=True)}' (date={date_str}, time={time_text}, filter={active_date_filter}). Stopping scan.")
-                    hit_older = True
-                    break
-                if not is_match:
-                    continue
-
-            seen.add(clean_url)
-            new_on_page += 1
-            title = link_elem.get_text(strip=True) or "Untitled Post"
-
-            views_str = None
-            views_elem = row.find("span", class_=re.compile("ipsType_light|cForumRow_views", re.I))
-            if views_elem:
-                views_str = views_elem.get_text(strip=True)
-
-            topics.append({
-                "title": title,
-                "url": clean_url,
-                "date": date_str,
-                "date_ist": format_date_ist(date_str),
-                "views": views_str,
-            })
-
-            if len(topics) >= limit:
-                break
-
-        # Fallback for ANY page if row elements yielded 0 topics (only when active_date_filter is None)
-        if new_on_page == 0 and not active_date_filter:
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                if "/topic/" in href or "index.php?/topic/" in href:
-                    full_url = urljoin(clean_base, href)
-                    clean_url = _clean_topic_url(full_url)
-                    if clean_url not in seen:
-                        seen.add(clean_url)
-                        new_on_page += 1
-                        t_title = a.get_text(strip=True) or "Untitled Post"
-                        topics.append({"title": t_title, "url": clean_url, "date": None, "date_ist": None, "views": None})
-                        if len(topics) >= limit:
-                            break
-
-        # If still 0 topics and query params were present, retry without query params on this page
-        if new_on_page == 0 and query_str and not active_date_filter:
+        # If query_str was present and returned 0 topics without hitting older date cutoff:
+        # Retry with clean URL on this page to recover from rejected or unsupported sort parameters
+        if new_on_page == 0 and query_str and not hit_older:
             clean_page_url = f"{clean_base}page/{current_page}/" if current_page > 1 else clean_base
             if clean_page_url != target_url:
                 try:
                     logger.info(f"🔄 Retrying forum page {current_page} without query parameters: {clean_page_url}")
                     clean_soup = _fetch_soup(clean_page_url)
-                    for a in clean_soup.find_all("a", href=True):
-                        href = a["href"].strip()
-                        if "/topic/" in href or "index.php?/topic/" in href:
-                            full_url = urljoin(clean_base, href)
-                            clean_url = _clean_topic_url(full_url)
-                            if clean_url not in seen:
-                                seen.add(clean_url)
-                                new_on_page += 1
-                                t_title = a.get_text(strip=True) or "Untitled Post"
-                                topics.append({"title": t_title, "url": clean_url, "date": None, "date_ist": None, "views": None})
-                                if len(topics) >= limit:
-                                    break
+                    retry_topics, hit_older_retry, new_retry = _extract_topics_from_soup(
+                        soup=clean_soup,
+                        clean_base=clean_base,
+                        seen=seen,
+                        limit=limit - len(topics),
+                        active_date_filter=active_date_filter,
+                    )
+                    topics.extend(retry_topics)
+                    new_on_page += new_retry
+                    if hit_older_retry:
+                        hit_older = True
                 except Exception as e:
                     logger.debug(f"Could not fetch clean page {clean_page_url}: {e}")
 

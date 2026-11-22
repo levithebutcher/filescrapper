@@ -883,5 +883,63 @@ class TestScraper(unittest.TestCase):
 
 
 
+    @patch("scraper._fetch_soup")
+    def test_get_forum_topics_real_dropmms_structure(self, mock_fetch_soup):
+        """Test parsing topic rows matching real DropMMS HTML where ipsDataItem_meta has badges and time is in p tag."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import get_forum_topics
+
+        now_utc = datetime.now(timezone.utc)
+        today_iso = now_utc.strftime("%Y-%m-%dT08:00:00Z")
+        yesterday_iso = (now_utc - timedelta(days=1)).strftime("%Y-%m-%dT08:00:00Z")
+
+        html = f"""
+        <html><body>
+            <li class="ipsDataItem ipsDataItem_responsivePhoto">
+                <div class="ipsDataItem_main">
+                    <h4 class="ipsDataItem_title ipsType_break"><a href="https://dropmms.com/topic/401-post1/">Today Video 1</a></h4>
+                    <div class="ipsDataItem_meta">
+                        <ul class="ipsList_inline"><li><span class="ipsBadge">HD</span></li></ul>
+                    </div>
+                    <p class="ipsType_reset ipsType_blendLinks">
+                        <span class="ipsType_normal">
+                            <strong>By <a href="#">Uploader1</a>, </strong><br>
+                            <span class="ipsType_light"><time datetime="{today_iso}" title="Today">Today at 1:30 PM</time> in <a href="#">Desi</a></span>
+                        </span>
+                    </p>
+                </div>
+            </li>
+            <li class="ipsDataItem ipsDataItem_responsivePhoto">
+                <div class="ipsDataItem_main">
+                    <h4 class="ipsDataItem_title ipsType_break"><a href="https://dropmms.com/topic/402-post2/">Yesterday Video 2</a></h4>
+                    <div class="ipsDataItem_meta">
+                        <ul class="ipsList_inline"><li><span class="ipsBadge">SD</span></li></ul>
+                    </div>
+                    <p class="ipsType_reset ipsType_blendLinks">
+                        <span class="ipsType_normal">
+                            <strong>By <a href="#">Uploader2</a>, </strong><br>
+                            <span class="ipsType_light"><time datetime="{yesterday_iso}" title="Yesterday">Yesterday at 11:00 AM</time> in <a href="#">Desi</a></span>
+                        </span>
+                    </p>
+                </div>
+            </li>
+        </body></html>
+        """
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+
+        # Today filter should return only today's post
+        today_topics = get_forum_topics("https://dropmms.com/forum/2-desi/", limit=10, date_filter="today")
+        self.assertEqual(len(today_topics), 1)
+        self.assertEqual(today_topics[0]["title"], "Today Video 1")
+        self.assertIsNotNone(today_topics[0]["date_ist"])
+
+        # Yesterday filter should return both posts
+        mock_fetch_soup.return_value = BeautifulSoup(html, "html.parser")
+        yesterday_topics = get_forum_topics("https://dropmms.com/forum/2-desi/", limit=10, date_filter="yesterday")
+        self.assertEqual(len(yesterday_topics), 2)
+        self.assertEqual(yesterday_topics[0]["title"], "Today Video 1")
+        self.assertEqual(yesterday_topics[1]["title"], "Yesterday Video 2")
+
+
 if __name__ == "__main__":
     unittest.main()

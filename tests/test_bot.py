@@ -687,5 +687,37 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["sort_by"], "start_date")
 
 
+    @patch("bot.get_forum_topics", return_value=[])
+    async def test_run_forum_category_scrape_no_topics_today_buttons(self, mock_get_topics):
+        """Test that when 0 topics are found for today, status message provides helpful next action buttons."""
+        from bot import run_forum_category_scrape
+
+        bot_mock = AsyncMock()
+        status_msg = AsyncMock()
+        test_url = "https://dropmms.com/forum/2-desi/"
+
+        await run_forum_category_scrape(
+            bot=bot_mock,
+            chat_id=12345,
+            target_url=test_url,
+            only_today=True,
+            date_filter="today",
+            sort_by="start_date",
+            status_msg=status_msg,
+            cat_title="Desi Videos",
+        )
+
+        self.assertEqual(status_msg.edit_text.call_count, 2)
+        args, kwargs = status_msg.edit_text.call_args
+        sent_text = args[0] if args else kwargs.get("text", "")
+        self.assertIn("No uploads found today (IST)", sent_text)
+        self.assertIn("reply_markup", kwargs)
+        markup = kwargs["reply_markup"]
+        btn_texts = [btn.text for row in markup.inline_keyboard for btn in row]
+        self.assertIn("📆 Check Yesterday & Today", btn_texts)
+        self.assertIn("🔝 Latest 10 Posts", btn_texts)
+        self.assertIn("🔙 Back to Category", btn_texts)
+
+
 if __name__ == "__main__":
     unittest.main()
