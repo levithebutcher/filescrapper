@@ -940,6 +940,35 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(yesterday_topics[0]["title"], "Today Video 1")
         self.assertEqual(yesterday_topics[1]["title"], "Yesterday Video 2")
 
+    def test_check_date_filter_match_yesterday_text_precedence(self):
+        """Test that explicit 'Yesterday' in time_text or row_text always rejects 'today' filter."""
+        from datetime import datetime, timezone, timedelta
+        from scraper import check_date_filter_match
+
+        now_utc = datetime.now(timezone.utc)
+        # Even if UTC timestamp is late night (which lands after midnight in IST)
+        late_night_utc = (now_utc - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # But relative text says Yesterday at 11:30 PM
+        is_match, is_older = check_date_filter_match(
+            late_night_utc,
+            "Yesterday at 11:30 PM",
+            date_filter="today",
+            full_row_text="By KNOWNK, Yesterday at 11:30 PM in Forum",
+        )
+        self.assertFalse(is_match)
+        self.assertTrue(is_older)
+
+        # Under yesterday filter, it should match
+        is_match_y, is_older_y = check_date_filter_match(
+            late_night_utc,
+            "Yesterday at 11:30 PM",
+            date_filter="yesterday",
+            full_row_text="By KNOWNK, Yesterday at 11:30 PM in Forum",
+        )
+        self.assertTrue(is_match_y)
+        self.assertFalse(is_older_y)
+
 
 if __name__ == "__main__":
     unittest.main()

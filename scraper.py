@@ -460,7 +460,55 @@ def check_date_filter_match(
     today_ist = now_ist.date()
     yesterday_ist = today_ist - timedelta(days=1)
 
-    # 1. Authoritative ISO from <time datetime="...">
+    tt = str(time_text or "").strip().lower()
+    fr = str(full_row_text or "").strip().lower()
+    combined_text = f"{tt} {fr}".strip()
+
+    # Rule 1: Explicit relative date text takes precedence
+    if date_filter == "today":
+        # If text explicitly says yesterday, days ago, weeks ago, etc. -> definitely NOT today
+        if re.search(r"\byesterday\b", combined_text):
+            return False, True
+        if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined_text):
+            return False, True
+
+        # If text explicitly says today, just now, a moment ago -> definitely today
+        if any(w in combined_text for w in ["today", "just now", "moment"]):
+            return True, False
+
+        # If hours ago, check how many hours have actually elapsed since 00:00 IST today
+        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
+        if m_hr:
+            hrs = int(m_hr.group(1))
+            hrs_today = now_ist.hour + (now_ist.minute / 60.0) + 0.5
+            if hrs <= hrs_today:
+                return True, False
+            else:
+                return False, True
+
+        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
+            return True, False
+
+    elif date_filter in ["yesterday", "2days"]:
+        # If 2 or more days ago, definitely older
+        m_day = re.search(r"\b(\d+)\s*(?:d|day|days)\b", combined_text)
+        if m_day and int(m_day.group(1)) >= 2:
+            return False, True
+        if re.search(r"\b\d+\s*(?:w|wk|weeks|mo|month|months|y|yr|years)\b", combined_text):
+            return False, True
+        if any(w in combined_text for w in ["yesterday", "today", "just now", "moment"]):
+            return True, False
+        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
+            return True, False
+        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
+        if m_hr:
+            hrs = int(m_hr.group(1))
+            if hrs <= 48:
+                return True, False
+            else:
+                return False, True
+
+    # Rule 2: Authoritative ISO from <time datetime="...">
     dt_ist = parse_to_ist(date_str)
     if dt_ist:
         post_date = dt_ist.date()
@@ -477,70 +525,22 @@ def check_date_filter_match(
             else:
                 return False, True
 
-    # 2. Text fallback (time_text)
-    tt = str(time_text or "").strip().lower()
-    if tt:
-        if date_filter == "today":
-            if re.search(r"\byesterday\b", tt):
+    # Rule 3: Explicit calendar dates in relative text (e.g. "Nov 20", "20 Nov")
+    if date_filter == "today" and combined_text:
+        today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
+        today_months = {
+            now_ist.strftime("%b").lower(), now_ist.strftime("%B").lower(),
+            now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()
+        }
+        for m in today_months:
+            if m in combined_text:
+                for d in today_days:
+                    if re.search(rf"\b{d}\b", combined_text):
+                        return True, False
                 return False, True
-            if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
-                return False, True
-            if any(w in tt for w in ["today", "just now", "moment"]):
-                return True, False
-            if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", tt):
-                return True, False
-            m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", tt)
-            if m_hr:
-                hrs = int(m_hr.group(1))
-                if hrs <= 24:
-                    return True, False
-                else:
-                    return False, True
-            # Explicit calendar date in time_text (e.g. "Nov 20", "20 Nov")
-            today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
-            today_months = {
-                now_ist.strftime("%b").lower(), now_ist.strftime("%B").lower(),
-                now_utc.strftime("%b").lower(), now_utc.strftime("%B").lower()
-            }
-            for m in today_months:
-                if m in tt:
-                    for d in today_days:
-                        if re.search(rf"\b{d}\b", tt):
-                            return True, False
-                    return False, True
-            all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-            if any(m in tt for m in all_months):
-                return False, True
-        elif date_filter in ["yesterday", "2days"]:
-            # If 2 or more days ago, definitely older
-            m_day = re.search(r"\b(\d+)\s*(?:d|day|days)\b", tt)
-            if m_day and int(m_day.group(1)) >= 2:
-                return False, True
-            if re.search(r"\b\d+\s*(?:w|wk|weeks|mo|month|months|y|yr|years)\b", tt):
-                return False, True
-            if any(w in tt for w in ["yesterday", "today", "just now", "moment"]):
-                return True, False
-            if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs|h|hr|hrs|hour|hours)\b", tt):
-                return True, False
-
-    # 3. Fallback on full_row_text only if time_text was completely absent
-    if not tt and full_row_text:
-        fr = str(full_row_text).strip().lower()
-        if date_filter == "today":
-            if re.search(r"\byesterday\b", fr):
-                return False, True
-            if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\s*ago\b", fr):
-                return False, True
-            if re.search(r"\btoday\b", fr):
-                return True, False
-        elif date_filter in ["yesterday", "2days"]:
-            m_day = re.search(r"\b(\d+)\s*(?:days?)\s*ago\b", fr)
-            if m_day and int(m_day.group(1)) >= 2:
-                return False, True
-            if re.search(r"\b\d+\s*(?:weeks?|months?|years?)\s*ago\b", fr):
-                return False, True
-            if "yesterday" in fr or "today" in fr or "just now" in fr:
-                return True, False
+        all_months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        if any(m in combined_text for m in all_months):
+            return False, True
 
     return False, False
 
@@ -597,8 +597,10 @@ def _extract_topics_from_soup(
         row_classes = " ".join(row.get("class", [])).lower()
         is_pinned = (
             "pinned" in row_classes
-            or bool(row.find(class_=re.compile(r"pinned|badge_pinned", re.I)))
-            or bool(row.find("span", string=re.compile(r"pinned|featured", re.I)))
+            or "featured" in row_classes
+            or "announcement" in row_classes
+            or bool(row.find(class_=re.compile(r"pinned|badge_pinned|fa-thumb-?tack|fa-star", re.I)))
+            or bool(row.find(lambda t: t.name in ["span", "div", "i", "strong", "em"] and re.search(r"\b(pinned|featured|announcement)\b", t.get_text(), re.I)))
         )
         if is_pinned and active_date_filter:
             continue
