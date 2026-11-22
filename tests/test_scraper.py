@@ -969,6 +969,159 @@ class TestScraper(unittest.TestCase):
         self.assertTrue(is_match_y)
         self.assertFalse(is_older_y)
 
+    @patch("scraper._fetch_soup")
+    def test_mmstown_detection_and_curated_forums(self, mock_fetch):
+        """Test MMSTown URL identification and curated forum category list."""
+        mock_fetch.return_value = None  # Mock network failure to immediately test curated fallback
+        from scraper import (
+            is_mmstown_url,
+            is_mmstown_topic_url,
+            is_mmstown_forum_url,
+            get_mmstown_forums,
+            CURATED_MMSTOWN_FORUM_IDS,
+        )
+
+        self.assertTrue(is_mmstown_url("https://mmstown.com/forum/7-desi-new-videos-hd-sd/"))
+        self.assertTrue(is_mmstown_forum_url("https://mmstown.com/forum/7-desi-new-videos-hd-sd/"))
+        self.assertTrue(is_mmstown_topic_url("https://mmstown.com/topic/62375-big-boobs-punjabi-girl-showing/"))
+        self.assertFalse(is_mmstown_topic_url("https://mmstown.com/forum/7-desi-new-videos-hd-sd/"))
+
+        forums = get_mmstown_forums()
+        self.assertEqual(len(forums), len(CURATED_MMSTOWN_FORUM_IDS))
+        ids = [f["id"] for f in forums]
+        self.assertEqual(ids, [7, 8, 11, 12, 13, 14, 15, 16])
+
+    @patch("scraper._fetch_soup")
+    def test_mmsvibex_video_details(self, mock_fetch):
+        """Test MMSVibex video parser extracting direct CDN MP4, duration, poster, and attached album."""
+        from scraper import (
+            is_mmsvibex_url,
+            is_mmsvibex_video_url,
+            is_mmsvibex_photo_url,
+            get_mmsvibex_video_details,
+        )
+
+        sample_html = """
+        <html>
+        <head><title>Sakshi Sexy Baddie - MMSVibex</title></head>
+        <body>
+            <span class="title">Sakshi Sexy Indian Chubby Baddie Teasing [1080p]</span>
+            <span class="duration">04:36</span>
+            <video poster="https://cdn.mmsvibex.fit/thumbnails/1900438950_thumb_960.jpg">
+                <source src="https://cdn.mmsvibex.fit/processed/1900438950_final.mp4?v=123" type="video/mp4">
+            </video>
+            <a href="https://mmsvibex.life/photos/sakshi-sexy-chubby-fun/">View Photos</a>
+            <time datetime="2026-11-20T12:00:00Z">Nov 20</time>
+        </body>
+        </html>
+        """
+        mock_fetch.return_value = BeautifulSoup(sample_html, "html.parser")
+        video_url = "https://mmsvibex.life/sakshi-sexy-indian-chubby-baddie/"
+
+        self.assertTrue(is_mmsvibex_url(video_url))
+        self.assertTrue(is_mmsvibex_video_url(video_url))
+        self.assertFalse(is_mmsvibex_photo_url(video_url))
+
+        details = get_mmsvibex_video_details(video_url)
+        self.assertIn("Sakshi Sexy Indian Chubby Baddie", details["title"])
+        self.assertIn("1080p", [t.lower() for t in details["tags"]])
+        self.assertEqual(details["thumbnail"], "https://cdn.mmsvibex.fit/thumbnails/1900438950_thumb_960.jpg")
+        self.assertIn("https://cdn.mmsvibex.fit/processed/1900438950_final.mp4?v=123", details["streaming_links"])
+        self.assertEqual(details["duration"], "04:36")
+        self.assertEqual(details["attached_album_url"], "https://mmsvibex.life/photos/sakshi-sexy-chubby-fun/")
+
+    @patch("scraper._fetch_soup")
+    def test_mmsvibex_photo_details(self, mock_fetch):
+        """Test MMSVibex photo album parser extracting direct ZIP download URL."""
+        from scraper import (
+            is_mmsvibex_photo_url,
+            get_mmsvibex_photo_details,
+        )
+
+        sample_html = """
+        <html>
+        <body>
+            <h1>Nisha Mony Viral Album</h1>
+            <meta property="og:image" content="https://cdn.mmsvibex.fit/cover.jpg" />
+            <a href="https://cdn.mmsvibex.fit/image-albums/processed/2026/11/nisha/downloads/nisha-mony-v1.zip">Download ZIP</a>
+        </body>
+        </html>
+        """
+        mock_fetch.return_value = BeautifulSoup(sample_html, "html.parser")
+        photo_url = "https://mmsvibex.life/photos/nisha-mony/"
+
+        self.assertTrue(is_mmsvibex_photo_url(photo_url))
+        details = get_mmsvibex_photo_details(photo_url)
+        self.assertIn("Nisha Mony", details["title"])
+        self.assertIn("https://cdn.mmsvibex.fit/image-albums/processed/2026/11/nisha/downloads/nisha-mony-v1.zip", details["streaming_links"])
+        self.assertEqual(details["thumbnail"], "https://cdn.mmsvibex.fit/cover.jpg")
+
+    @patch("scraper._fetch_soup")
+    def test_wp_locker_post_details_gulabi_and_desijugar(self, mock_fetch):
+        """Test WordPress locker post parser extracting Streamfiles iframe (GulabiHub) and locker links (DesiJugar)."""
+        from scraper import (
+            is_wp_locker_url,
+            is_wp_locker_post_url,
+            get_wp_post_details,
+        )
+
+        # 1. GulabiHub with embedded Streamfile iframe
+        gulabi_html = """
+        <html>
+        <body>
+            <h1 class="entry-title">Renu Chandra Exclusive [720p]</h1>
+            <meta property="og:image" content="https://gulabihub.com/wp-content/uploads/2026/11/poster.jpg" />
+            <iframe src="https://streamfile.net/e/d5arpstld9mk.html"></iframe>
+        </body>
+        </html>
+        """
+        mock_fetch.return_value = BeautifulSoup(gulabi_html, "html.parser")
+        g_url = "https://gulabihub.com/renu-chandra-exclusive/"
+        self.assertTrue(is_wp_locker_url(g_url))
+        self.assertTrue(is_wp_locker_post_url(g_url))
+
+        g_details = get_wp_post_details(g_url)
+        self.assertIn("Renu Chandra", g_details["title"])
+        self.assertIn("https://streamfile.net/e/d5arpstld9mk.html", g_details["streaming_links"])
+
+        # 2. DesiJugar with Cloudfam, Streamtape, and lazy loaded image
+        desijugar_html = """
+        <html>
+        <body>
+            <h1 class="entry-title">Famous Cute Girl Tango Live</h1>
+            <div class="entry-content">
+                <img data-lazy-src="https://desijugar.me/wp-content/uploads/2026/11/pic-180x200.jpg" src="data:image/svg+xml;base64,..." />
+                <a href="https://cloudfam.io/78d76fa06d51">Download Cloudfam</a>
+                <a href="https://streamtape.com/v/p13aOkVPlwuAJG">Watch Streamtape</a>
+            </div>
+            <time datetime="2026-11-22T06:55:00Z">Nov 22</time>
+        </body>
+        </html>
+        """
+        mock_fetch.return_value = BeautifulSoup(desijugar_html, "html.parser")
+        dj_url = "https://desijugar.me/2026/11/22/famous-cute-girl-tango-live/"
+        self.assertTrue(is_wp_locker_url(dj_url))
+        self.assertTrue(is_wp_locker_post_url(dj_url))
+
+        dj_details = get_wp_post_details(dj_url)
+        self.assertIn("https://cloudfam.io/78d76fa06d51", dj_details["streaming_links"])
+        self.assertIn("https://streamtape.com/v/p13aOkVPlwuAJG", dj_details["streaming_links"])
+        # Verified uncropped high-res image (stripped -180x200)
+        self.assertEqual(dj_details["thumbnail"], "https://desijugar.me/wp-content/uploads/2026/11/pic.jpg")
+
+    def test_clean_highres_image_wp_suffix(self):
+        """Test that WordPress thumbnail dimension suffixes are cleanly stripped."""
+        from scraper import _clean_highres_image_url
+
+        self.assertEqual(
+            _clean_highres_image_url("https://omaal63.net/wp-content/uploads/2026/11/photo-180x200.jpg"),
+            "https://omaal63.net/wp-content/uploads/2026/11/photo.jpg"
+        )
+        self.assertEqual(
+            _clean_highres_image_url("https://site.com/image-300x250.png"),
+            "https://site.com/image.png"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

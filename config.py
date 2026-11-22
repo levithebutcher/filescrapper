@@ -34,6 +34,7 @@ else:
         "streamtape.com",
         "vidara.to",
         "streamfiles.net",
+        "streamfile.net",
         "lplaygo.com",
         "abstream.to",
         "uqload.com",
@@ -47,6 +48,7 @@ else:
         "mixdrop",
         "streamruby",
         "cloudfam.io",
+        "cdn.mmsvibex.fit",
     ]
 
 # Message clean title max length

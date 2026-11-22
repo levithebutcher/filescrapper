@@ -70,6 +70,23 @@ from scraper import (
     format_livecam_card,
     parse_slicing_args,
     apply_slice,
+    is_mmstown_url,
+    is_mmstown_topic_url,
+    is_mmstown_forum_url,
+    get_mmstown_forums,
+    is_mmsvibex_url,
+    is_mmsvibex_photo_url,
+    is_mmsvibex_video_url,
+    is_mmsvibex_listing_url,
+    get_mmsvibex_video_details,
+    get_mmsvibex_photo_details,
+    get_mmsvibex_listing_items,
+    search_mmsvibex,
+    is_wp_locker_url,
+    is_wp_locker_listing_url,
+    is_wp_locker_post_url,
+    get_wp_post_details,
+    get_wp_listing_posts,
 )
 import db
 
@@ -222,8 +239,19 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
             for i, l in enumerate(filtered_links, 1):
                 caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
 
+    attached_album = details.get("attached_album_url")
+    if attached_album:
+        caption_lines.append(f"\n📸 <a href='{attached_album}'>Attached Photo Album</a>")
+
     if post_url:
-        caption_lines.append(f"\n🌐 <a href='{post_url}'>Original Forum Thread</a>")
+        site_type = details.get("site")
+        if site_type == "mmsvibex":
+            link_title = "Original Video Page"
+        elif site_type == "wp_locker":
+            link_title = "Original Post"
+        else:
+            link_title = "Original Forum Thread"
+        caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
 
     return "\n".join(caption_lines)
 
@@ -783,6 +811,202 @@ async def run_forum_category_scrape(
         end_scrape_for_chat(cid)
 
 
+async def run_mmsvibex_listing_scrape(
+    bot,
+    chat_id: int | str,
+    target_url: str,
+    start_idx: int | None = None,
+    end_idx: int | None = None,
+    is_last_n: bool = False,
+    status_msg=None,
+    user_id: int | str = None,
+    listing_title: str | None = None,
+):
+    """
+    Worker to scrape and deliver videos or photo albums from MMSVibex listings.
+    Supports slicing (start_idx, end_idx, is_last_n), in-place status cards, and cancellation.
+    """
+    cid = int(chat_id)
+    uid = user_id or cid
+    if is_chat_busy(cid):
+        txt = "<blockquote>⚠️ Another scrape is currently running in this chat. Use /stop first.</blockquote>"
+        if status_msg:
+            try:
+                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
+            except Exception:
+                await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        return
+
+    start_scrape_for_chat(cid)
+    try:
+        title = listing_title or ("MMSVibex Photo Albums" if "/photos" in target_url else "MMSVibex Latest Videos")
+        limit = max(end_idx or 10, 25)
+        loading_text = (
+            "<blockquote>"
+            f"⚡ <b>{html.escape(title)}</b>\n"
+            "⏳ <i>Scanning listing items...</i>"
+            "</blockquote>"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit_text(loading_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+        else:
+            status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+
+        items = await asyncio.to_thread(get_mmsvibex_listing_items, target_url, page=1, limit=limit)
+        items = apply_slice(items, start_idx=start_idx, end_idx=end_idx, is_last_n=is_last_n)
+
+        if not items:
+            await status_msg.edit_text(
+                f"<blockquote>⚡ <b>{html.escape(title)}</b>\n❌ No items found.</blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        await status_msg.edit_text(
+            f"<blockquote>⚡ <b>{html.escape(title)}</b>\n"
+            f"🔢 Found {len(items)} items. Extracting direct links...</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=stop_markup,
+        )
+
+        for idx, it in enumerate(items, 1):
+            if is_scrape_cancelled(cid):
+                await bot.send_message(
+                    chat_id=cid,
+                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(items)} items.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+                break
+
+            url = it["url"]
+            if is_mmsvibex_photo_url(url):
+                details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
+            else:
+                details = await asyncio.to_thread(get_mmsvibex_video_details, url)
+
+            await send_post_card(bot, cid, details, user_id=uid)
+            if is_scrape_cancelled(cid):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, cid)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Error in run_mmsvibex_listing_scrape: {e}", exc_info=True)
+        try:
+            await status_msg.edit_text(f"<blockquote>❌ Error: {html.escape(str(e))}</blockquote>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    finally:
+        end_scrape_for_chat(cid)
+
+
+async def run_wp_listing_scrape(
+    bot,
+    chat_id: int | str,
+    target_url: str,
+    start_idx: int | None = None,
+    end_idx: int | None = None,
+    is_last_n: bool = False,
+    status_msg=None,
+    user_id: int | str = None,
+    listing_title: str | None = None,
+):
+    """
+    Worker to scrape and deliver posts from WordPress locker/tube sites (Omaal63, DesiJugar, GulabiHub).
+    Supports slicing (start_idx, end_idx, is_last_n), in-place status cards, and cancellation.
+    """
+    cid = int(chat_id)
+    uid = user_id or cid
+    if is_chat_busy(cid):
+        txt = "<blockquote>⚠️ Another scrape is currently running in this chat. Use /stop first.</blockquote>"
+        if status_msg:
+            try:
+                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
+            except Exception:
+                await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(chat_id=cid, text=txt, parse_mode=ParseMode.HTML)
+        return
+
+    start_scrape_for_chat(cid)
+    try:
+        domain = urlparse(target_url).netloc.lower().replace("www.", "")
+        title = listing_title or f"{domain.capitalize()} Latest Drops"
+        limit = max(end_idx or 10, 25)
+        loading_text = (
+            "<blockquote>"
+            f"🌐 <b>{html.escape(title)}</b>\n"
+            "⏳ <i>Scanning posts...</i>"
+            "</blockquote>"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit_text(loading_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+        else:
+            status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+
+        posts = await asyncio.to_thread(get_wp_listing_posts, target_url, page=1, limit=limit)
+        posts = apply_slice(posts, start_idx=start_idx, end_idx=end_idx, is_last_n=is_last_n)
+
+        if not posts:
+            await status_msg.edit_text(
+                f"<blockquote>🌐 <b>{html.escape(title)}</b>\n❌ No posts found.</blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        stop_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
+        ]])
+        await status_msg.edit_text(
+            f"<blockquote>🌐 <b>{html.escape(title)}</b>\n"
+            f"🔢 Found {len(posts)} posts. Extracting streaming links...</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=stop_markup,
+        )
+
+        for idx, p in enumerate(posts, 1):
+            if is_scrape_cancelled(cid):
+                await bot.send_message(
+                    chat_id=cid,
+                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(posts)} posts.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+                break
+
+            details = await asyncio.to_thread(get_wp_post_details, p["url"])
+            await send_post_card(bot, cid, details, user_id=uid)
+            if is_scrape_cancelled(cid):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, cid)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Error in run_wp_listing_scrape: {e}", exc_info=True)
+        try:
+            await status_msg.edit_text(f"<blockquote>❌ Error: {html.escape(str(e))}</blockquote>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    finally:
+        end_scrape_for_chat(cid)
+
+
 
 # --- Command Handlers ---
 
@@ -1222,7 +1446,7 @@ async def execute_platform_search(
     query: str,
     edit_msg=None,
 ):
-    """Execute search on the selected platform (lc = LiveCam, fm = DropMMS) and display button results."""
+    """Execute search on the selected platform and display button results."""
     clean_query = query.strip()
     if not clean_query:
         if edit_msg:
@@ -1231,7 +1455,13 @@ async def execute_platform_search(
             await update.effective_message.reply_text("⚠️ Search query cannot be empty.")
         return
 
-    plat_label = "LiveCam Models" if plat == "lc" else "DropMMS Forum"
+    plat_names = {
+        "lc": "LiveCam Models",
+        "fm": "DropMMS Forum",
+        "mmst": "MMSTown Forum",
+        "vibex": "MMSVibex Videos",
+    }
+    plat_label = plat_names.get(plat, "Platform")
     status_text = f"🔍 <i>Searching {plat_label} for '<b>{html.escape(clean_query)}</b>'...</i>"
 
     if edit_msg:
@@ -1252,7 +1482,7 @@ async def execute_platform_search(
         if not results:
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Search LiveCam Again", callback_data="sp_choose:lc")],
-                [InlineKeyboardButton("💬 Search Forum Instead", callback_data="sp_switch:fm")],
+                [InlineKeyboardButton("💬 Search DropMMS Instead", callback_data="sp_switch:fm")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
             ])
             context.user_data["search_query"] = clean_query
@@ -1284,28 +1514,69 @@ async def execute_platform_search(
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
-    else:
+    elif plat == "vibex":
         try:
-            results = await asyncio.to_thread(search_forum, clean_query, 6)
+            results = await asyncio.to_thread(search_mmsvibex, clean_query, 8)
         except Exception as e:
             await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
             return
 
         if not results:
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Search Forum Again", callback_data="sp_choose:fm")],
-                [InlineKeyboardButton("📹 Search LiveCam Instead", callback_data="sp_switch:lc")],
+                [InlineKeyboardButton("🔄 Search MMSVibex Again", callback_data="sp_choose:vibex")],
+                [InlineKeyboardButton("🔙 Back to Search", callback_data="cb_search")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
             ])
             context.user_data["search_query"] = clean_query
             await status_msg.edit_text(
-                f"❌ No forum topics found for <b>{html.escape(clean_query)}</b>.",
+                f"❌ No MMSVibex videos found for <b>{html.escape(clean_query)}</b>.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
             return
 
-        text = f"🔎 <b>Forum Topics Matching '{html.escape(clean_query)}':</b>\n\n"
+        text = f"🔎 <b>MMSVibex Videos Matching '{html.escape(clean_query)}':</b>\n\n"
+        buttons = []
+        for idx, r in enumerate(results, start=1):
+            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
+            short_id = db.get_or_create_short_id(r["url"])
+            btn = InlineKeyboardButton(f"⚡ Extract #{idx}", callback_data=f"sc_{short_id}")
+            buttons.append([btn])
+
+        buttons.append([
+            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:vibex"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ])
+        await status_msg.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    else:
+        # Forum search (DropMMS or MMSTown)
+        base_search_url = "https://mmstown.com" if plat == "mmst" else BASE_URL
+        try:
+            results = await asyncio.to_thread(search_forum, clean_query, 6, base_search_url)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🔄 Search {plat_label} Again", callback_data=f"sp_choose:{plat}")],
+                [InlineKeyboardButton("🔙 Back to Search", callback_data="cb_search")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"❌ No topics found on {plat_label} for <b>{html.escape(clean_query)}</b>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        text = f"🔎 <b>{plat_label} Topics Matching '{html.escape(clean_query)}':</b>\n\n"
         buttons = []
         for idx, r in enumerate(results, start=1):
             text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
@@ -1314,7 +1585,7 @@ async def execute_platform_search(
             buttons.append([btn])
 
         buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:fm"),
+            InlineKeyboardButton(f"🔄 New Search", callback_data=f"sp_choose:{plat}"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ])
         await status_msg.edit_text(
@@ -1330,14 +1601,21 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
                 InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_choose:fm"),
+                InlineKeyboardButton("💬 MMSTown Forum", callback_data="sp_choose:mmst"),
+            ],
+            [
+                InlineKeyboardButton("⚡ MMSVibex Videos", callback_data="sp_choose:vibex"),
+                InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
+            ],
+            [
+                InlineKeyboardButton("🌐 Omaal / DesiJugar / GulabiHub", callback_data="sp_choose:wplock"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
         ])
         await msg.reply_text(
             "🔍 <b>Universal Search Engine</b>\n\n"
-            "Select which platform you would like to search:",
+            "Select which platform you would like to explore or search:",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
@@ -1347,8 +1625,12 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["search_query"] = query
     markup = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_do:lc"),
-            InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_do:fm"),
+            InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
+            InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
+        ],
+        [
+            InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
+            InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
         ],
         [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
     ])
@@ -1553,11 +1835,19 @@ async def auto_feed_loop(app: Application):
 # --- URL Processing & Button Callback Handlers ---
 
 async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int = None, topic_meta: dict = None):
-    """Scrape and deliver single topic card with cancellation support."""
+    """Scrape and deliver single topic card with cancellation support across all supported sites."""
     if is_scrape_cancelled(chat_id):
         return
     try:
-        details = await asyncio.to_thread(get_post_details, url)
+        if is_mmsvibex_photo_url(url):
+            details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
+        elif is_mmsvibex_video_url(url):
+            details = await asyncio.to_thread(get_mmsvibex_video_details, url)
+        elif is_wp_locker_post_url(url):
+            details = await asyncio.to_thread(get_wp_post_details, url)
+        else:
+            details = await asyncio.to_thread(get_post_details, url)
+
         if topic_meta:
             if topic_meta.get("date_ist") and not details.get("date_ist"):
                 details["date_ist"] = topic_meta["date_ist"]
@@ -1586,10 +1876,12 @@ async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ℹ️ <b>Usage:</b> <code>/scrape &lt;url&gt; [count or range]</code>\n\n"
             "<b>Examples:</b>\n"
             "• <code>/scrape https://dropmms.com/topic/123-title/</code>\n"
+            "• <code>/scrape https://mmstown.com/topic/62375-title/</code>\n"
+            "• <code>/scrape https://mmsvibex.life/video-title/</code>\n"
+            "• <code>/scrape https://omaal63.net/post-title/</code>\n"
+            "• <code>/scrape https://desijugar.me/2026/11/22/title/</code>\n"
             "• <code>/scrape https://dropmms.com/forum/2-general/ 5</code>\n"
-            "• <code>/scrape https://dropmms.com/forum/2-general/ 1-5</code>\n"
-            "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>\n"
-            "• <code>/scrape https://livecamrips.to/video/16877744</code>",
+            "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1610,15 +1902,141 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         return
 
     if not target_url.startswith("http://") and not target_url.startswith("https://"):
-        if "dropmms.com" in target_url:
-            target_url = f"https://{target_url}"
-        elif "livecamrips.to" in target_url:
+        if any(
+            d in target_url.lower()
+            for d in [
+                "dropmms.com",
+                "mmstown.com",
+                "mmsvibex.life",
+                "gulabihub.com",
+                "omaal63.net",
+                "desijugar.me",
+                "livecamrips.to",
+            ]
+        ):
             target_url = f"https://{target_url}"
         else:
             return
 
     logger.info(f"🔗 [handle_raw_url] Chat {chat_id} (User: {user_id}) - Target URL: {target_url} | Slice: start={start_idx}, end={end_idx}, is_last_n={is_last_n}")
     start_scrape_for_chat(chat_id)
+
+    # 1. MMSVibex Photo Album
+    if is_mmsvibex_photo_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting MMSVibex photo album & ZIP download...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_mmsvibex_photo_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting photo album: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 2. MMSVibex Single Video
+    if is_mmsvibex_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting MMSVibex video & direct MP4...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_mmsvibex_video_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting MMSVibex video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 3. MMSVibex Listing / Archive
+    if is_mmsvibex_listing_url(target_url):
+        end_scrape_for_chat(chat_id)
+        if start_idx is not None or end_idx is not None or is_last_n:
+            await run_mmsvibex_listing_scrape(
+                bot=context.bot,
+                chat_id=chat_id,
+                target_url=target_url,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                is_last_n=is_last_n,
+                user_id=user_id,
+            )
+            return
+
+        title = "MMSVibex Photo Albums" if "/photos" in target_url else "MMSVibex Latest Videos"
+        short_id = db.get_or_create_short_id(target_url)
+        context.user_data[f"vibex_url_{short_id}"] = target_url
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔝 Latest 10", callback_data=f"sp_vrun:{short_id}:10"),
+                InlineKeyboardButton("🔝 Latest 25", callback_data=f"sp_vrun:{short_id}:25"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
+        card_text = (
+            "<blockquote>"
+            f"⚡ <b>{html.escape(title)}</b>\n"
+            "Select how many items to scrape and extract:"
+            "</blockquote>"
+        )
+        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    # 4. WordPress Locker Post (Omaal63, DesiJugar, GulabiHub)
+    if is_wp_locker_post_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_wp_post_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting post: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 5. WordPress Locker Listing / Archive (Omaal63, DesiJugar, GulabiHub)
+    if is_wp_locker_listing_url(target_url):
+        end_scrape_for_chat(chat_id)
+        if start_idx is not None or end_idx is not None or is_last_n:
+            await run_wp_listing_scrape(
+                bot=context.bot,
+                chat_id=chat_id,
+                target_url=target_url,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                is_last_n=is_last_n,
+                user_id=user_id,
+            )
+            return
+
+        domain = urlparse(target_url).netloc.lower().replace("www.", "")
+        title = f"{domain.capitalize()} Archive"
+        short_id = db.get_or_create_short_id(target_url)
+        context.user_data[f"wp_url_{short_id}"] = target_url
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔝 Latest 10", callback_data=f"sp_wprun_id:{short_id}:10"),
+                InlineKeyboardButton("🔝 Latest 25", callback_data=f"sp_wprun_id:{short_id}:25"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        ])
+        card_text = (
+            "<blockquote>"
+            f"🌐 <b>{html.escape(title)}</b>\n"
+            "Select how many posts to scrape and extract:"
+            "</blockquote>"
+        )
+        await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
 
     # 1. LiveCamRips Single Video
     if is_livecam_video_url(target_url):
@@ -2038,7 +2456,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await execute_platform_search(update, context, awaiting_plat, text)
         return
 
-    if text.startswith("http://") or text.startswith("https://") or "dropmms.com" in text or "livecamrips.to" in text:
+    if text.startswith("http://") or text.startswith("https://") or any(
+        d in text.lower()
+        for d in [
+            "dropmms.com",
+            "mmstown.com",
+            "mmsvibex.life",
+            "gulabihub.com",
+            "omaal63.net",
+            "desijugar.me",
+            "livecamrips.to",
+        ]
+    ):
         await handle_raw_url(update, context, text)
 
 
@@ -2114,6 +2543,93 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
+        elif plat == "mmst":
+            try:
+                await query.edit_message_text(
+                    "<blockquote>💬 <b>MMSTown Forums</b>\n⏳ <i>Fetching forum categories...</i></blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+            forums = await asyncio.to_thread(get_mmstown_forums)
+            buttons = []
+            for i in range(0, len(forums), 2):
+                row = []
+                f1 = forums[i]
+                sid1 = db.get_or_create_short_id(f1["url"])
+                context.user_data[f"cat_info_{sid1}"] = {"title": f1["title"], "url": f1["url"]}
+                row.append(InlineKeyboardButton(f"📁 {f1['title']}", callback_data=f"sp_cat:{sid1}"))
+
+                if i + 1 < len(forums):
+                    f2 = forums[i + 1]
+                    sid2 = db.get_or_create_short_id(f2["url"])
+                    context.user_data[f"cat_info_{sid2}"] = {"title": f2["title"], "url": f2["url"]}
+                    row.append(InlineKeyboardButton(f"📁 {f2['title']}", callback_data=f"sp_cat:{sid2}"))
+
+                buttons.append(row)
+
+            buttons.append([InlineKeyboardButton("🔍 Search MMSTown Topics", callback_data="sp_choose_kw:mmst")])
+            buttons.append([
+                InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ])
+
+            card_text = (
+                "<blockquote>"
+                "💬 <b>MMSTown Forums</b>\n"
+                "Select a forum category to browse or scrape:"
+                "</blockquote>"
+            )
+            await query.edit_message_text(
+                card_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        elif plat == "vibex":
+            buttons = [
+                [
+                    InlineKeyboardButton("🆕 Latest Videos (10)", callback_data="sp_vibex:latest"),
+                    InlineKeyboardButton("📸 Latest Albums (10)", callback_data="sp_vibex:photos"),
+                ],
+                [
+                    InlineKeyboardButton("🔍 Search Videos by Keyword", callback_data="sp_choose_kw:vibex"),
+                ],
+                [
+                    InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ],
+            ]
+            await query.edit_message_text(
+                "<blockquote>⚡ <b>MMSVibex Hub</b>\nSelect an option to browse or search:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        elif plat == "wplock":
+            buttons = [
+                [
+                    InlineKeyboardButton("📁 Omaal63 (Latest 10)", callback_data="sp_wprun:omaal"),
+                    InlineKeyboardButton("📁 DesiJugar (Latest 10)", callback_data="sp_wprun:desijugar"),
+                ],
+                [
+                    InlineKeyboardButton("📁 GulabiHub (Latest 10)", callback_data="sp_wprun:gulabi"),
+                ],
+                [
+                    InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ],
+            ]
+            await query.edit_message_text(
+                "<blockquote>🌐 <b>WordPress Locker Hub</b>\nSelect a site to scrape the latest drops:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
         plat_label = "📹 LiveCam Models"
         example_q = "GoddessAnna"
         context.user_data["awaiting_search"] = plat
@@ -2136,6 +2652,111 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "✏️ <i>Please send the keyword or title in your next message (e.g. <code>1080p video</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
+        )
+    elif data == "sp_choose_kw:mmst":
+        context.user_data["awaiting_search"] = "mmst"
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:mmst"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            "<blockquote>🔍 <b>Searching:</b> 💬 MMSTown Forum\n\n"
+            "✏️ <i>Please send the keyword or title in your next message (e.g. <code>desi video</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data == "sp_choose_kw:vibex":
+        context.user_data["awaiting_search"] = "vibex"
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:vibex"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            "<blockquote>🔍 <b>Searching:</b> ⚡ MMSVibex Videos\n\n"
+            "✏️ <i>Please send the keyword or model name in your next message (e.g. <code>baddie</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data == "sp_vibex:latest":
+        await run_mmsvibex_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url="https://mmsvibex.life/?filter=latest",
+            start_idx=1,
+            end_idx=10,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            listing_title="MMSVibex Latest Videos",
+        )
+    elif data == "sp_vibex:photos":
+        await run_mmsvibex_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url="https://mmsvibex.life/photos/",
+            start_idx=1,
+            end_idx=10,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            listing_title="MMSVibex Photo Albums",
+        )
+    elif data.startswith("sp_vrun:"):
+        _, sid_str, lim_str = data.split(":")
+        sid = int(sid_str)
+        lim = int(lim_str)
+        vurl = context.user_data.get(f"vibex_url_{sid}") or db.get_url_from_short_id(sid) or "https://mmsvibex.life/?filter=latest"
+        await run_mmsvibex_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url=vurl,
+            start_idx=1,
+            end_idx=lim,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+        )
+    elif data == "sp_wprun:omaal":
+        await run_wp_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url="https://omaal63.net/",
+            start_idx=1,
+            end_idx=10,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            listing_title="Omaal63 Latest Drops",
+        )
+    elif data == "sp_wprun:desijugar":
+        await run_wp_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url="https://desijugar.me/",
+            start_idx=1,
+            end_idx=10,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            listing_title="DesiJugar Latest Drops",
+        )
+    elif data == "sp_wprun:gulabi":
+        await run_wp_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url="https://gulabihub.com/",
+            start_idx=1,
+            end_idx=10,
+            status_msg=query.message,
+            user_id=query.from_user.id,
+            listing_title="GulabiHub Latest Drops",
+        )
+    elif data.startswith("sp_wprun_id:"):
+        _, sid_str, lim_str = data.split(":")
+        sid = int(sid_str)
+        lim = int(lim_str)
+        wpurl = context.user_data.get(f"wp_url_{sid}") or db.get_url_from_short_id(sid) or "https://desijugar.me/"
+        await run_wp_listing_scrape(
+            bot=context.bot,
+            chat_id=query.message.chat_id,
+            target_url=wpurl,
+            start_idx=1,
+            end_idx=lim,
+            status_msg=query.message,
+            user_id=query.from_user.id,
         )
     elif data.startswith("sp_cat:"):
         context.user_data.pop("awaiting_category_range", None)

@@ -718,6 +718,216 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🔝 Latest 10 Posts", btn_texts)
         self.assertIn("🔙 Back to Category", btn_texts)
 
+    def test_format_post_card_attached_album_and_sites(self):
+        """Test format_post_card handles attached photo albums and custom site origin links."""
+        # 1. MMSVibex Video with attached album
+        vibex_details = {
+            "title": "Sakshi Sexy Baddie",
+            "post_url": "https://mmsvibex.life/sakshi-video/",
+            "tags": ["1080p"],
+            "streaming_links": ["https://cdn.mmsvibex.fit/processed/1900438950_final.mp4"],
+            "attached_album_url": "https://mmsvibex.life/photos/sakshi-sexy-album/",
+            "site": "mmsvibex",
+        }
+        card_vibex = format_post_card(vibex_details, user_pref="all")
+        self.assertIn("📸 <a href='https://mmsvibex.life/photos/sakshi-sexy-album/'>Attached Photo Album</a>", card_vibex)
+        self.assertIn("🌐 <a href='https://mmsvibex.life/sakshi-video/'>Original Video Page</a>", card_vibex)
+
+        # 2. WordPress Locker Post
+        wp_details = {
+            "title": "Desi Locker Video",
+            "post_url": "https://desijugar.me/2026/11/22/post-1/",
+            "tags": ["720p"],
+            "streaming_links": ["https://cloudfam.io/12345"],
+            "site": "wp_locker",
+        }
+        card_wp = format_post_card(wp_details, user_pref="all")
+        self.assertIn("🌐 <a href='https://desijugar.me/2026/11/22/post-1/'>Original Post</a>", card_wp)
+
+    async def test_search_command_multi_platform_buttons(self):
+        """Test /search displays buttons for all 5 integrated platforms."""
+        from bot import search_command
+
+        update = MagicMock()
+        context = MagicMock()
+        context.args = []
+        msg = AsyncMock()
+        update.effective_message = msg
+
+        await search_command(update, context)
+        msg.reply_text.assert_called_once()
+        args, kwargs = msg.reply_text.call_args
+        self.assertIn("Universal Search Engine", args[0])
+        reply_markup = kwargs.get("reply_markup")
+        self.assertIsNotNone(reply_markup)
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn("sp_choose:fm", button_data)     # DropMMS
+        self.assertIn("sp_choose:mmst", button_data)   # MMSTown
+        self.assertIn("sp_choose:vibex", button_data)  # MMSVibex
+        self.assertIn("sp_choose:lc", button_data)     # LiveCamRips
+        self.assertIn("sp_choose:wplock", button_data) # WP Locker
+
+    @patch("bot.send_post_card")
+    @patch("bot.get_mmsvibex_video_details")
+    async def test_handle_raw_url_mmsvibex_video(self, mock_details, mock_send):
+        """Test sending a single MMSVibex video URL routes to MMSVibex video extraction."""
+        from bot import handle_raw_url
+
+        mock_details.return_value = {
+            "title": "Sakshi Video",
+            "post_url": "https://mmsvibex.life/sakshi-video/",
+            "streaming_links": ["https://cdn.mmsvibex.fit/final.mp4"],
+        }
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "https://mmsvibex.life/sakshi-video/"
+        msg.chat_id = 12345
+        status_msg = AsyncMock()
+        msg.reply_text.return_value = status_msg
+        update.effective_message = msg
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot = AsyncMock()
+        context.user_data = {}
+
+        await handle_raw_url(update, context, "https://mmsvibex.life/sakshi-video/")
+        mock_details.assert_called_once_with("https://mmsvibex.life/sakshi-video/")
+        mock_send.assert_called_once()
+
+    @patch("bot.send_post_card")
+    @patch("bot.get_mmsvibex_photo_details")
+    async def test_handle_raw_url_mmsvibex_photo(self, mock_details, mock_send):
+        """Test sending an MMSVibex photo album URL routes to photo ZIP extraction."""
+        from bot import handle_raw_url
+
+        mock_details.return_value = {
+            "title": "Nisha Mony Album",
+            "post_url": "https://mmsvibex.life/photos/nisha-mony/",
+            "streaming_links": ["https://cdn.mmsvibex.fit/downloads/nisha.zip"],
+        }
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "https://mmsvibex.life/photos/nisha-mony/"
+        msg.chat_id = 12345
+        status_msg = AsyncMock()
+        msg.reply_text.return_value = status_msg
+        update.effective_message = msg
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot = AsyncMock()
+        context.user_data = {}
+
+        await handle_raw_url(update, context, "https://mmsvibex.life/photos/nisha-mony/")
+        mock_details.assert_called_once_with("https://mmsvibex.life/photos/nisha-mony/")
+        mock_send.assert_called_once()
+
+    @patch("bot.send_post_card")
+    @patch("bot.get_wp_post_details")
+    async def test_handle_raw_url_wp_locker_post(self, mock_details, mock_send):
+        """Test sending a WordPress locker URL routes to WP post extraction."""
+        from bot import handle_raw_url
+
+        mock_details.return_value = {
+            "title": "Desi Post",
+            "post_url": "https://desijugar.me/2026/11/22/post-1/",
+            "streaming_links": ["https://cloudfam.io/12345"],
+        }
+        update = MagicMock()
+        msg = AsyncMock()
+        msg.text = "https://desijugar.me/2026/11/22/post-1/"
+        msg.chat_id = 12345
+        status_msg = AsyncMock()
+        msg.reply_text.return_value = status_msg
+        update.effective_message = msg
+        update.effective_user.id = 99999
+
+        context = MagicMock()
+        context.bot = AsyncMock()
+        context.user_data = {}
+
+        await handle_raw_url(update, context, "https://desijugar.me/2026/11/22/post-1/")
+        mock_details.assert_called_once_with("https://desijugar.me/2026/11/22/post-1/")
+        mock_send.assert_called_once()
+
+    @patch("bot.get_mmstown_forums")
+    async def test_callback_query_sp_choose_mmst(self, mock_forums):
+        """Test clicking MMSTown button in /search displays MMSTown categories."""
+        from bot import callback_query_handler
+
+        mock_forums.return_value = [
+            {"id": 7, "title": "Desi New Videos HD/SD", "url": "https://mmstown.com/forum/7-desi/"},
+            {"id": 8, "title": "Desi Web Series", "url": "https://mmstown.com/forum/8-series/"},
+        ]
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = "sp_choose:mmst"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        self.assertEqual(query.edit_message_text.call_count, 2)
+        final_call = query.edit_message_text.call_args_list[-1]
+        text = final_call[0][0]
+        self.assertIn("MMSTown Forums", text)
+        self.assertIn("Select a forum category", text)
+
+        reply_markup = final_call[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertTrue(any(b.startswith("sp_cat:") for b in button_data))
+        self.assertIn("sp_choose_kw:mmst", button_data)
+        self.assertIn("cb_search", button_data)
+        self.assertIn("sp_cancel", button_data)
+
+    async def test_callback_query_sp_choose_vibex(self):
+        """Test clicking MMSVibex button in /search displays Videos and Photo Albums options."""
+        from bot import callback_query_handler
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = "sp_choose:vibex"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args[0][0]
+        self.assertIn("MMSVibex Hub", text)
+
+        reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn("sp_vibex:latest", button_data)
+        self.assertIn("sp_vibex:photos", button_data)
+        self.assertIn("sp_choose_kw:vibex", button_data)
+        self.assertIn("cb_search", button_data)
+
+    async def test_callback_query_sp_choose_wplock(self):
+        """Test clicking WP Locker Sites button in /search displays site options."""
+        from bot import callback_query_handler
+
+        update = MagicMock()
+        context = MagicMock()
+        context.user_data = {}
+        query = AsyncMock()
+        query.data = "sp_choose:wplock"
+        query.message.chat_id = 12345
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args[0][0]
+        self.assertIn("WordPress Locker Hub", text)
+
+        reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
+        button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertTrue(any(b.startswith("sp_wprun:") for b in button_data))
+        self.assertIn("cb_search", button_data)
+
 
 if __name__ == "__main__":
     unittest.main()

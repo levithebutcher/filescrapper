@@ -78,10 +78,17 @@ _session = _create_session()
 
 
 def _is_streaming_link(url: str) -> bool:
-    """Check if URL belongs to any supported streaming domain."""
+    """Check if URL belongs to any supported streaming domain or direct video/archive link."""
     if not url or not isinstance(url, str):
         return False
     try:
+        u_low = url.lower().split("?")[0].strip()
+        if u_low.endswith(".mp4") or u_low.endswith(".zip"):
+            return True
+        if "/downloads/" in u_low and ".zip" in u_low:
+            return True
+        if "/processed/" in u_low and ".mp4" in u_low:
+            return True
         domain = urlparse(url).netloc.lower()
         if not domain:
             domain = url.split("/")[0].lower()
@@ -91,7 +98,7 @@ def _is_streaming_link(url: str) -> bool:
 
 
 # Provider Priority Order (Highest -> Lowest)
-# User requested order: Streamtape -> Vidara -> Streamfiles -> iPlayGo/Lplaygo -> ABStream -> Uqload -> Streamcash -> Rest
+# Direct CDN Media -> Streamtape -> Vidara -> Streamfiles -> iPlayGo/Lplaygo -> ABStream -> Uqload -> Streamcash -> Rest
 PROVIDER_PRIORITY = [
     "streamtape",
     "vidara",
@@ -101,6 +108,8 @@ PROVIDER_PRIORITY = [
     "abstream",
     "uqload",
     "streamcash",
+    "direct_mp4",
+    "direct_zip",
     "doodstream",
     "streamwish",
     "filelions",
@@ -114,12 +123,18 @@ PROVIDER_PRIORITY = [
 def get_host_display_name(url: str) -> str:
     """Get clean emoji-badge display name for a streaming provider."""
     try:
+        u_low = url.lower()
+        clean_path = u_low.split("?")[0]
         domain = urlparse(url).netloc.lower()
-        if "streamtape" in domain:
+        if "mmsvibex" in domain or clean_path.endswith(".mp4") or "/processed/" in u_low:
+            return "⚡ Direct MP4"
+        elif clean_path.endswith(".zip") or "/downloads/" in u_low:
+            return "📦 Download ZIP"
+        elif "streamtape" in domain:
             return "🎬 Streamtape"
         elif "vidara" in domain:
             return "⚡ Vidara"
-        elif "streamfiles" in domain:
+        elif "streamfile" in domain:
             return "📥 Streamfiles"
         elif "iplaygo" in domain or "lplaygo" in domain:
             return "▶️ iPlayGo"
@@ -153,16 +168,20 @@ def get_host_display_name(url: str) -> str:
 def get_host_key(url: str) -> str:
     """Extract standard key for a streaming provider (e.g. streamtape, vidara)."""
     try:
+        u_low = url.lower()
+        clean_path = u_low.split("?")[0]
         domain = urlparse(url).netloc.lower()
-        if "streamtape" in domain:
+        if "mmsvibex" in domain or clean_path.endswith(".mp4") or "/processed/" in u_low:
+            return "direct_mp4"
+        elif clean_path.endswith(".zip") or "/downloads/" in u_low:
+            return "direct_zip"
+        elif "streamtape" in domain:
             return "streamtape"
         elif "vidara" in domain:
             return "vidara"
-        elif "streamfiles" in domain:
+        elif "streamfile" in domain:
             return "streamfiles"
-        elif "iplaygo" in domain:
-            return "iplaygo"
-        elif "lplaygo" in domain:
+        elif "iplaygo" in domain or "lplaygo" in domain:
             return "iplaygo"
         elif "abstream" in domain:
             return "abstream"
@@ -922,6 +941,93 @@ def get_dropmms_forums() -> list[dict]:
     return result
 
 
+# --- MMSTown Forum Integration ---
+MMSTOWN_BASE_URL = "https://mmstown.com"
+CURATED_MMSTOWN_FORUM_IDS = [7, 8, 11, 12, 13, 14, 15, 16]
+
+CURATED_MMSTOWN_FORUMS = {
+    7: {"title": "Desi New Videos HD / SD", "url": "https://mmstown.com/forum/7-desi-new-videos-hd-sd/"},
+    8: {"title": "Desi Exclusive Videos", "url": "https://mmstown.com/forum/8-desi-exclusive-videos/"},
+    11: {"title": "Indian Semi Nude & Masked", "url": "https://mmstown.com/forum/11-indian-semi-nude-masked/"},
+    12: {"title": "Desi Hardcore Videos", "url": "https://mmstown.com/forum/12-desi-hardcore-videos/"},
+    13: {"title": "Indian Webcam & Live", "url": "https://mmstown.com/forum/13-indian-webcam-live/"},
+    14: {"title": "Desi Audio & Calls", "url": "https://mmstown.com/forum/14-desi-audio-calls/"},
+    15: {"title": "Desi Photos & Albums", "url": "https://mmstown.com/forum/15-desi-photos-albums/"},
+    16: {"title": "International Videos", "url": "https://mmstown.com/forum/16-international-videos/"},
+}
+
+
+def is_mmstown_url(url: str) -> bool:
+    """Check if URL belongs to mmstown.com."""
+    if not url or not isinstance(url, str):
+        return False
+    return "mmstown.com" in url.lower()
+
+
+def is_mmstown_topic_url(url: str) -> bool:
+    """Check if URL represents an individual MMSTown topic."""
+    return is_mmstown_url(url) and is_topic_url(url)
+
+
+def is_mmstown_forum_url(url: str) -> bool:
+    """Check if URL represents an MMSTown forum category."""
+    return is_mmstown_url(url) and is_forum_url(url)
+
+
+def get_mmstown_forums() -> list[dict]:
+    """
+    Fetch active forum categories from MMSTown, filtered strictly to CURATED_MMSTOWN_FORUM_IDS.
+    Returns list of dicts: [{'title': '...', 'url': '...', 'id': 7}, ...]
+    """
+    id_map = {}
+    try:
+        soup = _fetch_soup(f"{MMSTOWN_BASE_URL}/")
+        if soup:
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                full_url = urljoin(MMSTOWN_BASE_URL, href).split("?")[0].rstrip("/")
+                if "/forum/" in full_url and not is_topic_url(full_url):
+                    parts = [p for p in full_url.split("/") if p]
+                    if len(parts) >= 4 and parts[2] == "forum":
+                        slug = parts[3]
+                        prefix = slug.split("-")[0]
+                        if prefix.isdigit() and len(parts) == 4:
+                            f_id = int(prefix)
+                            if f_id in CURATED_MMSTOWN_FORUM_IDS:
+                                title = a.get_text(strip=True)
+                                if not title:
+                                    parent_h = a.find_parent(["h4", "h3", "h2", "span"])
+                                    if parent_h:
+                                        title = parent_h.get_text(strip=True)
+                                if title:
+                                    clean_title = re.sub(r"\s*\(\d+\)\s*$", "", title).strip()
+                                    if clean_title.lower() not in ["forums", "categories", "home"]:
+                                        if f_id not in id_map:
+                                            id_map[f_id] = {"title": clean_title, "url": f"{full_url}/", "id": f_id}
+    except Exception as e:
+        logger.warning(f"Could not fetch dynamic MMSTown forums: {e}")
+
+    result = []
+    for f_id in CURATED_MMSTOWN_FORUM_IDS:
+        if f_id in id_map:
+            result.append(id_map[f_id])
+        else:
+            default_entry = CURATED_MMSTOWN_FORUMS.get(f_id)
+            if default_entry:
+                result.append({
+                    "title": default_entry["title"],
+                    "url": default_entry["url"],
+                    "id": f_id,
+                })
+            else:
+                result.append({
+                    "title": f"Forum {f_id}",
+                    "url": f"{MMSTOWN_BASE_URL}/forum/{f_id}-category/",
+                    "id": f_id,
+                })
+    return result
+
+
 def get_dropmms_category_stats(category_url: str) -> dict:
     """
     Fetch DropMMS forum category metadata: clean title, total pages, and estimated total topics.
@@ -984,11 +1090,15 @@ def get_dropmms_category_stats(category_url: str) -> dict:
     }
 
 
-def search_forum(query: str, limit: int = 5) -> list[dict]:
+get_ips_category_stats = get_dropmms_category_stats
+
+
+def search_forum(query: str, limit: int = 5, base_url: str = BASE_URL) -> list[dict]:
     """
-    Search the forum by keyword and return top matching topics.
+    Search an IPS forum (DropMMS or MMSTown) by keyword and return top matching topics.
     """
-    search_url = f"{BASE_URL}/search/?q={quote_plus(query.strip())}&type=forums_topic"
+    b_url = base_url.rstrip("/")
+    search_url = f"{b_url}/search/?q={quote_plus(query.strip())}&type=forums_topic"
     soup = _fetch_soup(search_url)
 
     results = []
@@ -1200,6 +1310,9 @@ def _clean_highres_image_url(url: str) -> str:
     # 4. PostImg: replace thumbnail paths if present
     if "postimg.cc" in cleaned and "/t/" in cleaned:
         cleaned = cleaned.replace("/t/", "/")
+
+    # 5. WordPress dimension suffix removal (e.g. image-180x200.jpg -> image.jpg)
+    cleaned = re.sub(r'-\d+x\d+\.(jpg|jpeg|png|webp)', r'.\1', cleaned, flags=re.I)
 
     return cleaned
 
@@ -1514,8 +1627,12 @@ def is_forum_url(url: str) -> bool:
         or "/categories/" in u
         or u.rstrip("/").endswith("index.php")
         or u.rstrip("/") == BASE_URL.lower()
-        or u.rstrip("/") == "https://dropmms.com"
-        or u.rstrip("/") == "http://dropmms.com"
+        or u.rstrip("/") in [
+            "https://dropmms.com",
+            "http://dropmms.com",
+            "https://mmstown.com",
+            "http://mmstown.com",
+        ]
     )
 
 
@@ -1539,7 +1656,18 @@ def parse_slicing_args(args: list[str]) -> tuple[str | None, int | None, int | N
 
     for arg in args:
         a = arg.strip()
-        if re.match(r"^https?://", a, re.I) or "dropmms.com" in a.lower() or "livecamrips.to" in a.lower():
+        if re.match(r"^https?://", a, re.I) or any(
+            d in a.lower()
+            for d in [
+                "dropmms.com",
+                "mmstown.com",
+                "mmsvibex.life",
+                "gulabihub.com",
+                "omaal63.net",
+                "desijugar.me",
+                "livecamrips.to",
+            ]
+        ):
             target_url = a
         else:
             remaining.append(a)
@@ -2093,5 +2221,400 @@ def search_livecam_models(query: str, limit: int = 10) -> list[dict]:
             break
 
     return results
+
+
+# --- MMSVibex Multi-Media Integration ---
+
+def is_mmsvibex_url(url: str) -> bool:
+    """Check if URL belongs to mmsvibex.life."""
+    if not url or not isinstance(url, str):
+        return False
+    return "mmsvibex.life" in url.lower()
+
+
+def is_mmsvibex_photo_url(url: str) -> bool:
+    """Check if URL represents an individual MMSVibex photo album."""
+    if not is_mmsvibex_url(url):
+        return False
+    u = url.lower().split("?")[0].rstrip("/")
+    if u in ["https://mmsvibex.life/photos", "http://mmsvibex.life/photos"]:
+        return False
+    return "/photos/" in u or "/album/" in u
+
+
+def is_mmsvibex_listing_url(url: str) -> bool:
+    """Check if URL represents an MMSVibex listing, archive, or category page."""
+    if not is_mmsvibex_url(url):
+        return False
+    u = url.lower().strip()
+    clean_u = u.split("?")[0].rstrip("/")
+    if clean_u in ["https://mmsvibex.life", "http://mmsvibex.life", "https://mmsvibex.life/photos", "http://mmsvibex.life/photos"]:
+        return True
+    return bool(re.search(r"[?&]filter=", u, re.I) or "/page/" in u or "/category/" in u or "/tag/" in u or "/actors/" in u)
+
+
+def is_mmsvibex_video_url(url: str) -> bool:
+    """Check if URL represents an individual MMSVibex video page."""
+    return is_mmsvibex_url(url) and not is_mmsvibex_photo_url(url) and not is_mmsvibex_listing_url(url)
+
+
+def get_mmsvibex_video_details(video_url: str) -> dict:
+    """Fetch video details from MMSVibex video page including direct CDN MP4 and attached photo album."""
+    soup = _fetch_soup(video_url)
+
+    h1 = soup.find("h1") or soup.find("span", class_="title")
+    title = h1.get_text(strip=True) if h1 else "Untitled Video"
+    clean_title, tags = extract_tags_and_quality(title)
+
+    # Poster / thumbnail
+    thumbnail = None
+    v_tag = soup.find("video")
+    if v_tag and v_tag.get("poster"):
+        thumbnail = v_tag["poster"].strip()
+    if not thumbnail:
+        og = soup.find("meta", property="og:image")
+        if og and og.get("content"):
+            thumbnail = og["content"].strip()
+    if not thumbnail:
+        img_thumb = soup.find("img", class_=re.compile(r"video-main-thumb|attachment-post-thumbnail", re.I))
+        if img_thumb:
+            thumbnail = img_thumb.get("src") or img_thumb.get("data-src")
+
+    thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
+
+    # Duration
+    duration = None
+    dur_elem = soup.find("span", class_=re.compile(r"duration", re.I))
+    if dur_elem:
+        duration = dur_elem.get_text(strip=True)
+
+    # Direct CDN MP4 links
+    streaming_links = []
+    seen = set()
+
+    for s_tag in soup.find_all("source"):
+        src = s_tag.get("src", "").strip()
+        if src and (".mp4" in src.lower() or "cdn.mmsvibex" in src.lower()):
+            if src not in seen:
+                seen.add(src)
+                streaming_links.append(src)
+
+    if not streaming_links:
+        for v in soup.find_all("video", src=True):
+            vsrc = v["src"].strip()
+            if vsrc and vsrc not in seen:
+                seen.add(vsrc)
+                streaming_links.append(vsrc)
+
+    if not streaming_links:
+        for m in re.finditer(r'https?://[^\s"\'<>]+\.mp4(?:\?[^\s"\'<>]*)?', str(soup)):
+            mp4_url = m.group(0)
+            if mp4_url not in seen:
+                seen.add(mp4_url)
+                streaming_links.append(mp4_url)
+
+    # Any other streaming links from html
+    more_links = _extract_streaming_links_from_html(soup, video_url)
+    for ml in more_links:
+        if ml not in seen:
+            seen.add(ml)
+            streaming_links.append(ml)
+
+    # Attached photo album link
+    attached_album_url = None
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if "/photos/" in href and href != "https://mmsvibex.life/photos/":
+            attached_album_url = urljoin(video_url, href)
+            break
+
+    # Date
+    time_elem = soup.find("time")
+    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+
+    return {
+        "title": title,
+        "clean_title": clean_title,
+        "tags": tags,
+        "thumbnail": thumbnail,
+        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "streaming_links": streaming_links,
+        "attached_album_url": attached_album_url,
+        "duration": duration,
+        "post_url": video_url,
+        "date": post_date_raw,
+        "date_ist": post_date_ist,
+        "site": "mmsvibex",
+    }
+
+
+def get_mmsvibex_photo_details(photo_url: str) -> dict:
+    """Fetch photo album details from MMSVibex including direct ZIP download link."""
+    soup = _fetch_soup(photo_url)
+
+    h1 = soup.find("h1")
+    title = h1.get_text(strip=True) if h1 else "Untitled Album"
+    clean_title, tags = extract_tags_and_quality(title)
+
+    zip_url = None
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if ".zip" in href.lower() or "/downloads/" in href.lower():
+            zip_url = urljoin(photo_url, href)
+            break
+
+    if not zip_url:
+        m = re.search(r'https?://[^\s"\'<>]+\.zip', str(soup))
+        if m:
+            zip_url = m.group(0)
+
+    # Cover image / thumbnail
+    thumbnail = None
+    og = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        thumbnail = og["content"].strip()
+    if not thumbnail:
+        gallery_img = soup.find("img", class_=re.compile(r"attachment-|gallery|wp-post-image", re.I))
+        if gallery_img:
+            thumbnail = gallery_img.get("src") or gallery_img.get("data-src")
+
+    thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
+
+    streaming_links = [zip_url] if zip_url else []
+
+    time_elem = soup.find("time")
+    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+
+    return {
+        "title": f"📸 {title} (Photo Album)",
+        "clean_title": clean_title,
+        "tags": list(set(tags + ["Photos", "Album"])),
+        "thumbnail": thumbnail,
+        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "streaming_links": streaming_links,
+        "post_url": photo_url,
+        "date": post_date_raw,
+        "date_ist": post_date_ist,
+        "site": "mmsvibex",
+    }
+
+
+def get_mmsvibex_listing_items(listing_url: str, page: int = 1, limit: int = 25) -> list[dict]:
+    """Fetch items from an MMSVibex listing or category page with pagination."""
+    clean_base = listing_url.split("?")[0].split("#")[0].rstrip("/")
+    query = ""
+    if "?" in listing_url:
+        query = listing_url.split("?")[1].split("#")[0]
+
+    if page == 1:
+        target_url = f"{clean_base}/?{query}" if query else f"{clean_base}/"
+    else:
+        target_url = f"{clean_base}/page/{page}/?{query}" if query else f"{clean_base}/page/{page}/"
+
+    soup = _fetch_soup(target_url)
+    items = []
+    seen = set()
+
+    for block in soup.find_all("div", class_=re.compile(r"thumb-block|video-preview-item|item", re.I)):
+        a = block.find("a", href=True)
+        if not a:
+            continue
+        href = urljoin(target_url, a["href"].strip())
+        if href in seen or not href.startswith("http"):
+            continue
+
+        img = block.find("img")
+        thumb = img.get("src") or img.get("data-src") if img else None
+        thumb = _clean_highres_image_url(thumb) if thumb else None
+
+        title_elem = block.find(class_=re.compile(r"title|entry-header", re.I)) or a
+        title = title_elem.get_text(strip=True) if title_elem else a.get("title", "")
+        if not title:
+            title = "Untitled"
+
+        dur_elem = block.find("span", class_=re.compile(r"duration", re.I))
+        duration = dur_elem.get_text(strip=True) if dur_elem else None
+
+        seen.add(href)
+        items.append({
+            "title": title,
+            "url": href,
+            "thumbnail": thumb,
+            "duration": duration,
+        })
+        if len(items) >= limit:
+            break
+
+    return items
+
+
+def search_mmsvibex(query: str, limit: int = 10) -> list[dict]:
+    """Search MMSVibex videos matching the given query."""
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+    search_url = f"https://mmsvibex.life/?s={quote_plus(clean_q)}"
+    return get_mmsvibex_listing_items(search_url, page=1, limit=limit)
+
+
+# --- WordPress Locker Engine (Omaal63, DesiJugar, GulabiHub) ---
+
+def is_wp_locker_url(url: str) -> bool:
+    """Check if URL belongs to any supported WordPress locker/tube sites."""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.lower()
+    return any(dom in u for dom in ["omaal63.net", "desijugar.me", "gulabihub.com"])
+
+
+def is_wp_locker_listing_url(url: str) -> bool:
+    """Check if URL is a WordPress category, tag, author, or home archive page."""
+    if not is_wp_locker_url(url):
+        return False
+    u = url.lower().split("?")[0].rstrip("/")
+    if u in [
+        "https://omaal63.net", "https://desijugar.me", "https://gulabihub.com",
+        "http://omaal63.net", "http://desijugar.me", "http://gulabihub.com"
+    ]:
+        return True
+    return any(p in u for p in ["/category/", "/tag/", "/author/", "/page/"])
+
+
+def is_wp_locker_post_url(url: str) -> bool:
+    """Check if URL is an individual WordPress locker post."""
+    return is_wp_locker_url(url) and not is_wp_locker_listing_url(url)
+
+
+def get_wp_post_details(post_url: str) -> dict:
+    """Fetch post details from WordPress locker/tube sites (Omaal63, DesiJugar, GulabiHub)."""
+    soup = _fetch_soup(post_url)
+
+    h1 = soup.find("h1", class_=re.compile(r"entry-title|post-title|title", re.I)) or soup.find("h1")
+    title = h1.get_text(strip=True) if h1 else (soup.title.get_text(strip=True) if soup.title else "Untitled Post")
+    clean_title, tags = extract_tags_and_quality(title)
+
+    # Thumbnail extraction
+    thumbnail = None
+    og = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        thumbnail = og["content"].strip()
+
+    if not thumbnail or "svg+xml" in thumbnail:
+        for img in soup.find_all("img"):
+            candidate = (
+                img.get("data-lazy-src")
+                or img.get("data-src")
+                or img.get("data-orig-file")
+                or img.get("src")
+            )
+            if candidate and _is_valid_thumbnail_url(candidate) and not candidate.startswith("data:"):
+                thumbnail = urljoin(post_url, candidate)
+                break
+
+    thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
+
+    # Streaming links: include iframes (for GulabiHub) + normal streaming links
+    streaming_links = []
+    seen = set()
+
+    for iframe in soup.find_all("iframe", src=True):
+        src = iframe["src"].strip()
+        full_src = urljoin(post_url, src)
+        if _is_streaming_link(full_src) and full_src not in seen:
+            seen.add(full_src)
+            streaming_links.append(full_src)
+
+    more_links = _extract_streaming_links_from_html(soup, post_url)
+    for ml in more_links:
+        if ml not in seen:
+            seen.add(ml)
+            streaming_links.append(ml)
+
+    # Date extraction: <time> tag or URL path (e.g. /2026/11/22/)
+    time_elem = soup.find("time")
+    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
+    if not post_date_raw:
+        m_date = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", post_url)
+        if m_date:
+            post_date_raw = f"{m_date.group(1)}-{m_date.group(2)}-{m_date.group(3)}"
+
+    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+
+    return {
+        "title": title,
+        "clean_title": clean_title,
+        "tags": tags,
+        "thumbnail": thumbnail,
+        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "streaming_links": streaming_links,
+        "post_url": post_url,
+        "date": post_date_raw,
+        "date_ist": post_date_ist,
+        "site": "wp_locker",
+    }
+
+
+def get_wp_listing_posts(listing_url: str, page: int = 1, limit: int = 25) -> list[dict]:
+    """Fetch post items from WordPress locker listing or category page with pagination."""
+    clean_base = listing_url.split("?")[0].split("#")[0].rstrip("/")
+    if page == 1:
+        target_url = f"{clean_base}/"
+    else:
+        target_url = f"{clean_base}/page/{page}/"
+
+    soup = _fetch_soup(target_url)
+    posts = []
+    seen = set()
+
+    articles = soup.find_all("article")
+    if not articles:
+        articles = soup.find_all("div", class_=re.compile(r"post|item-video|thumb-block", re.I))
+
+    for art in articles:
+        link = art.find("a", href=True)
+        if not link:
+            continue
+        href = urljoin(target_url, link["href"].strip())
+        if href in seen or not href.startswith("http"):
+            continue
+
+        title_elem = art.find(["h2", "h3", "h4", "span"], class_=re.compile(r"title|entry-title", re.I)) or link
+        title = title_elem.get_text(strip=True) if title_elem else link.get("title", "")
+        if not title:
+            title = "Untitled Post"
+
+        img = art.find("img")
+        thumb = None
+        if img:
+            candidate = (
+                img.get("data-lazy-src")
+                or img.get("data-src")
+                or img.get("data-orig-file")
+                or img.get("src")
+            )
+            if candidate and not candidate.startswith("data:"):
+                thumb = _clean_highres_image_url(urljoin(target_url, candidate))
+
+        time_tag = art.find("time")
+        d_raw = time_tag.get("datetime") if time_tag else None
+        if not d_raw:
+            m_date = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
+            if m_date:
+                d_raw = f"{m_date.group(1)}-{m_date.group(2)}-{m_date.group(3)}"
+
+        seen.add(href)
+        posts.append({
+            "title": title,
+            "url": href,
+            "thumbnail": thumb,
+            "date": d_raw,
+            "date_ist": format_date_ist(d_raw) if d_raw else None,
+        })
+        if len(posts) >= limit:
+            break
+
+    return posts
 
 
