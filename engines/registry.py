@@ -10,6 +10,7 @@ from engines.invision import InvisionCommunityEngine
 from engines.wordpress import WordPressLockerEngine
 from engines.tube import MediaTubeEngine
 from engines.livecam import LiveCamEngine
+from engines.universal import UniversalFallbackEngine
 
 
 class EngineRegistry:
@@ -24,13 +25,18 @@ class EngineRegistry:
         self._engines.append(engine)
         self._name_map[engine.name.lower()] = engine
 
-    def get_engine_for_url(self, url: str) -> Optional[BaseEngine]:
-        """Find the matching engine for a given URL."""
+    def get_engine_for_url(self, url: str, allow_fallback: bool = False) -> Optional[BaseEngine]:
+        """
+        Find the matching engine for a given URL.
+        If allow_fallback is True and no specialized domain engine matches, returns UniversalFallbackEngine.
+        """
         if not url or not isinstance(url, str):
             return None
         for engine in self._engines:
-            if engine.is_supported_url(url):
+            if engine.name.lower() != "universalfallback" and engine.is_supported_url(url):
                 return engine
+        if allow_fallback:
+            return self._name_map.get("universalfallback")
         return None
 
     def get_engine_by_name(self, name: str) -> Optional[BaseEngine]:
@@ -64,7 +70,10 @@ registry.register(MediaTubeEngine())
 # 4. LiveCam Engine (LiveCamRips)
 registry.register(LiveCamEngine())
 
+# 5. Universal Fallback Engine (for unknown/new domains)
+registry.register(UniversalFallbackEngine())
 
-def get_engine_for_url(url: str) -> Optional[BaseEngine]:
+
+def get_engine_for_url(url: str, allow_fallback: bool = False) -> Optional[BaseEngine]:
     """Helper shortcut to get engine for URL."""
-    return registry.get_engine_for_url(url)
+    return registry.get_engine_for_url(url, allow_fallback=allow_fallback)

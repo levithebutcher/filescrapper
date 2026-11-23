@@ -28,6 +28,9 @@ from config import (
 
 from engines.base import (
     BaseEngine,
+    UniversalSort,
+    SORT_DISPLAY_NAMES,
+    UniversalDateResolver,
     HEADERS,
     IST_TZ,
     PROVIDER_PRIORITY,
@@ -48,6 +51,7 @@ from engines.base import (
     filter_links_by_preference,
     extract_tags_and_quality,
     parse_to_ist,
+    extract_date_from_url,
     format_date_ist,
     check_date_filter_match,
     _is_posted_today,
@@ -87,6 +91,7 @@ from engines.invision import (
     get_dropmms_category_stats,
     get_ips_category_stats,
     search_forum,
+    search_forum_advanced,
     get_post_links_from_forum,
     get_post_details,
 )
@@ -127,6 +132,12 @@ from engines.livecam import (
     get_livecam_video_details,
     format_livecam_card,
     search_livecam_models,
+)
+
+from engines.universal import (
+    UniversalFallbackEngine,
+    is_valid_http_url,
+    get_universal_post_details,
 )
 
 from engines.registry import (

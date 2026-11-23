@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 
 from engines.base import (
     BaseEngine,
+    UniversalSort,
+    UniversalDateResolver,
     _fetch_soup,
     _is_streaming_link,
     _clean_highres_image_url,
@@ -94,14 +96,13 @@ def get_wp_post_details(post_url: str) -> dict:
             seen.add(ml)
             streaming_links.append(ml)
 
-    time_elem = soup.find("time")
-    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
-    if not post_date_raw:
-        m_date = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", post_url)
-        if m_date:
-            post_date_raw = f"{m_date.group(1)}-{m_date.group(2)}-{m_date.group(3)}"
-
-    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+    dt_ist, post_date_ist = UniversalDateResolver.resolve(
+        soup=soup,
+        url=post_url,
+        fallback_db_url=post_url,
+        title=title,
+    )
+    post_date_raw = dt_ist.isoformat() if dt_ist else None
 
     return {
         "title": title,
@@ -183,6 +184,9 @@ class WordPressLockerEngine(BaseEngine):
     """WordPress Locker & Tube Engine."""
     name: str = "WordPressLocker"
     domains: list[str] = ["omaal63.net", "desijugar.me", "gulabihub.com"]
+    supported_sorts: dict[UniversalSort, str] = {
+        UniversalSort.NEWEST: "date",
+    }
 
     def is_listing_url(self, url: str) -> bool:
         return is_wp_locker_listing_url(url)
@@ -195,3 +199,8 @@ class WordPressLockerEngine(BaseEngine):
 
     def get_listing_items(self, url: str, **kwargs) -> list[dict]:
         return get_wp_listing_posts(url, **kwargs)
+
+    def search(self, query: str, limit: int = 10, **kwargs) -> list[dict]:
+        base_domain = kwargs.get("base_domain", "https://desijugar.me")
+        search_url = f"{base_domain.rstrip('/')}/?s={query.strip()}"
+        return get_wp_listing_posts(search_url, page=1, limit=limit)

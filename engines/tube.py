@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 
 from engines.base import (
     BaseEngine,
+    UniversalSort,
+    UniversalDateResolver,
     _fetch_soup,
     _clean_highres_image_url,
     extract_tags_and_quality,
@@ -146,30 +148,13 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
             collection_name = text if text and "view" not in text.lower() else "All Parts Collection"
             break
 
-    post_date_raw = None
-    pub_meta = (
-        soup.find("meta", property="article:published_time")
-        or soup.find("meta", property="uploadDate")
-        or soup.find("meta", itemprop="uploadDate")
-        or soup.find("meta", itemprop="datePublished")
+    dt_ist, post_date_ist = UniversalDateResolver.resolve(
+        soup=soup,
+        url=video_url,
+        fallback_db_url=video_url,
+        title=title,
     )
-    if pub_meta and pub_meta.get("content"):
-        post_date_raw = pub_meta["content"].strip()
-
-    if not post_date_raw:
-        time_elem = soup.find("time")
-        if time_elem:
-            post_date_raw = time_elem.get("datetime") or time_elem.get("title")
-
-    if not post_date_raw:
-        for s in soup.find_all("script", type="application/ld+json"):
-            if s.string and "datePublished" in s.string:
-                m_date = re.search(r'"datePublished":\s*"([^"]+)"', s.string)
-                if m_date:
-                    post_date_raw = m_date.group(1)
-                    break
-
-    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+    post_date_raw = dt_ist.isoformat() if dt_ist else None
 
     return {
         "title": title,
@@ -350,6 +335,12 @@ class MediaTubeEngine(BaseEngine):
     """Media Tube Engine (MMSVibex, etc.)."""
     name: str = "MediaTube"
     domains: list[str] = ["mmsvibex.life"]
+    supported_sorts: dict[UniversalSort, str] = {
+        UniversalSort.NEWEST: "latest",
+        UniversalSort.MOST_VIEWED: "most-viewed",
+        UniversalSort.POPULAR: "popular",
+        UniversalSort.LONGEST: "longest",
+    }
 
     def is_listing_url(self, url: str) -> bool:
         return is_mmsvibex_listing_url(url)

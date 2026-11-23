@@ -338,3 +338,37 @@ def set_user_link_mode(user_id: int | str, mode: str) -> bool:
         logger.error(f"Error saving livecam link mode for {user_id}: {e}")
         return False
 
+
+def get_or_record_first_seen(url: str, title: str = "") -> datetime:
+    """
+    Get or record the first seen timestamp for a URL in UTC and return as datetime.
+    Used for platforms without native publication timestamps (e.g. MMSVibex).
+    """
+    from datetime import timezone
+    clean_url = url.strip()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT first_seen FROM seen_posts WHERE post_url = ?", (clean_url,))
+            row = cursor.fetchone()
+            if row and row["first_seen"]:
+                try:
+                    return datetime.strptime(row["first_seen"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            now_utc = datetime.now(timezone.utc)
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO seen_posts (post_url, title, first_seen)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                (clean_url, title or "Discovered Media"),
+            )
+            conn.commit()
+            return now_utc
+    except Exception as e:
+        logger.warning(f"Error in get_or_record_first_seen for {url}: {e}")
+        from datetime import timezone
+        return datetime.now(timezone.utc)
+
+

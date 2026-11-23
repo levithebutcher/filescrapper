@@ -88,6 +88,8 @@ from scraper import (
     is_wp_locker_post_url,
     get_wp_post_details,
     get_wp_listing_posts,
+    search_forum_advanced,
+    get_universal_post_details,
 )
 import db
 
@@ -1575,14 +1577,80 @@ async def latest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def send_resurfaced_active_listing(bot, chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Re-surface the active search or category listing at the bottom of the chat after a post is delivered.
+    Marks the delivered post with a checkmark and shows remaining clickable buttons without requiring
+    the user to scroll back up.
+    """
+    if not hasattr(context, "user_data") or not isinstance(context.user_data, dict):
+        return False
+
+    active = context.user_data.get("active_listing")
+    if not active or not isinstance(active, dict) or not active.get("items"):
+        return False
+
+    delivered_ids = active.setdefault("delivered_ids", set())
+    items = active.get("items", [])
+    title = active.get("title", "Active Results")
+
+    text = f"<blockquote>📋 <b>{html.escape(str(title))}</b>\n\n"
+    buttons = []
+
+    for idx, itm in enumerate(items, start=1):
+        if not isinstance(itm, dict):
+            continue
+        sid = itm.get("short_id")
+        itm_title = html.escape(str(itm.get("title", "Item")))
+        if sid in delivered_ids:
+            text += f"✅ {idx}. {itm_title} <i>(Delivered)</i>\n"
+        else:
+            text += f"👉 {idx}. {itm_title}\n"
+            btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{sid}")
+            buttons.append([btn])
+
+    text += "</blockquote>"
+
+    # Multi-page pagination controls if applicable
+    p = active.get("page", 1)
+    tp = active.get("total_pages", 1)
+    plat = active.get("platform", "fm")
+    if isinstance(tp, int) and tp > 1:
+        nav_row = []
+        if isinstance(p, int) and p > 1:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"sp_p:{plat}:{p-1}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {p}/{tp}", callback_data="noop"))
+        if isinstance(p, int) and p < tp:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"sp_p:{plat}:{p+1}"))
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton("🔍 New Search", callback_data="cb_search"),
+        InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+    ])
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Error sending resurfaced active listing: {e}")
+        return False
+
+
 async def execute_platform_search(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     plat: str,
     query: str,
     edit_msg=None,
+    page: int = 1,
 ):
-    """Execute search on the selected platform and display button results."""
+    """Execute search on the selected platform with total counts and multi-page pagination."""
     clean_query = query.strip()
     if not clean_query:
         if edit_msg:
@@ -1596,9 +1664,10 @@ async def execute_platform_search(
         "fm": "DropMMS Forum",
         "mmst": "MMSTown Forum",
         "vibex": "MMSVibex Videos",
+        "wplock": "WordPress Lockers",
     }
     plat_label = plat_names.get(plat, "Platform")
-    status_text = f"🔍 <i>Searching {plat_label} for '<b>{html.escape(clean_query)}</b>'...</i>"
+    status_text = f"🔍 <i>Searching {plat_label} for '<b>{html.escape(clean_query)}</b>' (Page {page})...</i>"
 
     if edit_msg:
         try:
@@ -1641,7 +1710,7 @@ async def execute_platform_search(
             buttons.append([btn])
 
         buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:lc"),
+            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
             InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
         ])
         buttons.append([
@@ -1677,14 +1746,92 @@ async def execute_platform_search(
 
         text = f"🔎 <b>MMSVibex Videos Matching '{html.escape(clean_query)}':</b>\n\n"
         buttons = []
+        items_for_active = []
         for idx, r in enumerate(results, start=1):
-            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
             short_id = db.get_or_create_short_id(r["url"])
+            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
             btn = InlineKeyboardButton(f"⚡ Extract #{idx}", callback_data=f"sc_{short_id}")
             buttons.append([btn])
+            items_for_active.append({
+                "title": r["title"],
+                "url": r["url"],
+                "short_id": short_id,
+            })
+
+        context.user_data["active_listing"] = {
+            "title": f"MMSVibex: '{clean_query}'",
+            "type": "search",
+            "platform": "vibex",
+            "query": clean_query,
+            "page": 1,
+            "total_pages": 1,
+            "items": items_for_active,
+            "delivered_ids": set(),
+        }
 
         buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:vibex"),
+            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
+            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ])
+        await status_msg.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    elif plat == "wplock":
+        try:
+            search_url = f"https://desijugar.me/?s={quote_plus(clean_query)}"
+            results = await asyncio.to_thread(get_wp_listing_posts, search_url, page, 8)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:wplock")],
+                [InlineKeyboardButton("🔙 Back to Search", callback_data="cb_search")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"❌ No locker posts found for <b>{html.escape(clean_query)}</b>.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        text = f"🔎 <b>WordPress Locker Posts Matching '{html.escape(clean_query)}':</b>\n\n"
+        buttons = []
+        items_for_active = []
+        for idx, r in enumerate(results, start=1):
+            short_id = db.get_or_create_short_id(r["url"])
+            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
+            btn = InlineKeyboardButton(f"🌐 Extract #{idx}", callback_data=f"sc_{short_id}")
+            buttons.append([btn])
+            items_for_active.append({
+                "title": r["title"],
+                "url": r["url"],
+                "short_id": short_id,
+            })
+
+        context.user_data["active_listing"] = {
+            "title": f"WordPress: '{clean_query}'",
+            "type": "search",
+            "platform": "wplock",
+            "query": clean_query,
+            "page": page,
+            "total_pages": 1,
+            "items": items_for_active,
+            "delivered_ids": set(),
+        }
+
+        buttons.append([
+            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
             InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
         ])
         buttons.append([
@@ -1698,10 +1845,15 @@ async def execute_platform_search(
         )
 
     else:
-        # Forum search (DropMMS or MMSTown)
+        # Forum search (DropMMS or MMSTown) with advanced parameters & total counts
         base_search_url = "https://mmstown.com" if plat == "mmst" else BASE_URL
         try:
-            results = await asyncio.to_thread(search_forum, clean_query, 6, base_search_url)
+            search_res = await asyncio.to_thread(
+                search_forum_advanced, clean_query, page, 6, "titles", "relevancy", base_search_url
+            )
+            results = search_res.get("topics", [])
+            total_count = search_res.get("total_count", len(results))
+            total_pages = search_res.get("total_pages", 1)
         except Exception as e:
             await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
             return
@@ -1714,27 +1866,74 @@ async def execute_platform_search(
             ])
             context.user_data["search_query"] = clean_query
             await status_msg.edit_text(
-                f"❌ No topics found on {plat_label} for <b>{html.escape(clean_query)}</b>.",
+                f"❌ No topics found on {plat_label} for <b>{html.escape(clean_query)}</b>.\n\n"
+                "<i>Tip: Check spelling or try a broader keyword.</i>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
             return
 
-        text = f"🔎 <b>{plat_label} Topics Matching '{html.escape(clean_query)}':</b>\n\n"
+        count_str = f"Found {total_count} Topics" if total_count else "Available"
+        text = (
+            "<blockquote>"
+            f"🔎 <b>{plat_label} Results</b>\n"
+            f"🎯 <b>Query:</b> <code>{html.escape(clean_query)}</code>\n"
+            f"📊 <b>Total:</b> {count_str}"
+        )
+        if total_pages > 1:
+            text += f" (Page {page}/{total_pages})"
+        text += "</blockquote>\n\n"
+
         buttons = []
+        items_for_active = []
         for idx, r in enumerate(results, start=1):
-            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
             short_id = db.get_or_create_short_id(r["url"])
+            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
             btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{short_id}")
             buttons.append([btn])
+            items_for_active.append({
+                "title": r["title"],
+                "url": r["url"],
+                "short_id": short_id,
+            })
+
+        context.user_data["active_listing"] = {
+            "title": f"{plat_label}: '{clean_query}'",
+            "type": "search",
+            "platform": plat,
+            "query": clean_query,
+            "page": page,
+            "total_pages": total_pages,
+            "items": items_for_active,
+            "delivered_ids": set(),
+        }
+
+        # Multi-page pagination
+        if total_pages > 1:
+            nav_row = []
+            if page > 1:
+                nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"sp_p:{plat}:{page-1}"))
+            nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+            if page < total_pages:
+                nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"sp_p:{plat}:{page+1}"))
+            buttons.append(nav_row)
+
+        # Cross-platform search switcher tabs
+        tab_row = []
+        if plat != "fm":
+            tab_row.append(InlineKeyboardButton("💬 DropMMS", callback_data="sp_switch:fm"))
+        if plat != "mmst":
+            tab_row.append(InlineKeyboardButton("💬 MMSTown", callback_data="sp_switch:mmst"))
+        if plat != "vibex":
+            tab_row.append(InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_switch:vibex"))
+        if plat != "lc":
+            tab_row.append(InlineKeyboardButton("📹 LiveCam", callback_data="sp_switch:lc"))
+        if tab_row:
+            buttons.append(tab_row)
 
         buttons.append([
-            InlineKeyboardButton(f"🔄 New Search", callback_data=f"sp_choose:{plat}"),
-            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
-        ])
-        buttons.append([
+            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
             InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ])
         await status_msg.edit_text(
             text,
@@ -1744,9 +1943,12 @@ async def execute_platform_search(
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Interactive universal search engine with platform & result buttons."""
+    """Interactive universal search engine with direct keyword prompt & platform tabs."""
     msg = update.effective_message
-    if not context.args:
+    query = " ".join(context.args).strip() if (context.args and len(context.args) > 0) else ""
+
+    if not query:
+        context.user_data["awaiting_search"] = "prompt"
         markup = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_choose:fm"),
@@ -1764,15 +1966,23 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
             ],
         ])
-        await msg.reply_text(
+        card_text = (
+            "<blockquote>"
             "🔍 <b>Universal Search Engine</b>\n\n"
-            "Select which platform you would like to explore or search:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=markup,
+            "Select which platform you would like to explore or search, or type a keyword directly in chat:"
+            "</blockquote>"
         )
+        if update.callback_query:
+            try:
+                await update.callback_query.edit_message_text(
+                    card_text, parse_mode=ParseMode.HTML, reply_markup=markup
+                )
+            except Exception:
+                await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        else:
+            await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
-    query = " ".join(context.args).strip()
     context.user_data["search_query"] = query
     markup = InlineKeyboardMarkup([
         [
@@ -1784,16 +1994,28 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
         ],
         [
+            InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
+        ],
+        [
             InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])
-    await msg.reply_text(
+    reply_text = (
         f"🔍 <b>Search Query:</b> <code>{html.escape(query)}</code>\n\n"
-        "Choose a platform to search:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=markup,
+        "Choose a platform to search:"
     )
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(
+                reply_text, parse_mode=ParseMode.HTML, reply_markup=markup
+            )
+        except Exception:
+            await msg.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    else:
+        await msg.reply_text(
+            reply_text, parse_mode=ParseMode.HTML, reply_markup=markup
+        )
 
 
 
@@ -2390,8 +2612,31 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
+    # 5. Universal Fallback for any other valid HTTP/HTTPS URL
+    if target_url.startswith("http://") or target_url.startswith("https://"):
+        status = await msg.reply_text("🌐 <i>Analyzing webpage with Universal Scraper...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_universal_post_details, target_url)
+            if details.get("streaming_links"):
+                await send_post_card(context.bot, chat_id, details, user_id=user_id)
+            else:
+                await status.edit_text(
+                    "<blockquote>⚠️ <b>Universal Engine:</b> No streaming video embeds or direct media files were found on this page.</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+        except Exception as e:
+            await status.edit_text(f"❌ Universal extraction note: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
     end_scrape_for_chat(chat_id)
-    await msg.reply_text("❓ Please send a valid DropMMS or LiveCamRips URL (video or category/model page).", parse_mode=ParseMode.HTML)
+    await msg.reply_text("❓ Please send a valid URL to extract media.", parse_mode=ParseMode.HTML)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2813,7 +3058,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if user is in an interactive search flow
     awaiting_plat = context.user_data.pop("awaiting_search", None)
     if awaiting_plat:
-        await execute_platform_search(update, context, awaiting_plat, text)
+        clean_text = text.strip()
+        if awaiting_plat == "prompt":
+            context.user_data["search_query"] = clean_text
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
+                    InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
+                ],
+                [
+                    InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
+                    InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
+                ],
+                [
+                    InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
+                ],
+                [
+                    InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ],
+            ])
+            await update.effective_message.reply_text(
+                f"🔍 <b>Search Query:</b> <code>{html.escape(clean_text)}</code>\n\n"
+                "Choose a platform to search:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+        await execute_platform_search(update, context, awaiting_plat, clean_text)
         return
 
     if text.startswith("http://") or text.startswith("https://") or any(
@@ -3498,20 +3770,31 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             user_id=query.from_user.id,
             cat_title=cat_title,
         )
+    elif data == "noop":
+        await query.answer()
+        return
+    elif data.startswith("sp_p:"):
+        _, plat, page_str = data.split(":")
+        page = int(page_str)
+        query_text = context.user_data.get("search_query", "").strip()
+        if not query_text:
+            await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
+            return
+        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message, page=page)
     elif data.startswith("sp_do:"):
         plat = data.split(":")[1]
         query_text = context.user_data.get("search_query", "").strip()
         if not query_text:
             await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
             return
-        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message)
+        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message, page=1)
     elif data.startswith("sp_switch:"):
         plat = data.split(":")[1]
         query_text = context.user_data.get("search_query", "").strip()
         if not query_text:
             await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
             return
-        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message)
+        await execute_platform_search(update, context, plat, query_text, edit_msg=query.message, page=1)
     elif data.startswith("sp_mdl:"):
         context.user_data.pop("awaiting_model_range", None)
         short_id = int(data.split(":")[1])
@@ -3702,15 +3985,23 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         if target_url:
             await process_topic_scrape(context.bot, query.message.chat_id, target_url, user_id=query.from_user.id)
-            try:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="<i>⚡ What would you like to do next?</i>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_navigation_keyboard(),
-                )
-            except Exception:
-                pass
+            re_sent = False
+            active = context.user_data.get("active_listing")
+            if active:
+                if target_id.isdigit():
+                    active.setdefault("delivered_ids", set()).add(int(target_id))
+                re_sent = await send_resurfaced_active_listing(context.bot, query.message.chat_id, context)
+
+            if not re_sent:
+                try:
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text="<i>⚡ What would you like to do next?</i>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
         else:
             await query.message.reply_text("⚠️ This link has expired or is invalid. Please search or extract again.")
     elif data.startswith("unlink_"):

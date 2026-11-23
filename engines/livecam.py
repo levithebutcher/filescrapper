@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from engines.base import (
     BaseEngine,
+    UniversalSort,
     _fetch_soup,
     _extract_streaming_links_from_html,
     get_host_display_name,
@@ -463,6 +464,12 @@ class LiveCamEngine(BaseEngine):
     """LiveCam Engine (LiveCamRips)."""
     name: str = "LiveCam"
     domains: list[str] = ["livecamrips.to"]
+    supported_sorts: dict[UniversalSort, str] = {
+        UniversalSort.NEWEST: "newest",
+        UniversalSort.MOST_VIEWED: "most_viewed",
+        UniversalSort.POPULAR: "most_liked",
+        UniversalSort.OLDEST: "oldest",
+    }
 
     def is_listing_url(self, url: str) -> bool:
         return is_livecam_model_url(url)

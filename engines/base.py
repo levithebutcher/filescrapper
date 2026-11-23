@@ -8,6 +8,7 @@ import re
 import io
 import html
 import logging
+from enum import Enum
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, quote, quote_plus
 from PIL import Image
@@ -440,6 +441,24 @@ def _fetch_soup(url: str) -> BeautifulSoup:
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 
+class UniversalSort(str, Enum):
+    """Standardized sorting types supported across video and forum engines."""
+    NEWEST = "newest"
+    MOST_VIEWED = "most_viewed"
+    POPULAR = "popular"
+    OLDEST = "oldest"
+    LONGEST = "longest"
+
+
+SORT_DISPLAY_NAMES = {
+    UniversalSort.NEWEST: "🆕 Newest",
+    UniversalSort.MOST_VIEWED: "🔥 Most Viewed",
+    UniversalSort.POPULAR: "❤️ Popular",
+    UniversalSort.OLDEST: "⏳ Oldest",
+    UniversalSort.LONGEST: "⏱️ Longest",
+}
+
+
 def parse_to_ist(date_str: str | None) -> datetime | None:
     """Parse ISO UTC timestamp (or string) and convert to Indian Standard Time (IST, UTC+05:30)."""
     if not date_str:
@@ -464,6 +483,9 @@ def parse_to_ist(date_str: str | None) -> datetime | None:
         "%Y-%m-%d %H:%M",
         "%d %b %Y %I:%M %p",
         "%d %b %Y",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%d %B %Y",
     ):
         try:
             dt = datetime.strptime(s, fmt)
@@ -474,12 +496,114 @@ def parse_to_ist(date_str: str | None) -> datetime | None:
     return None
 
 
-def format_date_ist(date_str: str | None) -> str | None:
-    """Format timestamp into human-readable IST string: '20 Nov 2026, 11:50 AM IST'."""
-    dt_ist = parse_to_ist(date_str)
+def extract_date_from_url(url: str | None) -> datetime | None:
+    """Extract date from URL path pattern like /2026/11/22/post-name/."""
+    if not url:
+        return None
+    m = re.search(r"/(202\d)/(\d{1,2})/(\d{1,2})/", url)
+    if m:
+        try:
+            year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            dt = datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+            return dt.astimezone(IST_TZ)
+        except Exception:
+            pass
+    return None
+
+
+def format_date_ist(date_input: datetime | str | None, include_time: bool = True) -> str | None:
+    """Format timestamp into standardized human-readable IST string: '20 Nov 2026, 11:50 AM IST'."""
+    if not date_input:
+        return None
+    if isinstance(date_input, datetime):
+        dt_ist = date_input.astimezone(IST_TZ) if date_input.tzinfo else date_input.replace(tzinfo=IST_TZ)
+    else:
+        dt_ist = parse_to_ist(date_input)
     if not dt_ist:
         return None
-    return dt_ist.strftime("%d %b %Y, %I:%M %p IST")
+    if include_time:
+        return dt_ist.strftime("%d %b %Y, %I:%M %p IST")
+    return dt_ist.strftime("%d %b %Y IST")
+
+
+class UniversalDateResolver:
+    """
+    Robust multi-tier date and timestamp resolver for all web scraper engines.
+    Tiers:
+    1. Authoritative machine tags (<meta article:published_time>, JSON-LD, <time datetime="...">).
+    2. URL path regex (/YYYY/MM/DD/).
+    3. Author-specific relative text parsed to IST.
+    4. Database first-seen fallback for timeless tube platforms (e.g. MMSVibex).
+    """
+
+    @staticmethod
+    def resolve(
+        soup: BeautifulSoup | None = None,
+        url: str | None = None,
+        raw_date: str | None = None,
+        time_text: str | None = None,
+        fallback_db_url: str | None = None,
+        title: str = "",
+    ) -> tuple[datetime | None, str | None]:
+        """Resolve post date into (datetime_ist, formatted_string_ist)."""
+        # Tier 1: Direct raw date string
+        if raw_date:
+            dt = parse_to_ist(raw_date)
+            if dt:
+                return dt, format_date_ist(dt)
+
+        # Tier 1b: Check soup metadata
+        if soup:
+            for prop in ("article:published_time", "og:published_time", "publication_date"):
+                meta = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+                if meta and meta.get("content"):
+                    dt = parse_to_ist(meta["content"])
+                    if dt:
+                        return dt, format_date_ist(dt)
+
+            # JSON-LD
+            for s in soup.find_all("script", type="application/ld+json"):
+                text = s.string or s.get_text()
+                if text and ("datePublished" in text or "uploadDate" in text):
+                    m_date = re.search(r'"(?:datePublished|uploadDate)"\s*:\s*"([^"]+)"', text)
+                    if m_date:
+                        dt = parse_to_ist(m_date.group(1))
+                        if dt:
+                            return dt, format_date_ist(dt)
+
+            # <time> tags
+            t_elem = soup.find("time")
+            if t_elem:
+                val = t_elem.get("datetime") or t_elem.get("title")
+                if val:
+                    dt = parse_to_ist(val)
+                    if dt:
+                        return dt, format_date_ist(dt)
+
+        # Tier 2: URL regex
+        if url:
+            dt = extract_date_from_url(url)
+            if dt:
+                return dt, format_date_ist(dt, include_time=False)
+
+        # Tier 3: Relative time text
+        if time_text:
+            dt = parse_to_ist(time_text)
+            if dt:
+                return dt, format_date_ist(dt)
+
+        # Tier 4: Database first-seen fallback for timeless tube sites
+        if fallback_db_url:
+            try:
+                import db
+                seen_dt = db.get_or_record_first_seen(fallback_db_url, title=title)
+                if seen_dt:
+                    dt_ist = seen_dt.astimezone(IST_TZ)
+                    return dt_ist, f"Discovered: {dt_ist.strftime('%d %b %Y')} (Recent)"
+            except Exception:
+                pass
+
+        return None, None
 
 
 def check_date_filter_match(
@@ -491,6 +615,11 @@ def check_date_filter_match(
     """
     Check if a post timestamp matches the requested date filter in Indian Standard Time (IST).
     Returns (is_match: bool, is_older: bool).
+
+    Priority:
+    1. Explicit 'yesterday' or multi-day relative text rejects 'today' immediately.
+    2. Authoritative machine ISO from <time datetime="..."> or valid date_str converted to IST.
+    3. Fall back to relative text and calendar regex only when machine ISO timestamp is absent.
     """
     now_utc = datetime.now(timezone.utc)
     now_ist = now_utc.astimezone(IST_TZ)
@@ -501,26 +630,12 @@ def check_date_filter_match(
     fr = str(full_row_text or "").strip().lower()
     combined_text = f"{tt} {fr}".strip()
 
-    # Rule 1: Explicit relative date text takes precedence
+    # Rule 1: Explicit relative date text saying 'yesterday' or days/weeks/months ago rejects 'today'
     if date_filter == "today":
         if re.search(r"\byesterday\b", combined_text):
             return False, True
         if re.search(r"\b\d+\s*(?:d|day|days|w|wk|weeks|mo|month|months|y|yr|years)\b", combined_text):
             return False, True
-        if any(w in combined_text for w in ["today", "just now", "moment"]):
-            return True, False
-
-        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
-        if m_hr:
-            hrs = int(m_hr.group(1))
-            hrs_today = now_ist.hour + (now_ist.minute / 60.0) + 0.5
-            if hrs <= hrs_today:
-                return True, False
-            else:
-                return False, True
-
-        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
-            return True, False
 
     elif date_filter in ["yesterday", "2days"]:
         m_day = re.search(r"\b(\d+)\s*(?:d|day|days)\b", combined_text)
@@ -528,19 +643,8 @@ def check_date_filter_match(
             return False, True
         if re.search(r"\b\d+\s*(?:w|wk|weeks|mo|month|months|y|yr|years)\b", combined_text):
             return False, True
-        if any(w in combined_text for w in ["yesterday", "today", "just now", "moment"]):
-            return True, False
-        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
-            return True, False
-        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
-        if m_hr:
-            hrs = int(m_hr.group(1))
-            if hrs <= 48:
-                return True, False
-            else:
-                return False, True
 
-    # Rule 2: Authoritative ISO from <time datetime="...">
+    # Rule 2: Authoritative machine ISO from <time datetime="..."> takes priority!
     dt_ist = parse_to_ist(date_str)
     if dt_ist:
         post_date = dt_ist.date()
@@ -557,7 +661,37 @@ def check_date_filter_match(
             else:
                 return False, True
 
-    # Rule 3: Explicit calendar dates in relative text
+    # Rule 3: If machine ISO is absent, check relative text & author context
+    if date_filter == "today":
+        if any(w in combined_text for w in ["today", "just now", "moment"]):
+            return True, False
+
+        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
+        if m_hr:
+            hrs = int(m_hr.group(1))
+            hrs_today = now_ist.hour + (now_ist.minute / 60.0) + 0.5
+            if hrs <= hrs_today:
+                return True, False
+            else:
+                return False, True
+
+        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
+            return True, False
+
+    elif date_filter in ["yesterday", "2days"]:
+        if any(w in combined_text for w in ["yesterday", "today", "just now", "moment"]):
+            return True, False
+        if re.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|s|sec|secs)\b", combined_text):
+            return True, False
+        m_hr = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b", combined_text)
+        if m_hr:
+            hrs = int(m_hr.group(1))
+            if hrs <= 48:
+                return True, False
+            else:
+                return False, True
+
+    # Rule 4: Explicit calendar dates in relative text
     if date_filter == "today" and combined_text:
         today_days = {str(now_ist.day), f"{now_ist.day:02d}", str(now_utc.day), f"{now_utc.day:02d}"}
         today_months = {
@@ -981,6 +1115,18 @@ class BaseEngine:
     """Base class for all scraper engines."""
     name: str = "Base"
     domains: list[str] = []
+    supported_sorts: dict[UniversalSort, str] = {
+        UniversalSort.NEWEST: "newest",
+    }
+
+    def get_sort_param(self, sort_type: UniversalSort | str) -> str:
+        """Resolve universal sort into platform-specific parameter."""
+        if isinstance(sort_type, str):
+            try:
+                sort_type = UniversalSort(sort_type.lower())
+            except Exception:
+                return str(sort_type)
+        return self.supported_sorts.get(sort_type, "newest")
 
     def is_supported_url(self, url: str) -> bool:
         if not url or not isinstance(url, str):

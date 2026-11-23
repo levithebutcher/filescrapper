@@ -17,6 +17,7 @@ from config import (
 )
 from engines.base import (
     BaseEngine,
+    UniversalSort,
     _fetch_soup,
     _extract_all_image_candidates,
     _is_streaming_link,
@@ -114,15 +115,32 @@ def _extract_topics_from_soup(
         if clean_url in seen:
             continue
 
-        # Extract post creation date
-        time_elem = row.find("time")
+        # Extract topic author creation date specifically, avoiding reply time
+        author_meta = row.find(class_=re.compile(r"ipsDataItem_meta|ipsType_light", re.I))
+        time_elem = None
+        if author_meta:
+            time_elem = author_meta.find("time")
+        if not time_elem:
+            for t in row.find_all("time"):
+                if not t.find_parent(class_=re.compile(r"ipsDataItem_lastPoster", re.I)):
+                    time_elem = t
+                    break
+        if not time_elem:
+            time_elem = row.find("time")
+
         post_date_raw = None
         post_date_text = None
         if time_elem:
             post_date_raw = time_elem.get("datetime") or time_elem.get("title")
             post_date_text = time_elem.get_text(strip=True)
 
-        full_row_text = row.get_text(" ", strip=True)
+        # Isolate author text so replies don't pollute the creation date
+        last_poster = row.find(class_=re.compile(r"ipsDataItem_lastPoster", re.I))
+        if last_poster:
+            lp_text = last_poster.get_text(" ", strip=True)
+            full_row_text = row.get_text(" ", strip=True).replace(lp_text, "").strip()
+        else:
+            full_row_text = row.get_text(" ", strip=True)
 
         if active_date_filter:
             is_match, is_definitely_older = check_date_filter_match(
@@ -559,29 +577,139 @@ def get_dropmms_category_stats(category_url: str) -> dict:
 get_ips_category_stats = get_dropmms_category_stats
 
 
+def search_forum_advanced(
+    query: str,
+    page: int = 1,
+    limit: int = 6,
+    search_in: str = "titles",
+    sort_by: str = "relevancy",
+    base_url: str = BASE_URL,
+) -> dict:
+    """
+    Advanced multi-parameter IPS4 forum search with total results counting and typo-tolerance.
+    Supports title-only filtering, boolean OR fallback, and multi-page pagination.
+    """
+    clean_query = query.strip()
+    if not clean_query:
+        return {"topics": [], "total_count": 0, "total_pages": 1, "page": page, "query": ""}
+
+    b_url = base_url.rstrip("/")
+    # Build primary search URL with title filter and relevancy
+    search_params = [
+        f"q={quote_plus(clean_query)}",
+        "type=forums_topic",
+    ]
+    if search_in == "titles":
+        search_params.append("search_in=titles")
+    if sort_by:
+        search_params.append(f"sortby={quote_plus(sort_by)}")
+    if page > 1:
+        search_params.append(f"page={page}")
+
+    search_url = f"{b_url}/search/?{'&'.join(search_params)}"
+
+    def _execute_search_parse(target_url: str) -> tuple[list[dict], int, int]:
+        try:
+            soup = _fetch_soup(target_url)
+        except Exception as e:
+            logger.warning(f"Search fetch error for {target_url}: {e}")
+            return [], 0, 1
+
+        if not soup:
+            return [], 0, 1
+
+        # 1. Extract total count
+        total_count = 0
+        h1 = soup.find("h1", class_=re.compile(r"ipsType_pageTitle", re.I)) or soup.find("h1")
+        if h1:
+            m_count = re.search(r"(\d+)\s+results?", h1.get_text())
+            if m_count:
+                total_count = int(m_count.group(1))
+
+        if not total_count:
+            p_reset = soup.find("p", class_=re.compile(r"ipsType_reset", re.I))
+            if p_reset:
+                m_count = re.search(r"(\d+)\s+results?", p_reset.get_text())
+                if m_count:
+                    total_count = int(m_count.group(1))
+
+        # 2. Extract total pages
+        total_pages = 1
+        for ul in soup.find_all("ul", class_=re.compile(r"ipsPagination", re.I)):
+            dp = ul.get("data-pages")
+            if dp and dp.isdigit():
+                total_pages = max(total_pages, int(dp))
+
+        results = []
+        seen = set()
+
+        # Check structured stream items first (IPS4 standard)
+        stream_items = soup.find_all("li", class_=re.compile(r"ipsStreamItem", re.I))
+        for item in stream_items:
+            h2 = item.find("h2", class_=re.compile(r"ipsStreamItem_title", re.I)) or item.find("h2") or item.find("h3")
+            if h2:
+                a_tag = h2.find("a", href=True)
+                if a_tag:
+                    href = a_tag["href"].strip()
+                    full = urljoin(target_url, href)
+                    if "/topic/" in full:
+                        clean = _clean_topic_url(full)
+                        if clean not in seen:
+                            seen.add(clean)
+                            title = a_tag.get_text(strip=True)
+                            if title and len(title) > 3:
+                                results.append({"title": title, "url": clean})
+                                if len(results) >= limit:
+                                    break
+
+        # Fallback to general anchor search
+        if not results:
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                full = urljoin(target_url, href)
+                if "/topic/" in full:
+                    clean = _clean_topic_url(full)
+                    if clean not in seen:
+                        seen.add(clean)
+                        title = a.get_text(strip=True)
+                        if title and len(title) > 3 and not title.lower().startswith("page"):
+                            results.append({"title": title, "url": clean})
+                            if len(results) >= limit:
+                                break
+
+        if not total_count:
+            total_count = len(results)
+
+        return results, total_count, total_pages
+
+    items, total_found, total_p = _execute_search_parse(search_url)
+
+    # Smart Typo & Fallback: If 0 results with search_in=titles, retry with search_and_or=or and full content
+    if not items and search_in == "titles":
+        fallback_params = [
+            f"q={quote_plus(clean_query)}",
+            "type=forums_topic",
+            "search_and_or=or",
+            "sortby=relevancy",
+        ]
+        if page > 1:
+            fallback_params.append(f"page={page}")
+        fallback_url = f"{b_url}/search/?{'&'.join(fallback_params)}"
+        items, total_found, total_p = _execute_search_parse(fallback_url)
+
+    return {
+        "topics": items,
+        "total_count": total_found,
+        "total_pages": total_p,
+        "page": page,
+        "query": clean_query,
+    }
+
+
 def search_forum(query: str, limit: int = 5, base_url: str = BASE_URL) -> list[dict]:
     """Search an IPS forum (DropMMS or MMSTown) by keyword and return top matching topics."""
-    b_url = base_url.rstrip("/")
-    search_url = f"{b_url}/search/?q={quote_plus(query.strip())}&type=forums_topic"
-    soup = _fetch_soup(search_url)
-
-    results = []
-    seen = set()
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        full = urljoin(search_url, href)
-        if "/topic/" in full:
-            clean = _clean_topic_url(full)
-            if clean not in seen:
-                seen.add(clean)
-                title = a.get_text(strip=True)
-                if title and len(title) > 3 and not title.lower().startswith("page"):
-                    results.append({"title": title, "url": clean})
-                    if len(results) >= limit:
-                        break
-
-    return results
+    res = search_forum_advanced(query=query, page=1, limit=limit, base_url=base_url)
+    return res.get("topics", [])
 
 
 def get_post_links_from_forum(forum_url: str) -> list[str]:
@@ -634,6 +762,11 @@ class InvisionCommunityEngine(BaseEngine):
     """Invision Community IPS4 Forum Engine (DropMMS, MMSTown, etc.)."""
     name: str = "InvisionCommunity"
     domains: list[str] = ["dropmms.com", "mmstown.com"]
+    supported_sorts: dict[UniversalSort, str] = {
+        UniversalSort.NEWEST: "start_date",
+        UniversalSort.MOST_VIEWED: "views",
+        UniversalSort.OLDEST: "oldest",
+    }
 
     def is_listing_url(self, url: str) -> bool:
         return is_forum_url(url)
