@@ -315,8 +315,8 @@ def format_clean_search_results_page(
         t_esc = html.escape(itm.get("title") or "Untitled Topic")
         badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
         date_str = itm.get("date_ist") or itm.get("date") or ""
-        meta_sub = f"\n📅 <i>{html.escape(str(date_str))}</i>" if date_str else ""
-        lines.append(f"<blockquote><b>{idx}.</b> 🎬 <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
+        meta_sub = f"\n<i>{html.escape(str(date_str))}</i>" if date_str else ""
+        lines.append(f"<blockquote><b>{idx}.</b> <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
 
     lines.append(
         "\n<blockquote>"
@@ -350,8 +350,8 @@ def format_search_completion_card(
         t_esc = html.escape(itm.get("title") or "Untitled Topic")
         badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
         date_str = itm.get("date_ist") or itm.get("date") or ""
-        meta_sub = f"\n📅 <i>{html.escape(str(date_str))}</i>" if date_str else ""
-        lines.append(f"<blockquote><b>{idx}.</b> 🎬 <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
+        meta_sub = f"\n<i>{html.escape(str(date_str))}</i>" if date_str else ""
+        lines.append(f"<blockquote><b>{idx}.</b> <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
 
     lines.append(
         "\n<blockquote>"

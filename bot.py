@@ -1828,7 +1828,27 @@ async def execute_platform_search(
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Interactive universal search engine with direct keyword prompt & platform tabs."""
     if update.effective_chat:
-        await cleanup_ephemeral_progress(context, update.effective_chat.id)
+        cid = update.effective_chat.id
+        await cleanup_ephemeral_progress(context, cid)
+        prev_card = context.user_data.pop("active_card_msg_id", None)
+        if prev_card:
+            try:
+                await context.bot.delete_message(chat_id=cid, message_id=prev_card)
+            except Exception:
+                pass
+        old_search = context.user_data.pop("active_search_results", None)
+        if old_search and old_search.get("message_id") and old_search["message_id"] != prev_card:
+            try:
+                await context.bot.delete_message(chat_id=cid, message_id=old_search["message_id"])
+            except Exception:
+                pass
+        old_prompt = context.user_data.pop("awaiting_search_flow", None)
+        if old_prompt and old_prompt.get("message_id"):
+            try:
+                await context.bot.delete_message(chat_id=cid, message_id=old_prompt["message_id"])
+            except Exception:
+                pass
+
     msg = update.effective_message
     query = " ".join(context.args).strip() if (context.args and len(context.args) > 0) else ""
 
@@ -1841,10 +1861,13 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.callback_query.edit_message_text(
                     card_text, parse_mode=ParseMode.HTML, reply_markup=markup
                 )
+                context.user_data["active_card_msg_id"] = update.callback_query.message.message_id
             except Exception:
-                await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                sent = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                context.user_data["active_card_msg_id"] = sent.message_id
         else:
-            await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            sent = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            context.user_data["active_card_msg_id"] = sent.message_id
         return
 
     context.user_data["search_query"] = query
@@ -1855,12 +1878,15 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.edit_message_text(
                 reply_text, parse_mode=ParseMode.HTML, reply_markup=markup
             )
+            context.user_data["active_card_msg_id"] = update.callback_query.message.message_id
         except Exception:
-            await msg.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            sent = await msg.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            context.user_data["active_card_msg_id"] = sent.message_id
     else:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             reply_text, parse_mode=ParseMode.HTML, reply_markup=markup
         )
+        context.user_data["active_card_msg_id"] = sent.message_id
 
 
 
@@ -2852,6 +2878,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.delete()
         except Exception:
             pass
+
+        # Ephemeral cleanup: Delete the prompt message ("Please send keyword...")
+        prompt_msg_id = search_flow.get("message_id")
+        if prompt_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prompt_msg_id)
+            except Exception:
+                pass
+
+        # Also cleanup any previous active category card
+        old_card_id = context.user_data.pop("active_card_msg_id", None)
+        if old_card_id and old_card_id != prompt_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=old_card_id)
+            except Exception:
+                pass
+
         await execute_platform_search(
             update=update,
             context=context,
@@ -2947,7 +2990,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=clean_markup,
             )
 
-            # Delete the previous search results card so chat stays tidy
+            # Delete the previous search results card and any lingering cards so chat stays tidy
             old_msg_id = search_state.get("message_id")
             if old_msg_id and old_msg_id != new_card_msg.message_id:
                 try:
@@ -2955,7 +2998,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
+            extra_old = context.user_data.pop("active_card_msg_id", None)
+            if extra_old and extra_old != new_card_msg.message_id and extra_old != old_msg_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=extra_old)
+                except Exception:
+                    pass
+
             search_state["message_id"] = new_card_msg.message_id
+            context.user_data["active_card_msg_id"] = new_card_msg.message_id
             return
 
     # Check if user is in an interactive search flow
@@ -3227,7 +3278,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "forum_id": None,
             "scope_name": f"All {plat_label} Topics",
             "back_callback": f"sp_choose:{plat}",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
         }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"sp_choose:{plat}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
@@ -3255,7 +3309,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "scope_name": cat_title,
             "short_id": short_id,
             "back_callback": f"sp_cat:{short_id}",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
         }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back to Category", callback_data=f"sp_cat:{short_id}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
@@ -3328,6 +3385,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "</blockquote>"
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["active_card_msg_id"] = query.message.message_id
         return
 
     elif data.startswith("sp_vapply:"):
@@ -3401,6 +3459,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "</blockquote>"
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["active_card_msg_id"] = query.message.message_id
         return
 
     elif data.startswith("sp_wpapply:"):
@@ -3575,6 +3634,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "</blockquote>"
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["active_card_msg_id"] = query.message.message_id
     elif data.startswith("sp_csort:"):
         _, short_id_str, sort_val = data.split(":")
         short_id = int(short_id_str)

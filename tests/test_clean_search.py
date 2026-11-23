@@ -69,9 +69,11 @@ class TestCleanSearchUX(unittest.TestCase):
         )
         self.assertIn("Lesbian Videos Search Results", card)
         self.assertIn("dance", card)
-        self.assertIn("<blockquote><b>1.</b> 🎬 <b>Sample Topic 1</b>", card)
+        self.assertIn("<blockquote><b>1.</b> <b>Sample Topic 1</b>", card)
         self.assertIn("✅ <i>(Delivered)</i>", card)
-        self.assertIn("<blockquote><b>2.</b> 🎬 <b>Sample Topic 2</b>", card)
+        self.assertIn("<blockquote><b>2.</b> <b>Sample Topic 2</b>", card)
+        self.assertNotIn("🎬", card)
+        self.assertNotIn("📅", card)
         self.assertIn("How to Extract:", card)
 
     def test_format_search_completion_card(self):
@@ -90,8 +92,10 @@ class TestCleanSearchUX(unittest.TestCase):
             delivered_indices={1},
         )
         self.assertIn("✅ <b>Delivered:</b> 1 topic(s)", card)
-        self.assertIn("<blockquote><b>1.</b> 🎬 <b>Sample Topic 1</b>", card)
+        self.assertIn("<blockquote><b>1.</b> <b>Sample Topic 1</b>", card)
         self.assertIn("✅ <i>(Delivered)</i>", card)
+        self.assertNotIn("🎬", card)
+        self.assertNotIn("📅", card)
         self.assertIn("💡 Type another number", card)
 
     def test_build_search_results_clean_keyboard(self):
