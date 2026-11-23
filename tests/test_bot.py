@@ -769,10 +769,10 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data["awaiting_category_range"]["message_id"], 9999)
 
     def test_format_post_card_attached_album_and_sites(self):
-        """Test format_post_card handles attached photo albums and suppresses original video page for MMSVibex."""
+        """Test format_post_card handles attached photo albums and video page links cleanly."""
         # 1. MMSVibex Video with attached album
         vibex_details = {
-            "title": "Sakshi Sexy Baddie",
+            "title": "Sakshi Media Video",
             "post_url": "https://mmsvibex.life/sakshi-video/",
             "tags": ["1080p"],
             "streaming_links": ["https://cdn.mmsvibex.fit/processed/1900438950_final.mp4"],
@@ -784,11 +784,11 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
             "site": "mmsvibex",
         }
         card_vibex = format_post_card(vibex_details, user_pref="all")
-        self.assertIn("📸 <b>Attached Photo Albums:</b>", card_vibex)
+        self.assertIn("<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>", card_vibex)
         self.assertIn("1. <a href='https://mmsvibex.life/photos/sakshi-1/'>Sakshi Album 1 (12 photos)</a>", card_vibex)
         self.assertIn("2. <a href='https://mmsvibex.life/photos/sakshi-2/'>Sakshi Album 2 (98 photos)</a>", card_vibex)
-        self.assertIn("📁 <b>Series Collection:</b>", card_vibex)
-        self.assertNotIn("Original Video Page", card_vibex)
+        self.assertIn("<blockquote>📹 <b>Attached Video Parts:</b></blockquote>", card_vibex)
+        self.assertIn("🌐 <a href='https://mmsvibex.life/sakshi-video/'>Original Video Page</a>", card_vibex)
 
         # 2. WordPress Locker Post
         wp_details = {
@@ -958,13 +958,12 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
 
         reply_markup = query.edit_message_text.call_args[1].get("reply_markup")
         button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
-        self.assertIn("sp_vsort:latest", button_data)
-        self.assertIn("sp_vsort:most-viewed", button_data)
-        self.assertIn("sp_vsort:popular", button_data)
-        self.assertIn("sp_vsort:longest", button_data)
-        self.assertIn("sp_vsort:photos", button_data)
         self.assertIn("sp_choose_kw:vibex", button_data)
+        self.assertIn("sp_vsort:latest", button_data)
+        self.assertIn("sp_vsort:photos", button_data)
         self.assertIn("cb_search", button_data)
+        self.assertIn("sp_cancel", button_data)
+        self.assertNotIn("sp_vsort:most-viewed", button_data)
 
     async def test_callback_query_sp_choose_wplock(self):
         """Test clicking WP Locker Sites button in /search displays site options."""

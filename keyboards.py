@@ -274,8 +274,8 @@ def build_slice_selection_keyboard(
     ])
 
 
-def build_model_sort_keyboard(short_id: str) -> InlineKeyboardMarkup:
-    """Sorting options for LiveCam model pages."""
+def build_model_sort_keyboard(short_id: str | int, back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Sorting options for LiveCam model pages (Card 3 with Back and Cancel)."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🆕 Newest", callback_data=f"sp_sort:{short_id}:newest"),
@@ -285,7 +285,49 @@ def build_model_sort_keyboard(short_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("❤️ Most Liked", callback_data=f"sp_sort:{short_id}:most_liked"),
             InlineKeyboardButton("⏳ Oldest", callback_data=f"sp_sort:{short_id}:oldest"),
         ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_livecam_models_keyboard(models: list[dict], back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Clean model list keyboard for LiveCam (Card 2) with only model buttons and Back/Cancel."""
+    buttons = []
+    for m in models:
+        buttons.append([InlineKeyboardButton(f"📹 {m['name']}", callback_data=f"sp_mdl:{m['short_id']}")])
+    buttons.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_mmsvibex_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Clean 3-row hub keyboard for MMSVibex (Card 1)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data="sp_choose_kw:vibex"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Newest Videos", callback_data="sp_vsort:latest"),
+            InlineKeyboardButton("📸 Photo Albums", callback_data="sp_vsort:photos"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_mmsvibex_options_keyboard(sort_key: str = "latest", back_callback: str = "sp_choose:vibex") -> InlineKeyboardMarkup:
+    """Clean minimal keyboard for MMSVibex range selection and post-extraction resurfacing (Card 2)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
     ])
 
 

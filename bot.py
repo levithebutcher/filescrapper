@@ -116,6 +116,9 @@ from keyboards import (
     build_search_results_keyboard,
     build_search_results_clean_keyboard,
     build_mmsvibex_mode_keyboard,
+    build_mmsvibex_hub_keyboard,
+    build_mmsvibex_options_keyboard,
+    build_livecam_models_keyboard,
     build_slice_selection_keyboard,
     build_category_options_keyboard,
     build_forum_options_keyboard,
@@ -354,8 +357,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
         details_copy["streaming_links"] = [details_copy["video_url"]]
 
     caption = format_post_card(details_copy, user_pref=user_pref)
-    if reply_markup is None:
-        reply_markup = build_card_keyboard(details_copy, user_pref)
+    # Post cards default to NO bottom buttons to avoid chat clutter (links are already in caption)
 
     thumb_url = details_copy.get("thumbnail")
 
@@ -471,6 +473,9 @@ async def run_livecam_model_scrape(
     req_limit: int | None = None,
     status_msg=None,
     user_id: int | str = None,
+    context=None,
+    short_id: int | str | None = None,
+    total_str: str = "Available",
 ):
     """
     Standardized worker to scrape and deliver videos from a LiveCamRips model page.
@@ -593,28 +598,62 @@ async def run_livecam_model_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        if not is_scrape_cancelled(cid):
-            try:
-                await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 <b>{html.escape(model_name)}</b>\n📦 Delivered: <b>{len(videos)}</b> videos</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_navigation_keyboard(),
-                )
-            except Exception:
-                try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 <b>{html.escape(model_name)}</b>\n📦 Delivered: <b>{len(videos)}</b> videos</blockquote>",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=get_navigation_keyboard(),
-                    )
-                except Exception:
-                    pass
-        else:
+        # 1. Ephemeral cleanup: Delete progress message so it does not linger above posts
+        if status_msg:
             try:
                 await status_msg.delete()
             except Exception:
                 pass
+        if context:
+            context.user_data.pop(f"active_progress_msg_{cid}", None)
+
+        # 2. Resurface Card 4 at bottom of chat
+        stopped = is_scrape_cancelled(cid)
+        delivered_count = idx if not stopped else max(0, idx - 1)
+        status_header = (
+            f"🛑 <b>Scraping stopped!</b> Delivered: <b>{delivered_count}</b> video(s)"
+            if stopped
+            else f"✅ <b>Extraction Complete!</b>\n📹 Delivered: <b>{delivered_count}</b> video(s)"
+        )
+        end_card_text = (
+            f"<blockquote>{status_header}</blockquote>\n\n"
+            "<blockquote>"
+            f"📹 <b>{html.escape(model_name)}</b>\n"
+            f"📊 <b>Total Videos:</b> {total_str}\n"
+            f"🎯 <b>Sort:</b> {sort_label}\n\n"
+            "✏️ <b>Enter Range, Count or Page:</b>\n"
+            "• <code>5</code> ➔ First 5 videos\n"
+            "• <code>1-5</code> ➔ Videos 1 to 5\n"
+            "• <code>5-10</code> ➔ Videos 5 to 10\n"
+            "• <code>page 1</code> ➔ Full Page 1 (16 videos)"
+            "</blockquote>"
+        )
+        sid = short_id or db.get_or_create_short_id(target_url)
+        end_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back", callback_data=f"sp_mdl:{sid}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ]
+        ])
+        try:
+            end_msg = await bot.send_message(
+                chat_id=cid,
+                text=end_card_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=end_markup,
+            )
+            if context:
+                context.user_data["awaiting_model_range"] = {
+                    "short_id": sid,
+                    "url": target_url,
+                    "model_name": model_name,
+                    "total_str": total_str,
+                    "sort_by": sort_by,
+                    "chat_id": cid,
+                    "message_id": end_msg.message_id,
+                }
+        except Exception as e:
+            logger.warning(f"Could not send completion card for LiveCam: {e}")
     except Exception as e:
         logger.error(f"Error scraping LiveCam model {target_url}: {e}", exc_info=True)
         try:
@@ -877,6 +916,8 @@ async def run_mmsvibex_listing_scrape(
     status_msg=None,
     user_id: int | str = None,
     listing_title: str | None = None,
+    context=None,
+    sort_key: str = "latest",
 ):
     """
     Worker to scrape and deliver videos or photo albums from MMSVibex listings.
@@ -951,28 +992,51 @@ async def run_mmsvibex_listing_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        if not is_scrape_cancelled(cid):
-            try:
-                await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n⚡ Delivered: <b>{len(items)}</b> items</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_navigation_keyboard(),
-                )
-            except Exception:
-                try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n⚡ Delivered: <b>{len(items)}</b> items</blockquote>",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=get_navigation_keyboard(),
-                    )
-                except Exception:
-                    pass
-        else:
+        # 1. Ephemeral cleanup: Delete progress message so it does not linger above posts
+        if status_msg:
             try:
                 await status_msg.delete()
             except Exception:
                 pass
+        if context:
+            context.user_data.pop(f"active_progress_msg_{cid}", None)
+
+        # 2. Resurface Card 2 at bottom of chat
+        stopped = is_scrape_cancelled(cid)
+        delivered_count = idx if not stopped else max(0, idx - 1)
+        status_header = (
+            f"🛑 <b>Scraping stopped!</b> Delivered: <b>{delivered_count}</b> item(s)"
+            if stopped
+            else f"✅ <b>Extraction Complete!</b>\n⚡ Delivered: <b>{delivered_count}</b> item(s)"
+        )
+        end_card_text = (
+            f"<blockquote>{status_header}</blockquote>\n\n"
+            "<blockquote>"
+            f"⚡ <b>{html.escape(title)}</b>\n\n"
+            "Reply in chat with a custom range, count or page:\n"
+            "• <code>5</code> ➔ First 5 items\n"
+            "• <code>1-15</code> ➔ Items 1 to 15\n"
+            "• <code>page 2</code> ➔ Full Page 2"
+            "</blockquote>"
+        )
+        end_markup = build_mmsvibex_options_keyboard(sort_key=sort_key)
+        try:
+            end_msg = await bot.send_message(
+                chat_id=cid,
+                text=end_card_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=end_markup,
+            )
+            if context:
+                context.user_data["awaiting_vibex_range"] = {
+                    "url": target_url,
+                    "sort_key": sort_key,
+                    "sort_label": title,
+                    "chat_id": cid,
+                    "message_id": end_msg.message_id,
+                }
+        except Exception as e:
+            logger.warning(f"Could not send completion card for MMSVibex: {e}")
     except Exception as e:
         logger.error(f"Error in run_mmsvibex_listing_scrape: {e}", exc_info=True)
         try:
@@ -1600,32 +1664,25 @@ async def execute_platform_search(
             return
 
         text = f"🔎 <b>LiveCam Models Matching '{html.escape(clean_query)}':</b>\n\n"
-        buttons = []
+        models_data = []
         for idx, m in enumerate(results, start=1):
             name = m["name"]
             url = m["url"]
             text += f"{idx}. <b>{html.escape(name)}</b>\n"
             short_id = db.get_or_create_short_id(url)
-            btn = InlineKeyboardButton(f"📹 {name}", callback_data=f"sp_mdl:{short_id}")
-            buttons.append([btn])
+            models_data.append({"name": name, "short_id": short_id})
 
-        buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
-            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
-        ])
-        buttons.append([
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ])
+        context.user_data["last_lc_query"] = clean_query
+        markup = build_livecam_models_keyboard(models_data, back_callback="cb_search")
         await status_msg.edit_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=markup,
         )
 
     elif plat == "vibex":
         try:
-            results = await asyncio.to_thread(search_mmsvibex, clean_query, 8)
+            results = await asyncio.to_thread(search_mmsvibex, clean_query, page=page, limit=10)
         except Exception as e:
             await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
             return
@@ -1644,43 +1701,47 @@ async def execute_platform_search(
             )
             return
 
-        text = f"🔎 <b>MMSVibex Videos Matching '{html.escape(clean_query)}':</b>\n\n"
-        buttons = []
-        items_for_active = []
-        for idx, r in enumerate(results, start=1):
-            short_id = db.get_or_create_short_id(r["url"])
-            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
-            btn = InlineKeyboardButton(f"⚡ Extract #{idx}", callback_data=f"sc_{short_id}")
-            buttons.append([btn])
-            items_for_active.append({
-                "title": r["title"],
-                "url": r["url"],
-                "short_id": short_id,
-            })
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
 
-        context.user_data["active_listing"] = {
-            "title": f"MMSVibex: '{clean_query}'",
-            "type": "search",
-            "platform": "vibex",
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name="MMSVibex",
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:vibex:all"
+        back_cb = "sp_choose:vibex"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "vibex",
             "query": clean_query,
-            "page": 1,
-            "total_pages": 1,
-            "items": items_for_active,
-            "delivered_ids": set(),
+            "scope_name": "MMSVibex",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
         }
 
-        buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
-            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
-        ])
-        buttons.append([
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ])
         await status_msg.edit_text(
-            text,
+            card_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=markup,
         )
 
     elif plat == "wplock":
@@ -2573,6 +2634,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             page_num=page_num,
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
+            context=context,
+            short_id=model_flow.get("short_id"),
+            total_str=model_flow.get("total_str", "Available"),
         )
         return
 
@@ -2783,6 +2847,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
             listing_title=vibex_flow.get("sort_label", "MMSVibex Videos"),
+            context=context,
+            sort_key=vibex_flow.get("sort_key", "latest"),
         )
         return
 
@@ -2942,13 +3008,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if is_scrape_cancelled(chat_id):
                         break
                     topic = items[idx - 1]
-                    await process_topic_scrape(
-                        bot=context.bot,
-                        chat_id=chat_id,
-                        url=topic["url"],
-                        user_id=user_id,
-                        topic_meta=topic,
-                    )
+                    url = topic["url"]
+                    if search_state["plat"] == "vibex":
+                        if is_mmsvibex_photo_url(url):
+                            details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
+                        else:
+                            details = await asyncio.to_thread(get_mmsvibex_video_details, url)
+                        await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                    else:
+                        await process_topic_scrape(
+                            bot=context.bot,
+                            chat_id=chat_id,
+                            url=url,
+                            user_id=user_id,
+                            topic_meta=topic,
+                        )
                     search_state.setdefault("delivered_indices", set()).add(idx)
                     delivered_this_round.append(idx)
                     if is_scrape_cancelled(chat_id):
@@ -2963,8 +3037,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
             # Resurface search results card with completion note at the bottom
+            item_noun = "item(s)" if search_state["plat"] == "vibex" else "topic(s)"
             completion_text = format_search_completion_card(
-                delivered_summary=f"{len(delivered_this_round)} topic(s)",
+                delivered_summary=f"{len(delivered_this_round)} {item_noun}",
                 query=search_state["query"],
                 scope_name=search_state["scope_name"],
                 page=search_state["page"],
@@ -3179,28 +3254,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif plat == "vibex":
-            buttons = [
-                [
-                    InlineKeyboardButton("⚡ Newest Videos", callback_data="sp_vsort:latest"),
-                    InlineKeyboardButton("🔥 Most Viewed", callback_data="sp_vsort:most-viewed"),
-                ],
-                [
-                    InlineKeyboardButton("⭐ Popular", callback_data="sp_vsort:popular"),
-                    InlineKeyboardButton("⏱️ Longest", callback_data="sp_vsort:longest"),
-                ],
-                [
-                    InlineKeyboardButton("📸 Photo Albums", callback_data="sp_vsort:photos"),
-                    InlineKeyboardButton("🔍 Search Videos", callback_data="sp_choose_kw:vibex"),
-                ],
-                [
-                    InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-                ],
-            ]
+            markup = build_mmsvibex_hub_keyboard(back_callback="cb_search")
             await query.edit_message_text(
                 "<blockquote>⚡ <b>MMSVibex Hub</b>\nSelect sorting or browse category:</blockquote>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
+                reply_markup=markup,
             )
             return
 
@@ -3364,21 +3422,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
         }
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_vapply:{sort_key}:1-5"),
-                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_vapply:{sort_key}:1-10"),
-                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_vapply:{sort_key}:1-20"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:vibex"),
-                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-            ],
-        ])
+        markup = build_mmsvibex_options_keyboard(sort_key=sort_key, back_callback="sp_choose:vibex")
         card_text = (
             "<blockquote>"
             f"⚡ <b>MMSVibex: {sort_label}</b>\n\n"
-            "Select quick count above or reply in chat with a custom range:\n"
+            "Reply in chat with a custom range, count or page:\n"
             "• <code>5</code> ➔ First 5 items\n"
             "• <code>1-15</code> ➔ Items 1 to 15\n"
             "• <code>page 2</code> ➔ Full Page 2"
@@ -3798,6 +3846,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
             return
         await execute_platform_search(update, context, plat, query_text, edit_msg=query.message, page=1)
+    elif data == "sp_back_lc":
+        q = context.user_data.get("last_lc_query", "").strip()
+        if q:
+            await execute_platform_search(update, context, "lc", q, edit_msg=query.message)
+        else:
+            await search_command(update, context)
     elif data.startswith("sp_mdl:"):
         context.user_data.pop("awaiting_model_range", None)
         short_id = int(data.split(":")[1])
@@ -3828,7 +3882,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "url": stats.get("url") or url,
         }
 
-        markup = build_model_sort_keyboard(short_id)
+        back_cb = "sp_back_lc" if context.user_data.get("last_lc_query") else "cb_search"
+        markup = build_model_sort_keyboard(short_id, back_callback=back_cb)
         card_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
@@ -3924,6 +3979,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("search_query", None)
         context.user_data.pop("awaiting_model_range", None)
         context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
         context.user_data.pop("awaiting_search_flow", None)
         context.user_data.pop("active_search_results", None)
         try:

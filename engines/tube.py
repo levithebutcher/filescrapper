@@ -140,13 +140,23 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
 
     collection_url = None
     collection_name = None
+    attached_videos = []
+    seen_vids = {video_url}
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
+        full_href = urljoin(video_url, href)
         text = a.get_text(strip=True)
         if "/actor/" in href or "view full album" in text.lower():
-            collection_url = urljoin(video_url, href)
-            collection_name = text if text and "view" not in text.lower() else "All Parts Collection"
-            break
+            if not collection_url:
+                collection_url = full_href
+                collection_name = text if text and "view" not in text.lower() else "All Parts Collection"
+        elif re.search(r"\b(?:part|pt|episode|ep)[\s._-]*\d+\b", text, re.I):
+            if full_href not in seen_vids and full_href.startswith("http"):
+                seen_vids.add(full_href)
+                attached_videos.append({
+                    "title": text,
+                    "url": full_href,
+                })
 
     dt_ist, post_date_ist = UniversalDateResolver.resolve(
         soup=soup,
@@ -163,6 +173,7 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
         "thumbnail": thumbnail,
         "thumbnail_candidates": [thumbnail] if thumbnail else [],
         "streaming_links": streaming_links,
+        "attached_videos": attached_videos,
         "attached_photo_albums": attached_photo_albums,
         "attached_album_url": attached_photo_albums[0]["url"] if attached_photo_albums else None,
         "collection_url": collection_url,
@@ -317,13 +328,13 @@ def get_mmsvibex_listing_items(listing_url: str, page: int = 1, limit: int = 25)
     return items
 
 
-def search_mmsvibex(query: str, limit: int = 10) -> list[dict]:
-    """Search MMSVibex videos matching the given query."""
+def search_mmsvibex(query: str, page: int = 1, limit: int = 10) -> list[dict]:
+    """Search MMSVibex videos matching the given query with pagination."""
     clean_q = query.strip()
     if not clean_q:
         return []
     search_url = f"https://mmsvibex.life/?s={quote_plus(clean_q)}"
-    return get_mmsvibex_listing_items(search_url, page=1, limit=limit)
+    return get_mmsvibex_listing_items(search_url, page=page, limit=limit)
 
 
 class MediaTubeEngine(BaseEngine):

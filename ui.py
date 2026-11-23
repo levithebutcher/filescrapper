@@ -138,31 +138,46 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
             for i, l in enumerate(filtered_links, 1):
                 caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
 
-    # Attached Photo Albums
-    photo_albums = details.get("attached_photo_albums")
-    if photo_albums:
-        caption_lines.append("\n📸 <b>Attached Photo Albums:</b>")
-        for idx, alb in enumerate(photo_albums, 1):
-            alb_title = html.escape(alb.get("title", f"Album {idx}"))
-            alb_url = alb.get("url", "")
-            caption_lines.append(f"{idx}. <a href='{alb_url}'>{alb_title}</a>")
-    elif details.get("attached_album_url"):
-        caption_lines.append(f"\n📸 <a href='{details['attached_album_url']}'>Attached Photo Album</a>")
-
-    if details.get("collection_url") and not details.get("hide_collection_link"):
-        col_name = html.escape(details.get("collection_name") or "All Parts Collection")
-        caption_lines.append(f"\n📁 <b>Series Collection:</b> <a href='{details['collection_url']}'>{col_name}</a>")
-
-    # Post URL - Only for forums and WP lockers, NEVER for MMSVibex videos
-    if post_url and details.get("site") != "mmsvibex":
+    # Post URL - Placed directly below streaming links
+    if post_url:
         site_type = details.get("site")
         if site_type == "wp_locker":
             link_title = "Original Post"
-        elif site_type == "livecam":
+        elif site_type in ("livecam", "mmsvibex") or "mmsvibex" in p_low or "mmsvibex" in (post_url or "").lower():
             link_title = "Original Video Page"
         else:
             link_title = "Original Forum Thread"
         caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
+
+    is_vibex = s_low == "mmsvibex" or "mmsvibex" in p_low or "mmsvibex" in (post_url or "").lower()
+
+    # Attached Video Parts (Quoted header with part links or 'Not present')
+    attached_vids = details.get("attached_videos") or []
+    collection_url = details.get("collection_url")
+    if attached_vids:
+        caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>")
+        for idx, v in enumerate(attached_vids, 1):
+            v_title = html.escape(v.get("title", f"Part {idx}"))
+            caption_lines.append(f"{idx}. <a href='{v.get('url', '')}'>{v_title}</a>")
+    elif collection_url and not details.get("hide_collection_link"):
+        col_name = html.escape(details.get("collection_name") or "All Parts Collection")
+        caption_lines.append(f"\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>\n🔗 <a href='{collection_url}'>{col_name}</a>")
+    elif is_vibex:
+        caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b> Not present</blockquote>")
+
+    # Attached Photo Albums (Quoted header with album links or 'Not present')
+    photo_albums = details.get("attached_photo_albums") or []
+    attached_album_url = details.get("attached_album_url")
+    if photo_albums:
+        caption_lines.append("\n<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>")
+        for idx, alb in enumerate(photo_albums, 1):
+            alb_title = html.escape(alb.get("title", f"Album {idx}"))
+            alb_url = alb.get("url", "")
+            caption_lines.append(f"{idx}. <a href='{alb_url}'>{alb_title}</a>")
+    elif attached_album_url:
+        caption_lines.append(f"\n<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>\n🔗 <a href='{attached_album_url}'>Attached Photo Album</a>")
+    elif is_vibex:
+        caption_lines.append("\n<blockquote>📸 <b>Attached Photo Albums:</b> Not present</blockquote>")
 
     return "\n".join(caption_lines)
 
