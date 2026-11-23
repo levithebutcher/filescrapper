@@ -20,7 +20,7 @@ from telegram import (
     MenuButtonCommands,
 )
 from telegram.constants import ChatMemberStatus, ChatType, ParseMode
-from telegram.error import RetryAfter, BadRequest, TelegramError
+from telegram.error import RetryAfter, BadRequest, TelegramError, Conflict
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -3745,11 +3745,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Global error handler for telegram bot exceptions."""
+    if isinstance(context.error, Conflict):
+        logger.warning("⚠️ [Conflict] Another bot instance was running; this instance has taken over polling.")
+        return
+    if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
+        return
+
     logger.error("Exception while handling update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
-            if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
-                return
             await update.effective_message.reply_text(
                 "⚠️ A temporary error occurred while processing your request. Please try again."
             )
