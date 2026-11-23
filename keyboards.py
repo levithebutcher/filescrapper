@@ -289,15 +289,52 @@ def build_model_sort_keyboard(short_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def build_forum_sort_keyboard(short_id: str) -> InlineKeyboardMarkup:
-    """Sorting options for forum category pages."""
+def build_forum_sort_keyboard(short_id: str | int, back_callback: str = "sp_choose:fm") -> InlineKeyboardMarkup:
+    """Sorting and in-forum search options for forum category pages."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🆕 Start Date", callback_data=f"sp_csort:{short_id}:start_date"),
+            InlineKeyboardButton("🔍 Search in this Forum", callback_data=f"sp_search_forum:{short_id}"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
             InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
         ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
     ])
+
+
+def build_search_results_clean_keyboard(
+    page: int,
+    total_pages: int,
+    page_callback_prefix: str,
+    back_callback: str = "cb_search",
+    cancel_callback: str = "sp_cancel",
+) -> InlineKeyboardMarkup:
+    """
+    Clean, minimal search results keyboard.
+    Row 1: Previous / Next (Pagination)
+    Row 2: Back / Cancel
+    Keeps chat uncluttered while user selects topics by typing numbers in chat.
+    """
+    buttons = []
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"{page_callback_prefix}:{page-1}"))
+    if total_pages > 1:
+        nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"{page_callback_prefix}:{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data=cancel_callback),
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def build_forum_options_keyboard(short_id: str) -> InlineKeyboardMarkup:
@@ -334,6 +371,9 @@ def build_model_options_keyboard(short_id: str) -> InlineKeyboardMarkup:
 def build_category_options_keyboard(short_id: int | str, sort_val: str = "start_date") -> InlineKeyboardMarkup:
     """Build the working options keyboard for an IPS forum category (Screenshot 3)."""
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search in this Forum", callback_data=f"sp_search_forum:{short_id}"),
+        ],
         [
             InlineKeyboardButton("⚡ Today's Posts", callback_data=f"sp_cdate:{short_id}:{sort_val}:today"),
             InlineKeyboardButton("📆 Yesterday & Today", callback_data=f"sp_cdate:{short_id}:{sort_val}:yesterday"),

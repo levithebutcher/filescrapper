@@ -587,27 +587,30 @@ get_ips_category_stats = get_dropmms_category_stats
 def search_forum_advanced(
     query: str,
     page: int = 1,
-    limit: int = 6,
+    limit: int = 10,
     search_in: str = "titles",
-    sort_by: str = "relevancy",
+    sort_by: str = "newest",
     base_url: str = BASE_URL,
+    forum_id: int | str | None = None,
 ) -> dict:
     """
     Advanced multi-parameter IPS4 forum search with total results counting and typo-tolerance.
-    Supports title-only filtering, boolean OR fallback, and multi-page pagination.
+    Supports title-only filtering, forum node scoping (in-forum search), date sorting, and multi-page pagination.
     """
     clean_query = query.strip()
     if not clean_query:
-        return {"topics": [], "total_count": 0, "total_pages": 1, "page": page, "query": ""}
+        return {"topics": [], "total_count": 0, "total_pages": 1, "page": page, "query": "", "forum_id": forum_id}
 
     b_url = base_url.rstrip("/")
-    # Build primary search URL with title filter and relevancy
+    # Build primary search URL with title filter, optional forum node filter, and date sort
     search_params = [
         f"q={quote_plus(clean_query)}",
         "type=forums_topic",
     ]
     if search_in == "titles":
         search_params.append("search_in=titles")
+    if forum_id:
+        search_params.append(f"nodes[{forum_id}]=1")
     if sort_by:
         search_params.append(f"sortby={quote_plus(sort_by)}")
     if page > 1:
@@ -697,8 +700,10 @@ def search_forum_advanced(
             f"q={quote_plus(clean_query)}",
             "type=forums_topic",
             "search_and_or=or",
-            "sortby=relevancy",
+            f"sortby={quote_plus(sort_by or 'newest')}",
         ]
+        if forum_id:
+            fallback_params.append(f"nodes[{forum_id}]=1")
         if page > 1:
             fallback_params.append(f"page={page}")
         fallback_url = f"{b_url}/search/?{'&'.join(fallback_params)}"
@@ -710,6 +715,7 @@ def search_forum_advanced(
         "total_pages": total_p,
         "page": page,
         "query": clean_query,
+        "forum_id": forum_id,
     }
 
 

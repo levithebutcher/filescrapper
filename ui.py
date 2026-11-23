@@ -287,3 +287,105 @@ def format_category_completion_card(
         "</blockquote>"
     )
 
+
+def format_clean_search_results_page(
+    query: str,
+    scope_name: str,
+    page: int,
+    total_pages: int,
+    total_count: int,
+    items: list[dict],
+    delivered_indices: set[int] | None = None,
+) -> str:
+    """
+    Format clean, readable text search results with numbers 1 to 10.
+    Zero buttons clutter: user can extract by typing any number in chat.
+    """
+    delivered_indices = delivered_indices or set()
+    lines = [
+        "<blockquote>"
+        f"🔎 <b>{html.escape(scope_name)} Search Results</b>\n"
+        f"🎯 <b>Query:</b> <code>{html.escape(query)}</code>\n"
+        f"📊 <b>Total:</b> Found <b>{total_count}</b> Topics (Page {page}/{total_pages})\n"
+        "🕒 <b>Sort:</b> Newest Uploads (Date Wise)"
+        "</blockquote>\n"
+    ]
+
+    for idx, itm in enumerate(items, start=1):
+        t_esc = html.escape(itm.get("title") or "Untitled Topic")
+        badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
+        date_str = itm.get("date_ist") or itm.get("date") or ""
+        meta_sub = f" <i>({html.escape(str(date_str))})</i>" if date_str else ""
+        lines.append(f"<b>{idx}.</b> {t_esc}{meta_sub}{badge}")
+
+    lines.append(
+        "\n<blockquote>"
+        "💡 <b>How to Extract:</b>\n"
+        "Reply with any number (e.g. <code>1</code>, <code>2</code>, <code>1-3</code>, or <code>all</code>) to get the post!"
+        "</blockquote>"
+    )
+    return "\n".join(lines)
+
+
+def format_search_completion_card(
+    delivered_summary: str,
+    query: str,
+    scope_name: str,
+    page: int,
+    total_pages: int,
+    total_count: int,
+    items: list[dict],
+    delivered_indices: set[int] | None = None,
+) -> str:
+    """Format post-delivery confirmation combined with the search results list at the bottom."""
+    delivered_indices = delivered_indices or set()
+    lines = [
+        f"<blockquote>✅ <b>Delivered:</b> {html.escape(delivered_summary)}</blockquote>\n\n"
+        "<blockquote>"
+        f"🔎 <b>{html.escape(scope_name)} Results:</b> '<code>{html.escape(query)}</code>' (Page {page}/{total_pages})"
+        "</blockquote>\n"
+    ]
+
+    for idx, itm in enumerate(items, start=1):
+        t_esc = html.escape(itm.get("title") or "Untitled Topic")
+        badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
+        date_str = itm.get("date_ist") or itm.get("date") or ""
+        meta_sub = f" <i>({html.escape(str(date_str))})</i>" if date_str else ""
+        lines.append(f"<b>{idx}.</b> {t_esc}{meta_sub}{badge}")
+
+    lines.append(
+        "\n<blockquote>"
+        "💡 Type another number (e.g. <code>5</code>) or tap <b>Next ➡️</b> to see more!"
+        "</blockquote>"
+    )
+    return "\n".join(lines)
+
+
+def parse_search_selection(text: str, total_items: int) -> list[int]:
+    """
+    Parse user selection from numbered search list (e.g. '1', '2', '1-3', 'all', '1, 3').
+    Returns 1-based indices within range [1, total_items].
+    """
+    clean = text.strip().lower()
+    if not clean:
+        return []
+    if clean in ("all", "sab", "saare"):
+        return list(range(1, total_items + 1))
+
+    m_range = re.match(r"^(\d+)\s*(?:-|to)\s*(\d+)$", clean)
+    if m_range:
+        start, end = int(m_range.group(1)), int(m_range.group(2))
+        return [i for i in range(min(start, end), max(start, end) + 1) if 1 <= i <= total_items]
+
+    parts = re.split(r"[, ]+", clean)
+    indices = []
+    for p in parts:
+        if p.isdigit():
+            val = int(p)
+            if 1 <= val <= total_items and val not in indices:
+                indices.append(val)
+    return indices
+
+
+
+

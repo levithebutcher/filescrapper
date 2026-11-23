@@ -100,6 +100,9 @@ from ui import (
     format_listing_menu_card,
     format_category_options_card,
     format_category_completion_card,
+    format_clean_search_results_page,
+    format_search_completion_card,
+    parse_search_selection,
 )
 from keyboards import (
     build_stop_keyboard,
@@ -111,6 +114,7 @@ from keyboards import (
     build_search_platform_keyboard,
     build_search_execute_platform_keyboard,
     build_search_results_keyboard,
+    build_search_results_clean_keyboard,
     build_mmsvibex_mode_keyboard,
     build_slice_selection_keyboard,
     build_category_options_keyboard,
@@ -1541,6 +1545,9 @@ async def execute_platform_search(
     query: str,
     edit_msg=None,
     page: int = 1,
+    forum_id: int | str | None = None,
+    scope_name: str | None = None,
+    back_callback: str | None = None,
 ):
     """Execute search on the selected platform with total counts and multi-page pagination."""
     clean_query = query.strip()
@@ -1553,13 +1560,14 @@ async def execute_platform_search(
 
     plat_names = {
         "lc": "LiveCam Models",
-        "fm": "DropMMS Forum",
-        "mmst": "MMSTown Forum",
+        "fm": "DropMMS",
+        "mmst": "MMSTown",
         "vibex": "MMSVibex Videos",
         "wplock": "WordPress Lockers",
     }
     plat_label = plat_names.get(plat, "Platform")
-    status_text = f"🔍 <i>Searching {plat_label} for '<b>{html.escape(clean_query)}</b>' (Page {page})...</i>"
+    display_scope = scope_name or plat_label
+    status_text = f"🔍 <i>Searching {display_scope} for '<b>{html.escape(clean_query)}</b>' (Page {page})...</i>"
 
     if edit_msg:
         try:
@@ -1737,11 +1745,19 @@ async def execute_platform_search(
         )
 
     else:
-        # Forum search (DropMMS or MMSTown) with advanced parameters & total counts
+        # Forum search (DropMMS or MMSTown) with clean text numbers, 10 items per page, and date sorting
         base_search_url = "https://mmstown.com" if plat == "mmst" else BASE_URL
+        scope = scope_name or plat_label
         try:
             search_res = await asyncio.to_thread(
-                search_forum_advanced, clean_query, page, 6, "titles", "relevancy", base_search_url
+                search_forum_advanced,
+                clean_query,
+                page,
+                10,
+                "titles",
+                "newest",
+                base_search_url,
+                forum_id,
             )
             results = search_res.get("topics", [])
             total_count = search_res.get("total_count", len(results))
@@ -1751,86 +1767,61 @@ async def execute_platform_search(
             return
 
         if not results:
+            back_cb = back_callback or (f"sp_cat:{context.user_data.get('last_short_id')}" if forum_id else f"sp_choose:{plat}")
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔄 Search {plat_label} Again", callback_data=f"sp_choose:{plat}")],
+                [InlineKeyboardButton(f"🔄 Search {display_scope} Again", callback_data=back_cb)],
                 [InlineKeyboardButton("🔙 Back to Search", callback_data="cb_search")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
             ])
             context.user_data["search_query"] = clean_query
             await status_msg.edit_text(
-                f"❌ No topics found on {plat_label} for <b>{html.escape(clean_query)}</b>.\n\n"
+                f"❌ No topics found on {html.escape(display_scope)} for <b>{html.escape(clean_query)}</b>.\n\n"
                 "<i>Tip: Check spelling or try a broader keyword.</i>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
             return
 
-        count_str = f"Found {total_count} Topics" if total_count else "Available"
-        text = (
-            "<blockquote>"
-            f"🔎 <b>{plat_label} Results</b>\n"
-            f"🎯 <b>Query:</b> <code>{html.escape(clean_query)}</code>\n"
-            f"📊 <b>Total:</b> {count_str}"
+        # Render clean text-based search results with numbers 1 to 10
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name=display_scope,
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
         )
-        if total_pages > 1:
-            text += f" (Page {page}/{total_pages})"
-        text += "</blockquote>\n\n"
 
-        buttons = []
-        items_for_active = []
-        for idx, r in enumerate(results, start=1):
-            short_id = db.get_or_create_short_id(r["url"])
-            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
-            btn = InlineKeyboardButton(f"🎬 Extract #{idx}", callback_data=f"sc_{short_id}")
-            buttons.append([btn])
-            items_for_active.append({
-                "title": r["title"],
-                "url": r["url"],
-                "short_id": short_id,
-            })
+        fid_str = str(forum_id) if forum_id else "all"
+        page_pfx = f"sp_fp:{plat}:{fid_str}"
+        back_cb = back_callback or (f"sp_choose:{plat}" if not forum_id else f"sp_cat:{context.user_data.get('last_short_id', '')}")
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
 
-        context.user_data["active_listing"] = {
-            "title": f"{plat_label}: '{clean_query}'",
-            "type": "search",
-            "platform": plat,
+        context.user_data["active_search_results"] = {
+            "plat": plat,
             "query": clean_query,
+            "scope_name": display_scope,
+            "forum_id": forum_id,
             "page": page,
             "total_pages": total_pages,
-            "items": items_for_active,
-            "delivered_ids": set(),
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
         }
 
-        # Multi-page pagination
-        if total_pages > 1:
-            nav_row = []
-            if page > 1:
-                nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"sp_p:{plat}:{page-1}"))
-            nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
-            if page < total_pages:
-                nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"sp_p:{plat}:{page+1}"))
-            buttons.append(nav_row)
-
-        # Cross-platform search switcher tabs
-        tab_row = []
-        if plat != "fm":
-            tab_row.append(InlineKeyboardButton("💬 DropMMS", callback_data="sp_switch:fm"))
-        if plat != "mmst":
-            tab_row.append(InlineKeyboardButton("💬 MMSTown", callback_data="sp_switch:mmst"))
-        if plat != "vibex":
-            tab_row.append(InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_switch:vibex"))
-        if plat != "lc":
-            tab_row.append(InlineKeyboardButton("📹 LiveCam", callback_data="sp_switch:lc"))
-        if tab_row:
-            buttons.append(tab_row)
-
-        buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-        ])
         await status_msg.edit_text(
-            text,
+            card_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=markup,
         )
 
 
@@ -2853,6 +2844,120 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await stop_command(update, context)
         return
 
+    # Check if user is in an interactive site/forum search keyword input flow
+    search_flow = context.user_data.pop("awaiting_search_flow", None)
+    if search_flow:
+        clean_kw = text.strip()
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+        await execute_platform_search(
+            update=update,
+            context=context,
+            plat=search_flow["plat"],
+            query=clean_kw,
+            forum_id=search_flow.get("forum_id"),
+            scope_name=search_flow.get("scope_name"),
+            back_callback=search_flow.get("back_callback"),
+        )
+        return
+
+    # Check if user selected numbers from active search results
+    search_state = context.user_data.get("active_search_results")
+    if search_state and search_state.get("items"):
+        items = search_state["items"]
+        selection_indices = parse_search_selection(text, len(items))
+        if selection_indices:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+
+            chat_id = update.effective_chat.id
+            user_id = update.effective_user.id if update.effective_user else None
+
+            start_scrape_for_chat(chat_id)
+            stop_markup = build_stop_keyboard()
+            status_text = (
+                "<blockquote>"
+                f"⏳ <b>Extracting {len(selection_indices)} selected topic(s)...</b>\n"
+                "<i>Tap below if you wish to stop.</i>"
+                "</blockquote>"
+            )
+            status_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=status_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=stop_markup,
+            )
+            context.user_data[f"active_progress_msg_{chat_id}"] = status_msg.message_id
+
+            delivered_this_round = []
+            try:
+                for idx in selection_indices:
+                    if is_scrape_cancelled(chat_id):
+                        break
+                    topic = items[idx - 1]
+                    await process_topic_scrape(
+                        bot=context.bot,
+                        chat_id=chat_id,
+                        url=topic["url"],
+                        user_id=user_id,
+                        topic_meta=topic,
+                    )
+                    search_state.setdefault("delivered_indices", set()).add(idx)
+                    delivered_this_round.append(idx)
+                    if is_scrape_cancelled(chat_id):
+                        break
+                    await cancellable_sleep(POST_SEND_DELAY, chat_id)
+            finally:
+                end_scrape_for_chat(chat_id)
+                context.user_data.pop(f"active_progress_msg_{chat_id}", None)
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+
+            # Resurface search results card with completion note at the bottom
+            completion_text = format_search_completion_card(
+                delivered_summary=f"{len(delivered_this_round)} topic(s)",
+                query=search_state["query"],
+                scope_name=search_state["scope_name"],
+                page=search_state["page"],
+                total_pages=search_state["total_pages"],
+                total_count=search_state["total_count"],
+                items=search_state["items"],
+                delivered_indices=search_state["delivered_indices"],
+            )
+
+            fid_str = str(search_state["forum_id"]) if search_state.get("forum_id") else "all"
+            page_pfx = f"sp_fp:{search_state['plat']}:{fid_str}"
+            clean_markup = build_search_results_clean_keyboard(
+                page=search_state["page"],
+                total_pages=search_state["total_pages"],
+                page_callback_prefix=page_pfx,
+                back_callback=search_state.get("back_callback", f"sp_choose:{search_state['plat']}"),
+            )
+
+            new_card_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=completion_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=clean_markup,
+            )
+
+            # Delete the previous search results card so chat stays tidy
+            old_msg_id = search_state.get("message_id")
+            if old_msg_id and old_msg_id != new_card_msg.message_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+                except Exception:
+                    pass
+
+            search_state["message_id"] = new_card_msg.message_id
+            return
+
     # Check if user is in an interactive search flow
     awaiting_plat = context.user_data.pop("awaiting_search", None)
     if awaiting_plat:
@@ -2940,7 +3045,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 pass
 
             forums = await asyncio.to_thread(get_dropmms_forums)
-            buttons = []
+            buttons = [
+                [InlineKeyboardButton("🔍 Search All DropMMS Topics", callback_data="sp_search_site:fm")]
+            ]
             for i in range(0, len(forums), 2):
                 row = []
                 f1 = forums[i]
@@ -2984,7 +3091,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 pass
 
             forums = await asyncio.to_thread(get_mmstown_forums)
-            buttons = []
+            buttons = [
+                [InlineKeyboardButton("🔍 Search All MMSTown Topics", callback_data="sp_search_site:mmst")]
+            ]
             for i in range(0, len(forums), 2):
                 row = []
                 f1 = forums[i]
@@ -3109,6 +3218,76 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "✏️ <i>Please send the keyword or model name in your next message (e.g. <code>baddie</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
+        )
+    elif data.startswith("sp_search_site:"):
+        plat = data.split(":")[1]
+        plat_label = "DropMMS" if plat == "fm" else "MMSTown"
+        context.user_data["awaiting_search_flow"] = {
+            "plat": plat,
+            "forum_id": None,
+            "scope_name": f"All {plat_label} Topics",
+            "back_callback": f"sp_choose:{plat}",
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"sp_choose:{plat}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {plat_label}</b>\n"
+            "🌐 <b>Scope:</b> Entire Website (All Forums)\n"
+            "🕒 <b>Sort:</b> Newest Uploads (Date Wise)\n\n"
+            f"✏️ <i>Please send the keyword or title to search (e.g. <code>baddie</code> or <code>1080p</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data.startswith("sp_search_forum:"):
+        short_id = int(data.split(":")[1])
+        url = db.get_url_from_short_id(short_id) or ""
+        cached_stats = context.user_data.get(f"cat_stats_{short_id}", {})
+        cat_title = cached_stats.get("title") or "Forum Category"
+        context.user_data["last_short_id"] = short_id
+        m_fid = re.search(r"/forum/(\d+)-?", url)
+        forum_id = m_fid.group(1) if m_fid else None
+        plat = "mmst" if "mmstown" in url.lower() else "fm"
+
+        context.user_data["awaiting_search_flow"] = {
+            "plat": plat,
+            "forum_id": forum_id,
+            "scope_name": cat_title,
+            "short_id": short_id,
+            "back_callback": f"sp_cat:{short_id}",
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Category", callback_data=f"sp_cat:{short_id}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search Inside Category</b>\n"
+            f"📁 <b>Forum:</b> {html.escape(cat_title)}\n"
+            "🕒 <b>Sort:</b> Newest Uploads (Date Wise)\n\n"
+            f"✏️ <i>Please send the keyword or title to search (e.g. <code>dance</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif data.startswith("sp_fp:"):
+        _, plat, fid_str, page_str = data.split(":")
+        page = int(page_str)
+        forum_id = fid_str if fid_str != "all" else None
+        search_state = context.user_data.get("active_search_results", {})
+        query_text = search_state.get("query") or context.user_data.get("search_query", "")
+        scope_name = search_state.get("scope_name")
+        back_cb = search_state.get("back_callback", "cb_search")
+        if not query_text:
+            await query.edit_message_text("<blockquote>⚠️ Search query expired. Please search again.</blockquote>", parse_mode=ParseMode.HTML)
+            return
+        await execute_platform_search(
+            update=update,
+            context=context,
+            plat=plat,
+            query=query_text,
+            edit_msg=query.message,
+            page=page,
+            forum_id=forum_id,
+            scope_name=scope_name,
+            back_callback=back_cb,
         )
     elif data.startswith("sp_vsort:"):
         _, sort_key = data.split(":")
@@ -3385,21 +3564,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "url": stats.get("url") or url,
         }
 
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
-                InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:fm"),
-                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-            ],
-        ])
+        back_cb = "sp_choose:mmst" if "mmstown" in url.lower() else "sp_choose:fm"
+        markup = build_forum_sort_keyboard(short_id, back_callback=back_cb)
 
         card_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
-            f"📊 <b>Total Topics:</b> {total_str}"
+            f"📊 <b>Total Topics:</b> {total_str}\n"
+            "🎯 Select a sorting order or search inside this forum:"
             "</blockquote>"
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
@@ -3692,6 +3864,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("search_query", None)
         context.user_data.pop("awaiting_model_range", None)
         context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_search_flow", None)
+        context.user_data.pop("active_search_results", None)
         try:
             await query.edit_message_text("<blockquote>❌ Cancelled.</blockquote>", parse_mode=ParseMode.HTML)
         except Exception:
