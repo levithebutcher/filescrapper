@@ -1121,7 +1121,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_main_menu_keyboard(),
     )
 
 
