@@ -459,6 +459,72 @@ SORT_DISPLAY_NAMES = {
 }
 
 
+def parse_relative_to_ist(text: str | None) -> datetime | None:
+    """Parse relative time phrases like '2 hours ago', 'Yesterday at 9:30 PM', '15 mins ago' into IST datetime."""
+    if not text:
+        return None
+    s = str(text).strip().lower()
+    now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
+
+    if any(k in s for k in ["just now", "moments ago", "a moment ago", "seconds ago"]):
+        return now_ist
+
+    m = re.search(r"\b(\d+)\s*(?:m|min|mins|minute|minutes)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(minutes=int(m.group(1)))
+
+    m = re.search(r"\b(\d+)\s*(?:h|hr|hrs|hour|hours)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(hours=int(m.group(1)))
+
+    if "yesterday" in s:
+        m_time = re.search(r"(\d{1,2}):(\d{2})(?:\s*([ap]m))?", s)
+        base = now_ist - timedelta(days=1)
+        if m_time:
+            hr = int(m_time.group(1))
+            mn = int(m_time.group(2))
+            meridiem = m_time.group(3)
+            if meridiem:
+                if meridiem == "pm" and hr < 12:
+                    hr += 12
+                elif meridiem == "am" and hr == 12:
+                    hr = 0
+            return base.replace(hour=hr, minute=mn, second=0, microsecond=0)
+        return base.replace(hour=12, minute=0, second=0, microsecond=0)
+
+    if "today" in s:
+        m_time = re.search(r"(\d{1,2}):(\d{2})(?:\s*([ap]m))?", s)
+        if m_time:
+            hr = int(m_time.group(1))
+            mn = int(m_time.group(2))
+            meridiem = m_time.group(3)
+            if meridiem:
+                if meridiem == "pm" and hr < 12:
+                    hr += 12
+                elif meridiem == "am" and hr == 12:
+                    hr = 0
+            return now_ist.replace(hour=hr, minute=mn, second=0, microsecond=0)
+        return now_ist
+
+    m = re.search(r"\b(\d+)\s*(?:d|day|days)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(days=int(m.group(1)))
+
+    m = re.search(r"\b(\d+)\s*(?:w|wk|weeks)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(weeks=int(m.group(1)))
+
+    m = re.search(r"\b(\d+)\s*(?:mo|month|months)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(days=int(m.group(1)) * 30)
+
+    m = re.search(r"\b(\d+)\s*(?:y|yr|years)\s*ago\b", s)
+    if m:
+        return now_ist - timedelta(days=int(m.group(1)) * 365)
+
+    return None
+
+
 def parse_to_ist(date_str: str | None) -> datetime | None:
     """Parse ISO UTC timestamp (or string) and convert to Indian Standard Time (IST, UTC+05:30)."""
     if not date_str:
@@ -486,6 +552,23 @@ def parse_to_ist(date_str: str | None) -> datetime | None:
         "%B %d, %Y",
         "%b %d, %Y",
         "%d %B %Y",
+        "%B %d, %Y, %I:%M %p",
+        "%B %d, %Y %I:%M %p",
+        "%B %d, %Y at %I:%M %p",
+        "%b %d, %Y, %I:%M %p",
+        "%b %d, %Y %I:%M %p",
+        "%b %d, %Y at %I:%M %p",
+        "%d %b %Y, %I:%M %p",
+        "%d %B %Y, %I:%M %p",
+        "%d %b %Y at %I:%M %p",
+        "%m/%d/%Y at %I:%M %p",
+        "%d/%m/%Y at %I:%M %p",
+        "%m/%d/%Y, %I:%M %p",
+        "%d/%m/%Y, %I:%M %p",
+        "%Y-%m-%d %I:%M %p",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
     ):
         try:
             dt = datetime.strptime(s, fmt)
@@ -493,7 +576,9 @@ def parse_to_ist(date_str: str | None) -> datetime | None:
             return dt.astimezone(IST_TZ)
         except Exception:
             continue
-    return None
+
+    # Fallback to relative text
+    return parse_relative_to_ist(s)
 
 
 def extract_date_from_url(url: str | None) -> datetime | None:
@@ -552,9 +637,10 @@ class UniversalDateResolver:
             if dt:
                 return dt, format_date_ist(dt)
 
-        # Tier 1b: Check soup metadata
+        # Tier 1b: Check soup metadata & first post content
         if soup:
-            for prop in ("article:published_time", "og:published_time", "publication_date"):
+            # Check meta tags
+            for prop in ("article:published_time", "og:published_time", "publication_date", "datePublished", "uploadDate"):
                 meta = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
                 if meta and meta.get("content"):
                     dt = parse_to_ist(meta["content"])
@@ -571,14 +657,37 @@ class UniversalDateResolver:
                         if dt:
                             return dt, format_date_ist(dt)
 
-            # <time> tags
-            t_elem = soup.find("time")
-            if t_elem:
-                val = t_elem.get("datetime") or t_elem.get("title")
-                if val:
-                    dt = parse_to_ist(val)
+            # Look for <time> tags - prioritize the first post container if present
+            first_post = soup.select_one(".cPost, .ipsComment, [data-role='comment'], article.post, .entry-content")
+            search_scope = first_post if first_post else soup
+
+            for t_elem in search_scope.find_all("time"):
+                for attr in ("datetime", "title"):
+                    val = t_elem.get(attr)
+                    if val:
+                        dt = parse_to_ist(val)
+                        if dt:
+                            return dt, format_date_ist(dt)
+                txt = t_elem.get_text(strip=True)
+                if txt:
+                    dt = parse_to_ist(txt)
                     if dt:
                         return dt, format_date_ist(dt)
+
+            # Fallback across entire soup if not found in first_post
+            if search_scope is not soup:
+                for t_elem in soup.find_all("time"):
+                    for attr in ("datetime", "title"):
+                        val = t_elem.get(attr)
+                        if val:
+                            dt = parse_to_ist(val)
+                            if dt:
+                                return dt, format_date_ist(dt)
+                    txt = t_elem.get_text(strip=True)
+                    if txt:
+                        dt = parse_to_ist(txt)
+                        if dt:
+                            return dt, format_date_ist(dt)
 
         # Tier 2: URL regex
         if url:

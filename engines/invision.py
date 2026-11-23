@@ -18,6 +18,7 @@ from config import (
 from engines.base import (
     BaseEngine,
     UniversalSort,
+    UniversalDateResolver,
     _fetch_soup,
     _extract_all_image_candidates,
     _is_streaming_link,
@@ -168,7 +169,13 @@ def _extract_topics_from_soup(
         if not topic_title:
             topic_title = "Untitled Post"
 
-        post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+        dt_ist, post_date_ist = UniversalDateResolver.resolve(
+            raw_date=post_date_raw,
+            time_text=post_date_text,
+            title=topic_title,
+        )
+        if not post_date_raw and dt_ist:
+            post_date_raw = dt_ist.isoformat()
 
         views_elem = row.find(class_=re.compile(r"ipsDataItem_stats|stats|cForumRow_views", re.I))
         views = views_elem.get_text(strip=True) if views_elem else None
@@ -741,9 +748,25 @@ def get_post_details(post_url: str) -> dict:
     thumbnail = thumbnail_candidates[0] if thumbnail_candidates else None
     streaming_links = _extract_streaming_links_from_html(soup, post_url)
 
-    time_elem = soup.find("time")
-    post_date_raw = (time_elem.get("datetime") or time_elem.get("title")) if time_elem else None
-    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+    first_post = soup.select_one(".cPost, .ipsComment, [data-role='comment']")
+    target_soup = first_post if first_post else soup
+
+    dt_ist, post_date_ist = UniversalDateResolver.resolve(
+        soup=target_soup,
+        url=post_url,
+        fallback_db_url=post_url,
+        title=title,
+    )
+    post_date_raw = dt_ist.isoformat() if dt_ist else None
+
+    # Detect platform name from URL
+    p_low = post_url.lower()
+    if "dropmms" in p_low:
+        platform_name = "DropMMS"
+    elif "mmstown" in p_low:
+        platform_name = "MMSTown"
+    else:
+        platform_name = "Invision Community"
 
     return {
         "title": title,
@@ -755,6 +778,8 @@ def get_post_details(post_url: str) -> dict:
         "post_url": post_url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
+        "platform_name": platform_name,
+        "site": "invision",
     }
 
 

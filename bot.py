@@ -197,25 +197,75 @@ def group_links_by_host(links: list[str]) -> dict[str, list[str]]:
 
 def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     """
-    Format single post details into a clean, minimal message.
-    Uses Telegram blockquote for the title, filters links according to user preference,
-    and formats them as a clean numbered list of copyable <code> links.
+    Universal Post Card Formatter.
+    Formats post details into a clean, modern card with rich metadata badges,
+    tags, preferred streaming links, albums/series, and origin links.
     """
     title = html.escape(details.get("title", "Untitled Video"))
     post_url = html.escape(details.get("post_url", ""))
     tags = details.get("tags", [])
     raw_links = details.get("streaming_links", [])
 
-    caption_lines = [f"<blockquote>🎬 <b>{title}</b></blockquote>"]
+    # Dynamic emoji header based on content type
+    s_low = str(details.get("site") or "").lower()
+    p_low = str(details.get("platform_name") or details.get("platform") or "").lower()
+    if s_low == "livecam" or "livecam" in p_low:
+        emoji = "📹"
+    elif "photo" in title.lower() or "album" in title.lower() or details.get("is_photo"):
+        emoji = "📸"
+    else:
+        emoji = "🎬"
 
+    caption_lines = [f"<blockquote>{emoji} <b>{title}</b></blockquote>"]
+
+    # Tags
     if tags:
-        tag_str = " ".join([f"<code>#{html.escape(t)}</code>" for t in tags[:5]])
+        tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
         caption_lines.append(f"🏷️ {tag_str}")
 
-    date_ist = details.get("date_ist")
-    if date_ist:
-        caption_lines.append(f"🕒 <code>{html.escape(date_ist)}</code>")
+    # Metadata Badges Line: Date • Platform • Category • Duration
+    meta_parts = []
+    date_display = details.get("date_ist") or details.get("date")
+    if date_display:
+        meta_parts.append(f"📅 <b>Date:</b> {html.escape(str(date_display))}")
 
+    platform_name = details.get("platform_name") or details.get("platform")
+    if not platform_name:
+        u_low = post_url.lower()
+        if "mmsvibex" in s_low or "mmsvibex" in u_low:
+            platform_name = "MMSVibex"
+        elif "livecam" in s_low or "livecamrips" in u_low:
+            platform_name = "LiveCamRips"
+        elif "dropmms" in u_low:
+            platform_name = "DropMMS"
+        elif "mmstown" in u_low:
+            platform_name = "MMSTown"
+        elif "omaal63" in u_low:
+            platform_name = "Omaal63"
+        elif "desijugar" in u_low:
+            platform_name = "DesiJugar"
+        elif "gulabihub" in u_low:
+            platform_name = "GulabiHub"
+        elif s_low == "wp_locker":
+            platform_name = "WordPress"
+        elif s_low == "invision":
+            platform_name = "Invision Community"
+
+    if platform_name:
+        meta_parts.append(f"🏛️ <b>Platform:</b> {html.escape(platform_name)}")
+
+    category = details.get("category_name") or details.get("category")
+    if category:
+        meta_parts.append(f"📁 <b>Category:</b> {html.escape(str(category))}")
+
+    duration = details.get("duration")
+    if duration:
+        meta_parts.append(f"⏱️ <b>Duration:</b> {html.escape(str(duration))}")
+
+    if meta_parts:
+        caption_lines.append("  •  ".join(meta_parts))
+
+    # Streaming Links Section
     if not raw_links:
         caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
     elif user_pref == "all":
@@ -262,11 +312,46 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         site_type = details.get("site")
         if site_type == "wp_locker":
             link_title = "Original Post"
+        elif site_type == "livecam":
+            link_title = "Original Video Page"
         else:
             link_title = "Original Forum Thread"
         caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
 
     return "\n".join(caption_lines)
+
+
+def build_card_keyboard(details: dict, user_pref: str = "streamtape") -> InlineKeyboardMarkup:
+    """Build interactive action buttons for the universal post card."""
+    buttons = []
+    raw_links = details.get("streaming_links", [])
+    watch_url = None
+    if raw_links:
+        if user_pref == "all":
+            candidate = raw_links[0]
+        else:
+            _, filtered, _ = filter_links_by_preference(raw_links, user_pref)
+            candidate = filtered[0] if filtered else raw_links[0]
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            watch_url = candidate
+
+    row1 = []
+    if watch_url:
+        row1.append(InlineKeyboardButton("🎬 Watch Video", url=watch_url))
+
+    if details.get("collection_url") and not details.get("hide_collection_link"):
+        col_url = details["collection_url"]
+        if col_url.startswith("http://") or col_url.startswith("https://"):
+            row1.append(InlineKeyboardButton("📁 Collection", url=col_url))
+
+    if row1:
+        buttons.append(row1)
+
+    buttons.append([
+        InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
+        InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def get_navigation_keyboard() -> InlineKeyboardMarkup:
@@ -292,6 +377,8 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
     target_uid = user_id if user_id else (chat_id if isinstance(chat_id, int) and chat_id > 0 else 0)
     user_pref = db.get_user_host_preference(target_uid) if target_uid else "streamtape"
     caption = format_post_card(details, user_pref)
+    if reply_markup is None:
+        reply_markup = build_card_keyboard(details, user_pref)
 
     # Collect thumbnail candidates and download the first valid image into memory
     candidates = details.get("thumbnail_candidates", [])
@@ -390,15 +477,33 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         logger.error(f"Failed to send post card to {chat_id}: {e}")
 
 
-async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int | str = None):
-    """Deliver a clean LiveCamRips card with uncropped HD thumbnail and copyable links."""
+async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int | str = None, reply_markup=None):
+    """Deliver a clean LiveCamRips card with uncropped HD thumbnail and copyable links using Universal Card Engine."""
     if is_scrape_cancelled(chat_id):
         return
 
     uid = user_id or chat_id
+    target_uid = uid if isinstance(uid, int) and uid > 0 else 0
+    user_pref = db.get_user_host_preference(target_uid) if target_uid else "streamtape"
     link_mode = db.get_user_link_mode(uid)
-    caption = format_livecam_card(details, link_mode=link_mode)
-    thumb_url = details.get("thumbnail")
+
+    # Normalize details for Universal Card
+    details_copy = dict(details)
+    if not details_copy.get("title") and details_copy.get("model_name"):
+        details_copy["title"] = details_copy["model_name"]
+    details_copy.setdefault("site", "livecam")
+    details_copy.setdefault("platform_name", "LiveCamRips")
+    if details_copy.get("date") and not details_copy.get("date_ist"):
+        details_copy["date_ist"] = details_copy["date"]
+
+    if link_mode == "page" and details_copy.get("video_url"):
+        details_copy["streaming_links"] = [details_copy["video_url"]]
+
+    caption = format_post_card(details_copy, user_pref=user_pref)
+    if reply_markup is None:
+        reply_markup = build_card_keyboard(details_copy, user_pref)
+
+    thumb_url = details_copy.get("thumbnail")
 
     image_bytes = None
     if thumb_url:
@@ -419,6 +524,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
                 photo=photo_file,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
             )
             return
         except RetryAfter as e:
@@ -433,6 +539,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
                     photo=photo_file,
                     caption=caption,
                     parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
                 )
                 return
             except Exception:
@@ -449,6 +556,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
             text=caption,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=False,
+            reply_markup=reply_markup,
         )
     except RetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
@@ -459,6 +567,7 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
             text=caption,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=False,
+            reply_markup=reply_markup,
         )
     except Exception as e:
         logger.error(f"Failed to send LiveCamRips card: {e}")
@@ -1414,18 +1523,18 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             end_scrape_for_chat(chat_id)
 
-        if not is_scrape_cancelled(cid):
+        if not is_scrape_cancelled(chat_id):
             try:
                 await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 Delivered: <b>{len(videos)}</b> videos</blockquote>",
                     parse_mode=ParseMode.HTML,
                     reply_markup=get_navigation_keyboard(),
                 )
             except Exception:
                 try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 Delivered: <b>{len(videos)}</b> videos</blockquote>",
                         parse_mode=ParseMode.HTML,
                         reply_markup=get_navigation_keyboard(),
                     )
@@ -1445,18 +1554,18 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await process_topic_scrape(context.bot, chat_id, target_url, user_id=user_id)
         finally:
             end_scrape_for_chat(chat_id)
-        if not is_scrape_cancelled(cid):
+        if not is_scrape_cancelled(chat_id):
             try:
                 await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    "<blockquote>✅ <b>Extraction Complete!</b>\n🎬 Delivered: <b>1</b> topic</blockquote>",
                     parse_mode=ParseMode.HTML,
                     reply_markup=get_navigation_keyboard(),
                 )
             except Exception:
                 try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="<blockquote>✅ <b>Extraction Complete!</b>\n🎬 Delivered: <b>1</b> topic</blockquote>",
                         parse_mode=ParseMode.HTML,
                         reply_markup=get_navigation_keyboard(),
                     )
@@ -1537,6 +1646,17 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await cancellable_sleep(POST_SEND_DELAY, chat_id)
     finally:
         end_scrape_for_chat(chat_id)
+
+    if not is_scrape_cancelled(chat_id):
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_navigation_keyboard(),
+            )
+        except Exception:
+            pass
 
     try:
         await status_msg.delete()

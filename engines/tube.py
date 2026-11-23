@@ -171,6 +171,7 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
         "post_url": video_url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
+        "platform_name": "MMSVibex",
         "site": "mmsvibex",
     }
 
@@ -242,20 +243,13 @@ def get_mmsvibex_photo_details(photo_url: str) -> dict:
     thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
     streaming_links = [zip_url] if zip_url else []
 
-    post_date_raw = None
-    pub_meta = (
-        soup.find("meta", property="article:published_time")
-        or soup.find("meta", property="uploadDate")
-        or soup.find("meta", itemprop="uploadDate")
+    dt_ist, post_date_ist = UniversalDateResolver.resolve(
+        soup=soup,
+        url=photo_url,
+        fallback_db_url=photo_url,
+        title=title,
     )
-    if pub_meta and pub_meta.get("content"):
-        post_date_raw = pub_meta["content"].strip()
-    if not post_date_raw:
-        time_elem = soup.find("time")
-        if time_elem:
-            post_date_raw = time_elem.get("datetime") or time_elem.get("title")
-
-    post_date_ist = format_date_ist(post_date_raw) if post_date_raw else None
+    post_date_raw = dt_ist.isoformat() if dt_ist else None
 
     return {
         "title": f"📸 {title} (Photo Album)",
@@ -267,6 +261,7 @@ def get_mmsvibex_photo_details(photo_url: str) -> dict:
         "post_url": photo_url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
+        "platform_name": "MMSVibex",
         "site": "mmsvibex",
     }
 

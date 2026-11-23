@@ -336,14 +336,18 @@ def get_livecam_video_details(video_url: str) -> dict:
         "title": model_name,
         "clean_title": model_name,
         "date": date_display,
+        "date_ist": date_display,
         "raw_date": raw_date,
         "duration": None,
         "platform": platform,
+        "platform_name": "LiveCamRips",
         "tags": [model_name, platform],
         "thumbnail": thumbnail,
         "thumbnail_candidates": [thumbnail] if thumbnail else [],
         "streaming_links": streaming_links,
         "video_url": video_url,
+        "post_url": video_url,
+        "site": "livecam",
         "is_livecam": True,
     }
 

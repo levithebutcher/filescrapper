@@ -104,6 +104,17 @@ def get_wp_post_details(post_url: str) -> dict:
     )
     post_date_raw = dt_ist.isoformat() if dt_ist else None
 
+    # Detect platform name from URL
+    p_low = post_url.lower()
+    if "omaal63" in p_low:
+        platform_name = "Omaal63"
+    elif "desijugar" in p_low:
+        platform_name = "DesiJugar"
+    elif "gulabihub" in p_low:
+        platform_name = "GulabiHub"
+    else:
+        platform_name = "WordPress Locker"
+
     return {
         "title": title,
         "clean_title": clean_title,
@@ -114,6 +125,7 @@ def get_wp_post_details(post_url: str) -> dict:
         "post_url": post_url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
+        "platform_name": platform_name,
         "site": "wp_locker",
     }
 

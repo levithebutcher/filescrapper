@@ -90,6 +90,7 @@ def get_universal_post_details(url: str) -> dict:
     post_date_raw = dt_ist.isoformat() if dt_ist else None
 
     domain = urlparse(url).netloc.lower().replace("www.", "")
+    platform_name = domain.capitalize() if domain else "Web Video"
 
     return {
         "title": title,
@@ -101,6 +102,7 @@ def get_universal_post_details(url: str) -> dict:
         "post_url": url,
         "date": post_date_raw,
         "date_ist": post_date_ist,
+        "platform_name": platform_name,
         "site": f"web_{domain}",
     }
 

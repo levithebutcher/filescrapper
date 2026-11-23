@@ -181,6 +181,79 @@ class TestEngines(unittest.TestCase):
         self.assertIn("abcd.com", custom_registry.supported_domains())
         self.assertIn("sub.abcd.org", custom_registry.supported_domains())
 
+    def test_parse_relative_to_ist(self):
+        """Test relative time parsing into IST datetimes."""
+        from engines.base import parse_relative_to_ist, parse_to_ist
+
+        # Just now
+        dt_now = parse_relative_to_ist("just now")
+        self.assertIsNotNone(dt_now)
+
+        # 2 hours ago
+        dt_2h = parse_relative_to_ist("2 hours ago")
+        self.assertIsNotNone(dt_2h)
+
+        # 15 mins ago
+        dt_15m = parse_relative_to_ist("15 mins ago")
+        self.assertIsNotNone(dt_15m)
+
+        # Yesterday
+        dt_yest = parse_relative_to_ist("yesterday at 10:30 pm")
+        self.assertIsNotNone(dt_yest)
+        self.assertEqual(dt_yest.hour, 22)
+        self.assertEqual(dt_yest.minute, 30)
+
+        # parse_to_ist fallback
+        dt_fallback = parse_to_ist("4 hours ago")
+        self.assertIsNotNone(dt_fallback)
+
+    def test_universal_card_formatting_and_keyboard(self):
+        """Test Universal Card layout and interactive action buttons."""
+        from bot import format_post_card, build_card_keyboard
+
+        details = {
+            "title": "Universal Sample Video",
+            "post_url": "https://dropmms.com/topic/555-sample/",
+            "tags": ["1080p", "HD"],
+            "date_ist": "23 Nov 2026, 10:30 AM IST",
+            "platform_name": "DropMMS",
+            "category_name": "Desi Videos",
+            "duration": "14:20",
+            "streaming_links": ["https://streamtape.com/e/abc12345"],
+        }
+        card = format_post_card(details, user_pref="streamtape")
+        self.assertIn("<blockquote>🎬 <b>Universal Sample Video</b></blockquote>", card)
+        self.assertIn("🏷️ <code>#1080p</code> <code>#HD</code>", card)
+        self.assertIn("📅 <b>Date:</b> 23 Nov 2026, 10:30 AM IST", card)
+        self.assertIn("🏛️ <b>Platform:</b> DropMMS", card)
+        self.assertIn("📁 <b>Category:</b> Desi Videos", card)
+        self.assertIn("⏱️ <b>Duration:</b> 14:20", card)
+        self.assertIn("🎬 Streamtape Links:", card)
+        self.assertIn("<code>https://streamtape.com/e/abc12345</code>", card)
+
+        kb = build_card_keyboard(details, user_pref="streamtape")
+        self.assertEqual(kb.inline_keyboard[0][0].text, "🎬 Watch Video")
+        self.assertEqual(kb.inline_keyboard[0][0].url, "https://streamtape.com/e/abc12345")
+        self.assertEqual(kb.inline_keyboard[1][0].text, "🔍 Search Again")
+        self.assertEqual(kb.inline_keyboard[1][1].text, "🏛️ Main Menu")
+
+    def test_platform_metadata_in_invision_and_wordpress(self):
+        """Verify platform_name is automatically attached in engine post details."""
+        from engines.invision import get_post_details
+        from engines.wordpress import get_wp_post_details
+
+        inv_html = "<html><body><h1>Dance Post</h1><article class='cPost'><time datetime='2026-11-23T05:00:00Z'>Earlier</time></article></body></html>"
+        with patch("engines.invision._fetch_soup", return_value=BeautifulSoup(inv_html, "html.parser")):
+            res = get_post_details("https://mmstown.com/topic/999-dance/")
+            self.assertEqual(res["platform_name"], "MMSTown")
+            self.assertIsNotNone(res["date_ist"])
+
+        wp_html = "<html><body><h1>WP Locker Video</h1><time class='entry-date'>2026-11-23T04:00:00Z</time></body></html>"
+        with patch("engines.wordpress._fetch_soup", return_value=BeautifulSoup(wp_html, "html.parser")):
+            res_wp = get_wp_post_details("https://desijugar.me/2026/11/23/dance-video/")
+            self.assertEqual(res_wp["platform_name"], "DesiJugar")
+            self.assertIsNotNone(res_wp["date_ist"])
+
 
 if __name__ == "__main__":
     unittest.main()
