@@ -93,6 +93,35 @@ from scraper import (
 )
 import db
 
+from ui import (
+    group_links_by_host,
+    format_post_card,
+    format_search_results_page,
+    format_listing_menu_card,
+)
+from keyboards import (
+    build_stop_keyboard,
+    build_card_keyboard,
+    get_navigation_keyboard,
+    get_host_settings_keyboard,
+    get_link_mode_keyboard,
+    build_main_menu_keyboard,
+    build_search_platform_keyboard,
+    build_search_execute_platform_keyboard,
+    build_search_results_keyboard,
+    build_mmsvibex_mode_keyboard,
+    build_slice_selection_keyboard,
+    build_forum_options_keyboard,
+    build_forum_sort_keyboard,
+    build_model_options_keyboard,
+    build_model_sort_keyboard,
+    build_channel_management_keyboard,
+    build_back_cancel_row,
+    build_back_cancel_keyboard,
+)
+import messages
+import progress
+
 # Logging configuration
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -169,202 +198,9 @@ async def cancellable_sleep(duration: float, chat_id: int | str, step: float = 0
         elapsed += sleep_time
 
 
-# --- UI & Formatters ---
-
-def group_links_by_host(links: list[str]) -> dict[str, list[str]]:
-    """Group streaming links by provider badge name, sorted by PROVIDER_PRIORITY."""
-    grouped = {}
-    host_keys = {}
-    for link in links:
-        badge = get_host_display_name(link)
-        h_key = get_host_key(link)
-        if badge not in grouped:
-            grouped[badge] = []
-            host_keys[badge] = h_key
-        if link not in grouped[badge]:
-            grouped[badge].append(link)
-
-    def sort_order(item):
-        badge = item[0]
-        h_key = host_keys.get(badge, "")
-        try:
-            return PROVIDER_PRIORITY.index(h_key)
-        except ValueError:
-            return 999
-
-    return dict(sorted(grouped.items(), key=sort_order))
-
-
-def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
-    """
-    Universal Post Card Formatter.
-    Formats post details into a clean, modern card with rich metadata badges,
-    tags, preferred streaming links, albums/series, and origin links.
-    """
-    title = html.escape(details.get("title", "Untitled Video"))
-    post_url = html.escape(details.get("post_url", ""))
-    tags = details.get("tags", [])
-    raw_links = details.get("streaming_links", [])
-
-    # Dynamic emoji header based on content type
-    s_low = str(details.get("site") or "").lower()
-    p_low = str(details.get("platform_name") or details.get("platform") or "").lower()
-    if s_low == "livecam" or "livecam" in p_low:
-        emoji = "📹"
-    elif "photo" in title.lower() or "album" in title.lower() or details.get("is_photo"):
-        emoji = "📸"
-    else:
-        emoji = "🎬"
-
-    caption_lines = [f"<blockquote>{emoji} <b>{title}</b></blockquote>"]
-
-    # Tags
-    if tags:
-        tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
-        caption_lines.append(f"🏷️ {tag_str}")
-
-    # Metadata Badges Line: Date • Platform • Category • Duration
-    meta_parts = []
-    date_display = details.get("date_ist") or details.get("date")
-    if date_display:
-        meta_parts.append(f"📅 <b>Date:</b> {html.escape(str(date_display))}")
-
-    platform_name = details.get("platform_name") or details.get("platform")
-    if not platform_name:
-        u_low = post_url.lower()
-        if "mmsvibex" in s_low or "mmsvibex" in u_low:
-            platform_name = "MMSVibex"
-        elif "livecam" in s_low or "livecamrips" in u_low:
-            platform_name = "LiveCamRips"
-        elif "dropmms" in u_low:
-            platform_name = "DropMMS"
-        elif "mmstown" in u_low:
-            platform_name = "MMSTown"
-        elif "omaal63" in u_low:
-            platform_name = "Omaal63"
-        elif "desijugar" in u_low:
-            platform_name = "DesiJugar"
-        elif "gulabihub" in u_low:
-            platform_name = "GulabiHub"
-        elif s_low == "wp_locker":
-            platform_name = "WordPress"
-        elif s_low == "invision":
-            platform_name = "Invision Community"
-
-    if platform_name:
-        meta_parts.append(f"🏛️ <b>Platform:</b> {html.escape(platform_name)}")
-
-    category = details.get("category_name") or details.get("category")
-    if category:
-        meta_parts.append(f"📁 <b>Category:</b> {html.escape(str(category))}")
-
-    duration = details.get("duration")
-    if duration:
-        meta_parts.append(f"⏱️ <b>Duration:</b> {html.escape(str(duration))}")
-
-    if meta_parts:
-        caption_lines.append("  •  ".join(meta_parts))
-
-    # Streaming Links Section
-    if not raw_links:
-        caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
-    elif user_pref == "all":
-        # Group and show all providers cleanly
-        grouped = group_links_by_host(raw_links)
-        caption_lines.append("\n🍿 <b>Streaming Links (All Hosts):</b>")
-        for host_badge, h_links in grouped.items():
-            caption_lines.append(f"\n{host_badge}:")
-            for i, l in enumerate(h_links, 1):
-                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
-    else:
-        # Filter by preference with smart fallback following PROVIDER_PRIORITY
-        host_badge, filtered_links, is_fallback = filter_links_by_preference(raw_links, user_pref)
-
-        if is_fallback:
-            caption_lines.append(f"\n⚠️ <i>{user_pref.capitalize()} not available in this post.</i>")
-            caption_lines.append(f"🍿 <b>Using alternative ({host_badge}):</b>")
-        else:
-            caption_lines.append(f"\n🍿 <b>{host_badge} Links:</b>")
-
-        if len(filtered_links) == 1:
-            caption_lines.append(f"🔗 <code>{html.escape(filtered_links[0])}</code>")
-        else:
-            for i, l in enumerate(filtered_links, 1):
-                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
-
-    # Attached Photo Albums
-    photo_albums = details.get("attached_photo_albums")
-    if photo_albums:
-        caption_lines.append("\n📸 <b>Attached Photo Albums:</b>")
-        for idx, alb in enumerate(photo_albums, 1):
-            alb_title = html.escape(alb.get("title", f"Album {idx}"))
-            alb_url = alb.get("url", "")
-            caption_lines.append(f"{idx}. <a href='{alb_url}'>{alb_title}</a>")
-    elif details.get("attached_album_url"):
-        caption_lines.append(f"\n📸 <a href='{details['attached_album_url']}'>Attached Photo Album</a>")
-
-    if details.get("collection_url") and not details.get("hide_collection_link"):
-        col_name = html.escape(details.get("collection_name") or "All Parts Collection")
-        caption_lines.append(f"\n📁 <b>Series Collection:</b> <a href='{details['collection_url']}'>{col_name}</a>")
-
-    # Post URL - Only for forums and WP lockers, NEVER for MMSVibex videos
-    if post_url and details.get("site") != "mmsvibex":
-        site_type = details.get("site")
-        if site_type == "wp_locker":
-            link_title = "Original Post"
-        elif site_type == "livecam":
-            link_title = "Original Video Page"
-        else:
-            link_title = "Original Forum Thread"
-        caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
-
-    return "\n".join(caption_lines)
-
-
-def build_card_keyboard(details: dict, user_pref: str = "streamtape") -> InlineKeyboardMarkup:
-    """Build interactive action buttons for the universal post card."""
-    buttons = []
-    raw_links = details.get("streaming_links", [])
-    watch_url = None
-    if raw_links:
-        if user_pref == "all":
-            candidate = raw_links[0]
-        else:
-            _, filtered, _ = filter_links_by_preference(raw_links, user_pref)
-            candidate = filtered[0] if filtered else raw_links[0]
-        if candidate.startswith("http://") or candidate.startswith("https://"):
-            watch_url = candidate
-
-    row1 = []
-    if watch_url:
-        row1.append(InlineKeyboardButton("🎬 Watch Video", url=watch_url))
-
-    if details.get("collection_url") and not details.get("hide_collection_link"):
-        col_url = details["collection_url"]
-        if col_url.startswith("http://") or col_url.startswith("https://"):
-            row1.append(InlineKeyboardButton("📁 Collection", url=col_url))
-
-    if row1:
-        buttons.append(row1)
-
-    buttons.append([
-        InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
-        InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-    ])
-    return InlineKeyboardMarkup(buttons)
-
-
-def get_navigation_keyboard() -> InlineKeyboardMarkup:
-    """Persistent navigation buttons to allow searching again, browsing categories, or opening main menu."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
-            InlineKeyboardButton("📁 Categories", callback_data="sp_choose:fm"),
-        ],
-        [
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-        ],
-    ])
+# --- UI & Presentation Layer ---
+# All card formatters, keyboards, and message templates have been cleanly separated
+# into ui.py, keyboards.py, messages.py, and progress.py for easy customization.
 
 
 # --- Post Sender Engine ---
@@ -712,9 +548,7 @@ async def run_livecam_model_scrape(
             end_scrape_for_chat(cid)
             return
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         extracting_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
@@ -928,9 +762,7 @@ async def run_forum_category_scrape(
             end_scrape_for_chat(cid)
             return
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         extracting_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
@@ -1042,9 +874,7 @@ async def run_mmsvibex_listing_scrape(
             )
             return
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         await status_msg.edit_text(
             f"<blockquote>⚡ <b>{html.escape(title)}</b>\n"
             f"🔢 Found {len(items)} items. Extracting direct links...</blockquote>",
@@ -1161,9 +991,7 @@ async def run_wp_listing_scrape(
             )
             return
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         await status_msg.edit_text(
             f"<blockquote>🌐 <b>{html.escape(title)}</b>\n"
             f"🔢 Found {len(posts)} posts. Extracting streaming links...</blockquote>",
@@ -1221,33 +1049,6 @@ async def run_wp_listing_scrape(
 
 # --- Command Handlers ---
 
-def get_host_settings_keyboard(current_pref: str = "streamtape") -> InlineKeyboardMarkup:
-    """Generate keyboard for selecting preferred streaming provider."""
-    hosts = [
-        ("streamtape", "🎬 Streamtape"),
-        ("vidara", "⚡ Vidara"),
-        ("streamfiles", "📥 Streamfiles"),
-        ("iplaygo", "▶️ iPlayGo"),
-        ("abstream", "📺 ABStream"),
-        ("uqload", "⚡ Uqload"),
-        ("doodstream", "🎥 Doodstream"),
-        ("streamwish", "✨ Streamwish"),
-        ("cloudfam", "☁️ Cloudfam"),
-        ("all", "🌐 All Providers"),
-    ]
-    buttons = []
-    row = []
-    for key, label in hosts:
-        check = " ✅" if key == current_pref else ""
-        row.append(InlineKeyboardButton(f"{label}{check}", callback_data=f"sethost_{key}"))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
-
-
 async def sethost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Allow user to choose their preferred streaming provider."""
     user = update.effective_user
@@ -1267,20 +1068,6 @@ async def sethost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=get_host_settings_keyboard(current_pref),
     )
-
-
-def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMarkup:
-    """Generate keyboard for selecting preferred LiveCam link display mode."""
-    modes = [
-        ("streaming", "🍿 Streaming Only (Default)"),
-        ("both", "🔗 Both (Page + Stream)"),
-        ("page", "🌐 Video Page Only"),
-    ]
-    buttons = []
-    for key, label in modes:
-        check = " ✅" if key == current_mode else ""
-        buttons.append([InlineKeyboardButton(f"{label}{check}", callback_data=f"setlink_{key}")])
-    return InlineKeyboardMarkup(buttons)
 
 
 async def setlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1330,77 +1117,17 @@ async def setlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Minimal, elegant greeting."""
     user_name = update.effective_user.first_name if update.effective_user else "Friend"
-    text = (
-        f"✨ <b>Welcome, {html.escape(user_name)}!</b>\n\n"
-        f"<b>{BOT_NAME}</b> automatically extracts verified video streaming links "
-        "and monitors new forum and cam uploads in real-time.\n\n"
-        "<b>⚡ Quick Commands:</b>\n"
-        "• <code>/today</code> — Today's fresh uploads (DropMMS & LiveCamRips)\n"
-        "• <code>/today 4</code> — Get first 4 uploads of today\n"
-        "• <code>/today 1-5</code> — Get uploads 1 to 5\n"
-        "• <code>/today last 5</code> — Get last 5 uploads\n"
-        "• <code>/latest</code> — Latest forum releases\n"
-        "• <code>/sethost</code> — Set preferred video player (Streamtape/Vidara/etc.)\n"
-        "• <code>/setlink</code> — LiveCam link format (Streaming/Both/Page)\n"
-        "• <code>/search &lt;name&gt;</code> — Find videos or models\n"
-        "• <code>/scrape &lt;url&gt;</code> — Extract any topic, category, or model\n"
-        "• <code>/stop</code> — Immediately cancel active extraction\n"
-        "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
-        "<i>💡 Or paste any DropMMS or LiveCamRips link directly in chat to extract instantly.</i>"
-    )
-
-    buttons = [
-        [
-            InlineKeyboardButton("📅 Today's Drops", callback_data="cb_today"),
-            InlineKeyboardButton("⚡ Latest Posts", callback_data="cb_latest"),
-        ],
-        [
-            InlineKeyboardButton("⚙️ Preferred Player", callback_data="cb_sethost"),
-            InlineKeyboardButton("🔗 LiveCam Links", callback_data="cb_setlink"),
-        ],
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search"),
-            InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
-        ],
-        [
-            InlineKeyboardButton("📖 User Guide", callback_data="cb_help"),
-        ],
-    ]
-
+    text = messages.get_welcome_message(user_name=user_name, bot_name=BOT_NAME)
     await update.effective_message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
+        reply_markup=build_main_menu_keyboard(),
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clean usage guide."""
-    text = (
-        "📖 <b>Bot User Manual</b>\n\n"
-        "<b>1️⃣ Instant Extraction:</b>\n"
-        "Send any post, model, or category link directly in chat, or use:\n"
-        "• <code>/scrape https://dropmms.com/topic/123-title/</code>\n"
-        "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>\n"
-        "• <code>/scrape https://livecamrips.to/video/16877744</code>\n\n"
-        "<b>2️⃣ Date-Wise & Sliced Updates:</b>\n"
-        "• <code>/today</code> — View all uploads from today\n"
-        "• <code>/today 4</code> — First 4 uploads from today\n"
-        "• <code>/today 1-5</code> — Uploads 1 through 5\n"
-        "• <code>/today last 5</code> — Last 5 uploads\n"
-        "• <code>/latest</code> — Top 5 newest topics\n\n"
-        "<b>3️⃣ Keyword Search:</b>\n"
-        "• <code>/search</code> — Universal search with interactive buttons\n"
-        "• <code>/search GoddessAnna</code> — Search models or topics directly\n\n"
-        "<b>4️⃣ Preferences:</b>\n"
-        "• <code>/sethost</code> — Set preferred streaming player (Streamtape, etc.)\n"
-        "• <code>/setlink</code> — Choose LiveCam card links (streaming only / both / page only)\n\n"
-        "<b>5️⃣ 24/7 Channel Auto-Poster:</b>\n"
-        "1. Add this bot to your Telegram Channel as <b>Administrator</b>.\n"
-        "2. The bot will automatically link the channel and broadcast new drops every 15 minutes!\n"
-        "3. Or use <code>/setchannel &lt;category_url&gt;</code> inside the channel."
-    )
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(messages.get_help_message(), parse_mode=ParseMode.HTML)
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1497,9 +1224,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         await status_msg.edit_text(
             f"📅 <b>Found {len(videos)} video(s)!</b>\n<i>Extracting details & streaming links...</i>",
             parse_mode=ParseMode.HTML,
@@ -1621,9 +1346,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    stop_markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-    ]])
+    stop_markup = build_stop_keyboard()
     await status_msg.edit_text(
         f"📅 <b>Found {len(topics)} upload(s)!</b>\n<i>Extracting links...</i>",
         parse_mode=ParseMode.HTML,
@@ -2069,29 +1792,8 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not query:
         context.user_data["awaiting_search"] = "prompt"
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_choose:fm"),
-                InlineKeyboardButton("💬 MMSTown Forum", callback_data="sp_choose:mmst"),
-            ],
-            [
-                InlineKeyboardButton("⚡ MMSVibex Videos", callback_data="sp_choose:vibex"),
-                InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
-            ],
-            [
-                InlineKeyboardButton("🌐 Omaal / DesiJugar / GulabiHub", callback_data="sp_choose:wplock"),
-            ],
-            [
-                InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-            ],
-        ])
-        card_text = (
-            "<blockquote>"
-            "🔍 <b>Universal Search Engine</b>\n\n"
-            "Select which platform you would like to explore or search, or type a keyword directly in chat:"
-            "</blockquote>"
-        )
+        markup = build_search_platform_keyboard()
+        card_text = messages.msg_universal_search_prompt()
         if update.callback_query:
             try:
                 await update.callback_query.edit_message_text(
@@ -2104,27 +1806,8 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data["search_query"] = query
-    markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
-            InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
-        ],
-        [
-            InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
-            InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
-        ],
-        [
-            InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
-        ],
-        [
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
-    ])
-    reply_text = (
-        f"🔍 <b>Search Query:</b> <code>{html.escape(query)}</code>\n\n"
-        "Choose a platform to search:"
-    )
+    markup = build_search_execute_platform_keyboard()
+    reply_text = messages.msg_search_query_prompt(query)
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(
@@ -2444,26 +2127,9 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 short_id = db.get_or_create_short_id(target_url)
                 context.user_data[f"mv_dt_{short_id}"] = details
 
-                mode_markup = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("⚡ Normal Mode", callback_data=f"mv_opt:{short_id}:norm"),
-                        InlineKeyboardButton("🚀 Advance Mode (All Parts)", callback_data=f"mv_opt:{short_id}:adv"),
-                    ],
-                    [
-                        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-                    ]
-                ])
-                card_title = html.escape(details.get("title", "Video"))
-                prompt_text = (
-                    "<blockquote>"
-                    "⚡ <b>MMSVibex Video Detected</b>\n"
-                    f"🎬 <b>{card_title}</b>\n\n"
-                    "📁 <b>Multi-Part Series Collection Available!</b>\n\n"
-                    "Select Extraction Mode:\n"
-                    "• <b>Normal Mode:</b> Single video card + <i>Extract All Parts</i> button\n"
-                    "• <b>Advance Mode:</b> Automatically extract all parts of this collection"
-                    "</blockquote>"
-                )
+                mode_markup = build_mmsvibex_mode_keyboard(short_id)
+                card_title = details.get("title", "Video")
+                prompt_text = messages.msg_mmsvibex_video_prompt(card_title)
                 await status.edit_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=mode_markup)
                 end_scrape_for_chat(chat_id)
                 return
@@ -2504,20 +2170,8 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "chat_id": chat_id,
             "message_id": None,
         }
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_vrun:{short_id}:5"),
-                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_vrun:{short_id}:10"),
-                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_vrun:{short_id}:20"),
-            ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
-        ])
-        card_text = (
-            "<blockquote>"
-            f"⚡ <b>{html.escape(title)}</b>\n"
-            "Select how many items to scrape or reply with custom range (e.g. <code>1-15</code>):"
-            "</blockquote>"
-        )
+        markup = build_slice_selection_keyboard(short_id, [5, 10, 20], prefix="sp_vrun")
+        card_text = format_listing_menu_card(title, is_category=False)
         s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["awaiting_vibex_range"]["message_id"] = s_msg.message_id
         return
@@ -2564,20 +2218,8 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "chat_id": chat_id,
             "message_id": None,
         }
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_wprun_id:{short_id}:5"),
-                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_wprun_id:{short_id}:10"),
-                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_wprun_id:{short_id}:20"),
-            ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
-        ])
-        card_text = (
-            "<blockquote>"
-            f"🌐 <b>{html.escape(title)}</b>\n"
-            "Select how many posts to scrape or reply with custom range (e.g. <code>1-15</code>):"
-            "</blockquote>"
-        )
+        markup = build_slice_selection_keyboard(short_id, [5, 10, 20], prefix="sp_wprun_id")
+        card_text = format_listing_menu_card(title, is_category=True)
         s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["awaiting_wp_range"]["message_id"] = s_msg.message_id
         return
@@ -2640,17 +2282,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "url": stats.get("url") or clean_u,
         }
 
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Newest", callback_data=f"sp_sort:{short_id}:newest"),
-                InlineKeyboardButton("🔥 Most Viewed", callback_data=f"sp_sort:{short_id}:most_viewed"),
-            ],
-            [
-                InlineKeyboardButton("❤️ Most Liked", callback_data=f"sp_sort:{short_id}:most_liked"),
-                InlineKeyboardButton("⏳ Oldest", callback_data=f"sp_sort:{short_id}:oldest"),
-            ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
-        ])
+        markup = build_model_sort_keyboard(short_id)
 
         card_text = (
             "<blockquote>"
@@ -2715,13 +2347,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "url": stats.get("url") or clean_u,
         }
 
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
-                InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
-            ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
-        ])
+        markup = build_forum_sort_keyboard(short_id)
 
         card_text = (
             "<blockquote>"
@@ -2852,9 +2478,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔢 <b>Range:</b> {range_label}\n"
             "⏳ <b>Status:</b> Scanning model page...</blockquote>"
         )
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
 
         try:
             status_msg = await context.bot.edit_message_text(
@@ -2981,9 +2605,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔢 <b>Range:</b> {range_label}\n"
             "⏳ <b>Status:</b> Scanning forum category...</blockquote>"
         )
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
 
         try:
             status_msg = await context.bot.edit_message_text(
@@ -3802,9 +3424,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         range_label = "Today's Uploads (IST)" if date_mode == "today" else "Yesterday & Today (IST)"
         sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
 
-        stop_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛑 Stop Extraction", callback_data="btn_stop_scrape")
-        ]])
+        stop_markup = build_stop_keyboard()
         loading_text = (
             "<blockquote>"
             f"💬 <b>{html.escape(cat_title)}</b>\n"
@@ -3945,17 +3565,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "url": stats.get("url") or url,
         }
 
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Newest", callback_data=f"sp_sort:{short_id}:newest"),
-                InlineKeyboardButton("🔥 Most Viewed", callback_data=f"sp_sort:{short_id}:most_viewed"),
-            ],
-            [
-                InlineKeyboardButton("❤️ Most Liked", callback_data=f"sp_sort:{short_id}:most_liked"),
-                InlineKeyboardButton("⏳ Oldest", callback_data=f"sp_sort:{short_id}:oldest"),
-            ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
-        ])
+        markup = build_model_sort_keyboard(short_id)
         card_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
