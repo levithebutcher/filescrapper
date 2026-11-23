@@ -69,9 +69,9 @@ class TestCleanSearchUX(unittest.TestCase):
         )
         self.assertIn("Lesbian Videos Search Results", card)
         self.assertIn("dance", card)
-        self.assertIn("1.</b> Sample Topic 1", card)
+        self.assertIn("<blockquote><b>1.</b> 🎬 <b>Sample Topic 1</b>", card)
         self.assertIn("✅ <i>(Delivered)</i>", card)
-        self.assertIn("2.</b> Sample Topic 2", card)
+        self.assertIn("<blockquote><b>2.</b> 🎬 <b>Sample Topic 2</b>", card)
         self.assertIn("How to Extract:", card)
 
     def test_format_search_completion_card(self):
@@ -90,7 +90,7 @@ class TestCleanSearchUX(unittest.TestCase):
             delivered_indices={1},
         )
         self.assertIn("✅ <b>Delivered:</b> 1 topic(s)", card)
-        self.assertIn("1.</b> Sample Topic 1", card)
+        self.assertIn("<blockquote><b>1.</b> 🎬 <b>Sample Topic 1</b>", card)
         self.assertIn("✅ <i>(Delivered)</i>", card)
         self.assertIn("💡 Type another number", card)
 
@@ -135,6 +135,7 @@ class TestCleanSearchUX(unittest.TestCase):
                     <ol class="ipsStream">
                         <li class="ipsStreamItem" data-role="activityItem">
                             <h2 class="ipsStreamItem_title"><a href="https://dropmms.com/topic/101-test/">Scoped Test Topic</a></h2>
+                            <a href="https://dropmms.com/forum/4-desi/">Desi Videos</a>
                             <time datetime="2026-11-22T10:00:00Z"></time>
                         </li>
                     </ol>
@@ -150,11 +151,12 @@ class TestCleanSearchUX(unittest.TestCase):
                 base_url="https://dropmms.com",
                 forum_id=4,
             )
-            # Verify URL passed to _fetch_soup includes node scoping
             called_url = mock_fetch.call_args[0][0]
-            self.assertIn("nodes[4]=1", called_url)
+            # Ensure URL does not contain square bracket nodes parameter that causes Nginx 404
+            self.assertNotIn("nodes[", called_url)
             self.assertEqual(len(res["topics"]), 1)
             self.assertEqual(res["topics"][0]["title"], "Scoped Test Topic")
+            self.assertIsNotNone(res["topics"][0].get("date_ist"))
 
 
 if __name__ == "__main__":

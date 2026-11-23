@@ -602,15 +602,13 @@ def search_forum_advanced(
         return {"topics": [], "total_count": 0, "total_pages": 1, "page": page, "query": "", "forum_id": forum_id}
 
     b_url = base_url.rstrip("/")
-    # Build primary search URL with title filter, optional forum node filter, and date sort
+    # Build primary search URL with title filter and date sort (no nodes parameter in URL to avoid Nginx 404)
     search_params = [
         f"q={quote_plus(clean_query)}",
         "type=forums_topic",
     ]
     if search_in == "titles":
         search_params.append("search_in=titles")
-    if forum_id:
-        search_params.append(f"nodes[{forum_id}]=1")
     if sort_by:
         search_params.append(f"sortby={quote_plus(sort_by)}")
     if page > 1:
@@ -656,6 +654,20 @@ def search_forum_advanced(
         # Check structured stream items first (IPS4 standard)
         stream_items = soup.find_all("li", class_=re.compile(r"ipsStreamItem", re.I))
         for item in stream_items:
+            # If scoped to a specific forum_id, check if item belongs to that forum
+            if forum_id:
+                f_link = item.find("a", href=re.compile(rf"/forum/{forum_id}(?:-[^/\"' >]*)?/?"))
+                if not f_link:
+                    all_f_links = item.find_all("a", href=re.compile(r"/forum/(\d+)"))
+                    matched = False
+                    for fl in all_f_links:
+                        m_f = re.search(r"/forum/(\d+)", fl.get("href", ""))
+                        if m_f and str(m_f.group(1)) == str(forum_id):
+                            matched = True
+                            break
+                    if all_f_links and not matched:
+                        continue
+
             h2 = item.find("h2", class_=re.compile(r"ipsStreamItem_title", re.I)) or item.find("h2") or item.find("h3")
             if h2:
                 a_tag = h2.find("a", href=True)
@@ -668,11 +680,27 @@ def search_forum_advanced(
                             seen.add(clean)
                             title = a_tag.get_text(strip=True)
                             if title and len(title) > 3:
-                                results.append({"title": title, "url": clean})
+                                # Extract topic creation date
+                                time_elem = item.find("time")
+                                post_date_raw = None
+                                post_date_text = None
+                                if time_elem:
+                                    post_date_raw = time_elem.get("datetime") or time_elem.get("title")
+                                    post_date_text = time_elem.get_text(strip=True)
+                                dt_ist, date_ist = UniversalDateResolver.resolve(
+                                    raw_date=post_date_raw,
+                                    time_text=post_date_text,
+                                )
+                                results.append({
+                                    "title": title,
+                                    "url": clean,
+                                    "date": post_date_raw or (dt_ist.isoformat() if dt_ist else None),
+                                    "date_ist": date_ist,
+                                })
                                 if len(results) >= limit:
                                     break
 
-        # Fallback to general anchor search
+        # Fallback to general anchor search if stream items didn't match
         if not results:
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
@@ -683,7 +711,7 @@ def search_forum_advanced(
                         seen.add(clean)
                         title = a.get_text(strip=True)
                         if title and len(title) > 3 and not title.lower().startswith("page"):
-                            results.append({"title": title, "url": clean})
+                            results.append({"title": title, "url": clean, "date": None, "date_ist": None})
                             if len(results) >= limit:
                                 break
 
@@ -702,12 +730,31 @@ def search_forum_advanced(
             "search_and_or=or",
             f"sortby={quote_plus(sort_by or 'newest')}",
         ]
-        if forum_id:
-            fallback_params.append(f"nodes[{forum_id}]=1")
         if page > 1:
             fallback_params.append(f"page={page}")
         fallback_url = f"{b_url}/search/?{'&'.join(fallback_params)}"
         items, total_found, total_p = _execute_search_parse(fallback_url)
+
+    # Secondary In-Forum Scanner: If scoped to a forum_id and search yielded few/no items,
+    # match against topics from the forum category page directly
+    if forum_id and len(items) < limit:
+        cat_url = f"{b_url}/forum/{forum_id}-category/"
+        try:
+            cat_topics = get_forum_topics(cat_url, sort_by="start_date", limit=30)
+            seen_urls = {it["url"] for it in items}
+            q_words = [w.lower() for w in clean_query.split() if len(w) > 1]
+            for ct in cat_topics:
+                t_low = ct["title"].lower()
+                if (clean_query.lower() in t_low) or any(w in t_low for w in q_words):
+                    if ct["url"] not in seen_urls:
+                        seen_urls.add(ct["url"])
+                        items.append(ct)
+                        if len(items) >= limit:
+                            break
+            if items:
+                total_found = max(total_found, len(items))
+        except Exception as e_cat:
+            logger.debug(f"Direct category topic matching note: {e_cat}")
 
     return {
         "topics": items,

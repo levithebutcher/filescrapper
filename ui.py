@@ -299,7 +299,7 @@ def format_clean_search_results_page(
 ) -> str:
     """
     Format clean, readable text search results with numbers 1 to 10.
-    Zero buttons clutter: user can extract by typing any number in chat.
+    Each topic is presented in its own distinct blockquote for effortless reading.
     """
     delivered_indices = delivered_indices or set()
     lines = [
@@ -315,8 +315,8 @@ def format_clean_search_results_page(
         t_esc = html.escape(itm.get("title") or "Untitled Topic")
         badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
         date_str = itm.get("date_ist") or itm.get("date") or ""
-        meta_sub = f" <i>({html.escape(str(date_str))})</i>" if date_str else ""
-        lines.append(f"<b>{idx}.</b> {t_esc}{meta_sub}{badge}")
+        meta_sub = f"\n📅 <i>{html.escape(str(date_str))}</i>" if date_str else ""
+        lines.append(f"<blockquote><b>{idx}.</b> 🎬 <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
 
     lines.append(
         "\n<blockquote>"
@@ -340,18 +340,18 @@ def format_search_completion_card(
     """Format post-delivery confirmation combined with the search results list at the bottom."""
     delivered_indices = delivered_indices or set()
     lines = [
-        f"<blockquote>✅ <b>Delivered:</b> {html.escape(delivered_summary)}</blockquote>\n\n"
+        f"<blockquote>✅ <b>Delivered:</b> {html.escape(delivered_summary)}</blockquote>\n",
         "<blockquote>"
         f"🔎 <b>{html.escape(scope_name)} Results:</b> '<code>{html.escape(query)}</code>' (Page {page}/{total_pages})"
-        "</blockquote>\n"
+        "</blockquote>\n",
     ]
 
     for idx, itm in enumerate(items, start=1):
         t_esc = html.escape(itm.get("title") or "Untitled Topic")
         badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
         date_str = itm.get("date_ist") or itm.get("date") or ""
-        meta_sub = f" <i>({html.escape(str(date_str))})</i>" if date_str else ""
-        lines.append(f"<b>{idx}.</b> {t_esc}{meta_sub}{badge}")
+        meta_sub = f"\n📅 <i>{html.escape(str(date_str))}</i>" if date_str else ""
+        lines.append(f"<blockquote><b>{idx}.</b> 🎬 <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
 
     lines.append(
         "\n<blockquote>"
