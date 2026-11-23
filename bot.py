@@ -1622,6 +1622,10 @@ async def execute_platform_search(
             await update.effective_message.reply_text("⚠️ Search query cannot be empty.")
         return
 
+    # Clear awaiting search states now that search is actively being executed
+    context.user_data.pop("awaiting_search", None)
+    context.user_data.pop("awaiting_search_flow", None)
+
     plat_names = {
         "lc": "LiveCam Models",
         "fm": "DropMMS",
@@ -1633,13 +1637,15 @@ async def execute_platform_search(
     display_scope = scope_name or plat_label
     status_text = f"🔍 <i>Searching {display_scope} for '<b>{html.escape(clean_query)}</b>' (Page {page})...</i>"
 
+    chat_id = update.effective_chat.id if update.effective_chat else None
     if edit_msg:
         try:
             status_msg = await edit_msg.edit_text(status_text, parse_mode=ParseMode.HTML)
         except Exception:
-            status_msg = await update.effective_message.reply_text(status_text, parse_mode=ParseMode.HTML)
+            status_msg = await context.bot.send_message(chat_id=chat_id, text=status_text, parse_mode=ParseMode.HTML)
     else:
-        status_msg = await update.effective_message.reply_text(status_text, parse_mode=ParseMode.HTML)
+        status_msg = await context.bot.send_message(chat_id=chat_id, text=status_text, parse_mode=ParseMode.HTML)
+    context.user_data["active_card_msg_id"] = status_msg.message_id
 
     if plat == "lc":
         try:
@@ -2307,8 +2313,16 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "chat_id": chat_id,
             "message_id": None,
         }
-        markup = build_slice_selection_keyboard(short_id, [5, 10, 20], prefix="sp_vrun")
-        card_text = format_listing_menu_card(title, is_category=False)
+        markup = build_mmsvibex_options_keyboard(sort_key="custom", back_callback="sp_choose:vibex")
+        card_text = (
+            "<blockquote>"
+            f"⚡ <b>{html.escape(title)}</b>\n\n"
+            "Reply in chat with a custom range, count or page:\n"
+            "• <code>5</code> ➔ First 5 items\n"
+            "• <code>1-15</code> ➔ Items 1 to 15\n"
+            "• <code>page 2</code> ➔ Full Page 2"
+            "</blockquote>"
+        )
         s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["awaiting_vibex_range"]["message_id"] = s_msg.message_id
         return
@@ -2579,32 +2593,153 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check if user is in an interactive search flow from /search prompt
+    # 1. Number selection from active search results (HIGHEST PRIORITY AFTER KEYWORD FLOW)
+    search_state = context.user_data.get("active_search_results")
+    if search_state and search_state.get("items"):
+        items = search_state["items"]
+        selection_indices = parse_search_selection(text, len(items))
+        if selection_indices:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+
+            # Clear any conflicting lingering prompt states to prevent state collision
+            context.user_data.pop("awaiting_search", None)
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+
+            chat_id = update.effective_chat.id
+            user_id = update.effective_user.id if update.effective_user else None
+
+            start_scrape_for_chat(chat_id)
+            stop_markup = build_stop_keyboard()
+            status_text = (
+                "<blockquote>"
+                f"⏳ <b>Extracting {len(selection_indices)} selected topic(s)...</b>\n"
+                "<i>Tap below if you wish to stop.</i>"
+                "</blockquote>"
+            )
+            status_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=status_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=stop_markup,
+            )
+            context.user_data[f"active_progress_msg_{chat_id}"] = status_msg.message_id
+
+            delivered_this_round = []
+            try:
+                for idx in selection_indices:
+                    if is_scrape_cancelled(chat_id):
+                        break
+                    topic = items[idx - 1]
+                    url = topic["url"]
+                    try:
+                        if search_state["plat"] == "vibex":
+                            if is_mmsvibex_photo_url(url):
+                                details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
+                            else:
+                                details = await asyncio.to_thread(get_mmsvibex_video_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        else:
+                            await process_topic_scrape(
+                                bot=context.bot,
+                                chat_id=chat_id,
+                                url=url,
+                                user_id=user_id,
+                                topic_meta=topic,
+                            )
+                        search_state.setdefault("delivered_indices", set()).add(idx)
+                        delivered_this_round.append(idx)
+                    except Exception as item_err:
+                        logger.warning(f"Error extracting item #{idx} ({url}): {item_err}")
+                        try:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"<blockquote>⚠️ <b>Item #{idx} ({html.escape(topic.get('title', 'Item'))}):</b>\nCould not extract details: <code>{html.escape(str(item_err))}</code></blockquote>",
+                                parse_mode=ParseMode.HTML,
+                            )
+                        except Exception:
+                            pass
+                    if is_scrape_cancelled(chat_id):
+                        break
+                    await cancellable_sleep(POST_SEND_DELAY, chat_id)
+            finally:
+                end_scrape_for_chat(chat_id)
+                context.user_data.pop(f"active_progress_msg_{chat_id}", None)
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+
+            # Resurface search results card with completion note at the bottom
+            item_noun = "item(s)" if search_state["plat"] == "vibex" else "topic(s)"
+            completion_text = format_search_completion_card(
+                delivered_summary=f"{len(delivered_this_round)} {item_noun}",
+                query=search_state["query"],
+                scope_name=search_state["scope_name"],
+                page=search_state["page"],
+                total_pages=search_state["total_pages"],
+                total_count=search_state["total_count"],
+                items=search_state["items"],
+                delivered_indices=search_state["delivered_indices"],
+            )
+
+            fid_str = str(search_state["forum_id"]) if search_state.get("forum_id") else "all"
+            page_pfx = f"sp_fp:{search_state['plat']}:{fid_str}"
+            clean_markup = build_search_results_clean_keyboard(
+                page=search_state["page"],
+                total_pages=search_state["total_pages"],
+                page_callback_prefix=page_pfx,
+                back_callback=search_state.get("back_callback", f"sp_choose:{search_state['plat']}"),
+            )
+
+            new_card_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=completion_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=clean_markup,
+            )
+
+            # Delete the previous search results card and any lingering cards so chat stays tidy
+            old_msg_id = search_state.get("message_id")
+            if old_msg_id and old_msg_id != new_card_msg.message_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+                except Exception:
+                    pass
+
+            extra_old = context.user_data.pop("active_card_msg_id", None)
+            if extra_old and extra_old != new_card_msg.message_id and extra_old != old_msg_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=extra_old)
+                except Exception:
+                    pass
+
+            search_state["message_id"] = new_card_msg.message_id
+            context.user_data["active_card_msg_id"] = new_card_msg.message_id
+            return
+
+    # 2. Check if user is in an interactive search flow from /search prompt
     awaiting_plat = context.user_data.pop("awaiting_search", None)
     if awaiting_plat:
         clean_text = text.strip()
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
         if awaiting_plat == "prompt":
             context.user_data["search_query"] = clean_text
-            markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
-                    InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
-                ],
-                [
-                    InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
-                    InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
-                ],
-                [
-                    InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
-                ],
-                [
-                    InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-                ],
-            ])
-            await update.effective_message.reply_text(
-                f"🔍 <b>Search Query:</b> <code>{html.escape(clean_text)}</code>\n\n"
-                "Choose a platform to search:",
+            markup = build_search_execute_platform_keyboard()
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    f"🔍 <b>Search Query:</b> <code>{html.escape(clean_text)}</code>\n\n"
+                    "Choose a platform to search:"
+                ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
@@ -3018,118 +3153,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check if user selected numbers from active search results
-    search_state = context.user_data.get("active_search_results")
-    if search_state and search_state.get("items"):
-        items = search_state["items"]
-        selection_indices = parse_search_selection(text, len(items))
-        if selection_indices:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-
-            chat_id = update.effective_chat.id
-            user_id = update.effective_user.id if update.effective_user else None
-
-            start_scrape_for_chat(chat_id)
-            stop_markup = build_stop_keyboard()
-            status_text = (
-                "<blockquote>"
-                f"⏳ <b>Extracting {len(selection_indices)} selected topic(s)...</b>\n"
-                "<i>Tap below if you wish to stop.</i>"
-                "</blockquote>"
-            )
-            status_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=status_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=stop_markup,
-            )
-            context.user_data[f"active_progress_msg_{chat_id}"] = status_msg.message_id
-
-            delivered_this_round = []
-            try:
-                for idx in selection_indices:
-                    if is_scrape_cancelled(chat_id):
-                        break
-                    topic = items[idx - 1]
-                    url = topic["url"]
-                    if search_state["plat"] == "vibex":
-                        if is_mmsvibex_photo_url(url):
-                            details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
-                        else:
-                            details = await asyncio.to_thread(get_mmsvibex_video_details, url)
-                        await send_post_card(context.bot, chat_id, details, user_id=user_id)
-                    else:
-                        await process_topic_scrape(
-                            bot=context.bot,
-                            chat_id=chat_id,
-                            url=url,
-                            user_id=user_id,
-                            topic_meta=topic,
-                        )
-                    search_state.setdefault("delivered_indices", set()).add(idx)
-                    delivered_this_round.append(idx)
-                    if is_scrape_cancelled(chat_id):
-                        break
-                    await cancellable_sleep(POST_SEND_DELAY, chat_id)
-            finally:
-                end_scrape_for_chat(chat_id)
-                context.user_data.pop(f"active_progress_msg_{chat_id}", None)
-                try:
-                    await status_msg.delete()
-                except Exception:
-                    pass
-
-            # Resurface search results card with completion note at the bottom
-            item_noun = "item(s)" if search_state["plat"] == "vibex" else "topic(s)"
-            completion_text = format_search_completion_card(
-                delivered_summary=f"{len(delivered_this_round)} {item_noun}",
-                query=search_state["query"],
-                scope_name=search_state["scope_name"],
-                page=search_state["page"],
-                total_pages=search_state["total_pages"],
-                total_count=search_state["total_count"],
-                items=search_state["items"],
-                delivered_indices=search_state["delivered_indices"],
-            )
-
-            fid_str = str(search_state["forum_id"]) if search_state.get("forum_id") else "all"
-            page_pfx = f"sp_fp:{search_state['plat']}:{fid_str}"
-            clean_markup = build_search_results_clean_keyboard(
-                page=search_state["page"],
-                total_pages=search_state["total_pages"],
-                page_callback_prefix=page_pfx,
-                back_callback=search_state.get("back_callback", f"sp_choose:{search_state['plat']}"),
-            )
-
-            new_card_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=completion_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=clean_markup,
-            )
-
-            # Delete the previous search results card and any lingering cards so chat stays tidy
-            old_msg_id = search_state.get("message_id")
-            if old_msg_id and old_msg_id != new_card_msg.message_id:
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
-                except Exception:
-                    pass
-
-            extra_old = context.user_data.pop("active_card_msg_id", None)
-            if extra_old and extra_old != new_card_msg.message_id and extra_old != old_msg_id:
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=extra_old)
-                except Exception:
-                    pass
-
-            search_state["message_id"] = new_card_msg.message_id
-            context.user_data["active_card_msg_id"] = new_card_msg.message_id
-            return
-
     if text.startswith("http://") or text.startswith("https://") or any(
         d in text.lower()
         for d in [
@@ -3173,6 +3196,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data in ("cb_main_menu", "cb_start"):
         await start_command(update, context)
     elif data.startswith("sp_choose:"):
+        context.user_data.pop("awaiting_search", None)
         plat = data.split(":")[1]
         if plat == "fm":
             try:
@@ -3267,6 +3291,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif plat == "vibex":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
             markup = build_mmsvibex_hub_keyboard(back_callback="cb_search")
             await query.edit_message_text(
                 "<blockquote>⚡ <b>MMSVibex Hub</b>\nSelect sorting or browse category:</blockquote>",
@@ -3296,30 +3326,33 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
-        plat_label = "📹 LiveCam Models"
-        example_q = "GoddessAnna"
-        context.user_data.pop("awaiting_model_range", None)
-        context.user_data.pop("awaiting_vibex_range", None)
-        context.user_data.pop("awaiting_category_range", None)
-        context.user_data.pop("awaiting_wp_range", None)
-        context.user_data.pop("active_search_results", None)
-        context.user_data["awaiting_search_flow"] = {
-            "plat": "lc",
-            "scope_name": "LiveCam Models",
-            "back_callback": "cb_search",
-            "chat_id": query.message.chat_id,
-            "message_id": query.message.message_id,
-        }
-        context.user_data["active_card_msg_id"] = query.message.message_id
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="cb_search"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
-        ])
-        await query.edit_message_text(
-            f"<blockquote>🔍 <b>Searching:</b> {plat_label}\n\n"
-            f"✏️ <i>Please send the keyword or model name to search (e.g. <code>{example_q}</code>):</i></blockquote>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=markup,
-        )
+        elif plat == "lc":
+            plat_label = "📹 LiveCam Models"
+            example_q = "GoddessAnna"
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            context.user_data["awaiting_search_flow"] = {
+                "plat": "lc",
+                "scope_name": "LiveCam Models",
+                "back_callback": "cb_search",
+                "chat_id": query.message.chat_id,
+                "message_id": query.message.message_id,
+            }
+            context.user_data["active_card_msg_id"] = query.message.message_id
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="cb_search"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text(
+                f"<blockquote>🔍 <b>Searching:</b> {plat_label}\n\n"
+                f"✏️ <i>Please send the keyword or model name to search (e.g. <code>{example_q}</code>):</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
     elif data == "sp_choose_kw:fm":
         context.user_data.pop("awaiting_model_range", None)
         context.user_data.pop("awaiting_vibex_range", None)

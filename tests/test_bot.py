@@ -1210,6 +1210,122 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>", card)
         self.assertIn("<b>1. Dance Album 1 (85 photos)</b>\n🔗 <code>https://mmsvibex.life/photos/dance-1/</code>", card)
 
+    @patch("bot.send_post_card", new_callable=AsyncMock)
+    @patch("bot.get_mmsvibex_video_details")
+    async def test_search_result_number_selection_priority(self, mock_get_details, mock_send_post):
+        """Test that typing item number extracts item and takes priority over lingering awaiting_search prompt."""
+        from bot import handle_message
+
+        mock_get_details.return_value = {
+            "title": "Item 7 Video",
+            "post_url": "https://mmsvibex.life/video-7/",
+            "streaming_links": ["https://cdn.mmsvibex.fit/7.mp4"],
+            "platform_name": "MMSVibex",
+            "site": "mmsvibex",
+        }
+
+        context = MagicMock()
+        context.bot = MagicMock()
+        context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=999))
+        context.bot.delete_message = AsyncMock()
+
+        # Both active search results AND lingering awaiting_search='prompt' exist
+        context.user_data = {
+            "awaiting_search": "prompt",
+            "active_search_results": {
+                "plat": "vibex",
+                "query": "dance",
+                "scope_name": "MMSVibex",
+                "forum_id": None,
+                "page": 1,
+                "total_pages": 3,
+                "total_count": 30,
+                "items": [{"title": f"Video {i}", "url": f"https://mmsvibex.life/video-{i}/"} for i in range(1, 11)],
+                "delivered_indices": set(),
+                "chat_id": 12345,
+                "message_id": 777,
+            }
+        }
+
+        msg_update = MagicMock()
+        msg_update.effective_chat.id = 12345
+        msg_update.effective_user.id = 888
+        msg_update.message.text = "7"
+        msg_update.effective_message = AsyncMock()
+
+        await handle_message(msg_update, context)
+
+        # User's message '7' was deleted
+        msg_update.effective_message.delete.assert_called_once()
+        # Item 7 was extracted
+        mock_get_details.assert_called_once_with("https://mmsvibex.life/video-7/")
+        mock_send_post.assert_called_once()
+        # Lingering awaiting_search was cleared
+        self.assertNotIn("awaiting_search", context.user_data)
+        # Search state has item 7 recorded in delivered_indices
+        self.assertIn(7, context.user_data["active_search_results"]["delivered_indices"])
+
+    @patch("bot.send_post_card", new_callable=AsyncMock)
+    @patch("bot.get_mmsvibex_video_details")
+    async def test_search_result_extraction_timeout_handled_gracefully(self, mock_get_details, mock_send_post):
+        """Test that network timeout on search result item is handled gracefully and does not crash."""
+        from bot import handle_message
+
+        mock_get_details.side_effect = RuntimeError("Read timed out")
+
+        context = MagicMock()
+        context.bot = MagicMock()
+        context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=999))
+        context.bot.delete_message = AsyncMock()
+
+        context.user_data = {
+            "active_search_results": {
+                "plat": "vibex",
+                "query": "dance",
+                "scope_name": "MMSVibex",
+                "forum_id": None,
+                "page": 1,
+                "total_pages": 1,
+                "total_count": 1,
+                "items": [{"title": "Video 1", "url": "https://mmsvibex.life/video-1/"}],
+                "delivered_indices": set(),
+                "chat_id": 12345,
+                "message_id": 777,
+            }
+        }
+
+        msg_update = MagicMock()
+        msg_update.effective_chat.id = 12345
+        msg_update.effective_user.id = 888
+        msg_update.message.text = "1"
+        msg_update.effective_message = AsyncMock()
+
+        # Should not raise exception
+        await handle_message(msg_update, context)
+        # Notification was sent regarding the failure
+        self.assertTrue(context.bot.send_message.called)
+
+    async def test_sp_choose_lc_handler(self):
+        """Test that tapping LiveCam Models in platform picker configures search flow."""
+        from bot import callback_query_handler
+
+        context = MagicMock()
+        context.user_data = {"awaiting_search": "prompt"}
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_choose:lc"
+        query.message.chat_id = 12345
+        query.message.message_id = 888
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+
+        self.assertNotIn("awaiting_search", context.user_data)
+        self.assertIn("awaiting_search_flow", context.user_data)
+        self.assertEqual(context.user_data["awaiting_search_flow"]["plat"], "lc")
+        query.edit_message_text.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
