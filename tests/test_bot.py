@@ -1003,6 +1003,55 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
             await callback_query_handler(update_adv, context_adv)
             self.assertEqual(mock_send.call_count, 2)
 
+    async def test_callback_query_main_menu_and_nav_keyboard(self):
+        """Test cb_main_menu callback routes to start_command and get_navigation_keyboard provides persistent buttons."""
+        from bot import callback_query_handler, get_navigation_keyboard
+
+        nav_kb = get_navigation_keyboard()
+        buttons = [btn.callback_data for row in nav_kb.inline_keyboard for btn in row]
+        self.assertIn("cb_search", buttons)
+        self.assertIn("cb_main_menu", buttons)
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "cb_main_menu"
+        update.callback_query = query
+        msg = AsyncMock()
+        update.effective_message = msg
+        update.effective_user.first_name = "Alex"
+        context = MagicMock()
+
+        await callback_query_handler(update, context)
+        msg.reply_text.assert_called_once()
+        args, kwargs = msg.reply_text.call_args
+        self.assertIn("Welcome, Alex!", args[0])
+
+    @patch("bot.process_topic_scrape")
+    async def test_callback_query_sc_extracts_and_sends_navigation(self, mock_scrape):
+        """Test tapping sc_<id> extracts the post and sends persistent navigation controls."""
+        from bot import callback_query_handler
+
+        target_url = "https://dropmms.com/topic/123-nav-test/"
+        short_id = db.get_or_create_short_id(target_url)
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = f"sc_{short_id}"
+        query.message.chat_id = 12345
+        query.from_user.id = 99999
+        update.callback_query = query
+        context = MagicMock()
+
+        await callback_query_handler(update, context)
+        mock_scrape.assert_called_once_with(context.bot, 12345, target_url, user_id=99999)
+        context.bot.send_message.assert_called_once()
+        _, kwargs = context.bot.send_message.call_args
+        self.assertEqual(kwargs.get("chat_id"), 12345)
+        self.assertIsNotNone(kwargs.get("reply_markup"))
+        nav_buttons = [btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row]
+        self.assertIn("cb_search", nav_buttons)
+        self.assertIn("cb_main_menu", nav_buttons)
+
 
 if __name__ == "__main__":
     unittest.main()

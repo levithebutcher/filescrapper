@@ -267,6 +267,19 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     return "\n".join(caption_lines)
 
 
+def get_navigation_keyboard() -> InlineKeyboardMarkup:
+    """Persistent navigation buttons to allow searching again, browsing categories, or opening main menu."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
+            InlineKeyboardButton("📁 Categories", callback_data="sp_choose:fm"),
+        ],
+        [
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+        ],
+    ])
+
+
 # --- Post Sender Engine ---
 
 async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None, reply_markup=None):
@@ -614,10 +627,28 @@ async def run_livecam_model_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 <b>{html.escape(model_name)}</b>\n📦 Delivered: <b>{len(videos)}</b> videos</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📹 <b>{html.escape(model_name)}</b>\n📦 Delivered: <b>{len(videos)}</b> videos</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Error scraping LiveCam model {target_url}: {e}", exc_info=True)
         try:
@@ -812,10 +843,28 @@ async def run_forum_category_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Error scraping forum category {target_url}: {e}", exc_info=True)
         try:
@@ -912,10 +961,28 @@ async def run_mmsvibex_listing_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n⚡ Delivered: <b>{len(items)}</b> items</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n⚡ Delivered: <b>{len(items)}</b> items</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Error in run_mmsvibex_listing_scrape: {e}", exc_info=True)
         try:
@@ -1008,10 +1075,28 @@ async def run_wp_listing_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Error in run_wp_listing_scrape: {e}", exc_info=True)
         try:
@@ -1327,10 +1412,28 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             end_scrape_for_chat(chat_id)
 
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
         return
 
     # 2. DropMMS single topic URL
@@ -1340,10 +1443,28 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await process_topic_scrape(context.bot, chat_id, target_url, user_id=user_id)
         finally:
             end_scrape_for_chat(chat_id)
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        if not is_scrape_cancelled(cid):
+            try:
+                await status_msg.edit_text(
+                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_navigation_keyboard(),
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
         return
 
     # 3. DropMMS Forum Category
@@ -1521,6 +1642,10 @@ async def execute_platform_search(
 
         buttons.append([
             InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:lc"),
+            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ])
         await status_msg.edit_text(
@@ -1560,6 +1685,10 @@ async def execute_platform_search(
 
         buttons.append([
             InlineKeyboardButton("🔄 New Search", callback_data="sp_choose:vibex"),
+            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ])
         await status_msg.edit_text(
@@ -1601,6 +1730,10 @@ async def execute_platform_search(
 
         buttons.append([
             InlineKeyboardButton(f"🔄 New Search", callback_data=f"sp_choose:{plat}"),
+            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ])
         await status_msg.edit_text(
@@ -1626,7 +1759,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 InlineKeyboardButton("🌐 Omaal / DesiJugar / GulabiHub", callback_data="sp_choose:wplock"),
             ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            [
+                InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ],
         ])
         await msg.reply_text(
             "🔍 <b>Universal Search Engine</b>\n\n"
@@ -1647,7 +1783,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
             InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
         ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        [
+            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
     ])
     await msg.reply_text(
         f"🔍 <b>Search Query:</b> <code>{html.escape(query)}</code>\n\n"
@@ -2717,6 +2856,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await latest_command(update, context)
     elif data == "cb_search":
         await search_command(update, context)
+    elif data in ("cb_main_menu", "cb_start"):
+        await start_command(update, context)
     elif data.startswith("sp_choose:"):
         plat = data.split(":")[1]
         if plat == "fm":
@@ -3561,6 +3702,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         if target_url:
             await process_topic_scrape(context.bot, query.message.chat_id, target_url, user_id=query.from_user.id)
+            try:
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="<i>⚡ What would you like to do next?</i>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_navigation_keyboard(),
+                )
+            except Exception:
+                pass
         else:
             await query.message.reply_text("⚠️ This link has expired or is invalid. Please search or extract again.")
     elif data.startswith("unlink_"):
