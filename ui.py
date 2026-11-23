@@ -111,71 +111,78 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
         caption_lines.append(f"🏷️ {tag_str}")
 
-    # Streaming Links Section
-    if not raw_links:
-        caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
-    elif user_pref == "all":
-        # Group and show all providers cleanly
-        grouped = group_links_by_host(raw_links)
-        caption_lines.append("\n🍿 <b>Streaming Links (All Hosts):</b>")
-        for host_badge, h_links in grouped.items():
-            caption_lines.append(f"\n{host_badge}:")
-            for i, l in enumerate(h_links, 1):
-                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
-    else:
-        # Filter by preference with smart fallback following PROVIDER_PRIORITY
-        host_badge, filtered_links, is_fallback = filter_links_by_preference(raw_links, user_pref)
-
-        if is_fallback:
-            caption_lines.append(f"\n⚠️ <i>{user_pref.capitalize()} not available in this post.</i>")
-            caption_lines.append(f"🍿 <b>Using alternative ({host_badge}):</b>")
-        else:
-            caption_lines.append(f"\n🍿 <b>{host_badge} Links:</b>")
-
-        if len(filtered_links) == 1:
-            caption_lines.append(f"🔗 <code>{html.escape(filtered_links[0])}</code>")
-        else:
-            for i, l in enumerate(filtered_links, 1):
-                caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
-
-    # Post URL - Placed directly below streaming links
-    if post_url:
-        site_type = details.get("site")
-        if site_type == "wp_locker":
-            link_title = "Original Post"
-        elif site_type in ("livecam", "mmsvibex") or "mmsvibex" in p_low or "mmsvibex" in (post_url or "").lower():
-            link_title = "Original Video Page"
-        else:
-            link_title = "Original Forum Thread"
-        caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
-
     is_vibex = s_low == "mmsvibex" or "mmsvibex" in p_low or "mmsvibex" in (post_url or "").lower()
 
-    # Attached Video Parts (Quoted header with part links or 'Not present')
+    if is_vibex:
+        # For MMSVibex: Show the original page URL directly (no raw CDN mp4 or streamtape fallback warning)
+        if post_url:
+            caption_lines.append(f"\n🔗 <code>{html.escape(post_url)}</code>")
+    else:
+        # Streaming Links Section for other platforms
+        if not raw_links:
+            caption_lines.append("\n⚠️ <i>No direct streaming links found in this post.</i>")
+        elif user_pref == "all":
+            # Group and show all providers cleanly
+            grouped = group_links_by_host(raw_links)
+            caption_lines.append("\n🍿 <b>Streaming Links (All Hosts):</b>")
+            for host_badge, h_links in grouped.items():
+                caption_lines.append(f"\n{host_badge}:")
+                for i, l in enumerate(h_links, 1):
+                    caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
+        else:
+            # Filter by preference with smart fallback following PROVIDER_PRIORITY
+            host_badge, filtered_links, is_fallback = filter_links_by_preference(raw_links, user_pref)
+
+            if is_fallback:
+                caption_lines.append(f"\n⚠️ <i>{user_pref.capitalize()} not available in this post.</i>")
+                caption_lines.append(f"🍿 <b>Using alternative ({host_badge}):</b>")
+            else:
+                caption_lines.append(f"\n🍿 <b>{host_badge} Links:</b>")
+
+            if len(filtered_links) == 1:
+                caption_lines.append(f"🔗 <code>{html.escape(filtered_links[0])}</code>")
+            else:
+                for i, l in enumerate(filtered_links, 1):
+                    caption_lines.append(f"{i}. <code>{html.escape(l)}</code>")
+
+        # Post URL - Only for other platforms (Forums / WP Lockers / LiveCam)
+        if post_url:
+            site_type = details.get("site")
+            if site_type == "wp_locker":
+                link_title = "Original Post"
+            elif site_type == "livecam":
+                link_title = "Original Video Page"
+            else:
+                link_title = "Original Forum Thread"
+            caption_lines.append(f"\n🌐 <a href='{post_url}'>{link_title}</a>")
+
+    # Attached Video Parts (Quoted header with unhidden visible URLs or 'Not present')
     attached_vids = details.get("attached_videos") or []
     collection_url = details.get("collection_url")
     if attached_vids:
         caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>")
         for idx, v in enumerate(attached_vids, 1):
-            v_title = html.escape(v.get("title", f"Part {idx}"))
-            caption_lines.append(f"{idx}. <a href='{v.get('url', '')}'>{v_title}</a>")
+            raw_t = v.get("title", f"Part {idx}")
+            clean_t = re.sub(r"^\d{1,2}:\d{2}\s*", "", raw_t).strip() or f"Part {idx}"
+            v_url = v.get("url", "").strip()
+            caption_lines.append(f"<b>{idx}. {html.escape(clean_t)}</b>\n🔗 <code>{html.escape(v_url)}</code>")
     elif collection_url and not details.get("hide_collection_link"):
         col_name = html.escape(details.get("collection_name") or "All Parts Collection")
-        caption_lines.append(f"\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>\n🔗 <a href='{collection_url}'>{col_name}</a>")
+        caption_lines.append(f"\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>\n📁 <b>{col_name}</b>\n🔗 <code>{html.escape(collection_url)}</code>")
     elif is_vibex:
         caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b> Not present</blockquote>")
 
-    # Attached Photo Albums (Quoted header with album links or 'Not present')
+    # Attached Photo Albums (Quoted header with unhidden visible URLs or 'Not present')
     photo_albums = details.get("attached_photo_albums") or []
     attached_album_url = details.get("attached_album_url")
     if photo_albums:
         caption_lines.append("\n<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>")
         for idx, alb in enumerate(photo_albums, 1):
             alb_title = html.escape(alb.get("title", f"Album {idx}"))
-            alb_url = alb.get("url", "")
-            caption_lines.append(f"{idx}. <a href='{alb_url}'>{alb_title}</a>")
+            alb_url = alb.get("url", "").strip()
+            caption_lines.append(f"<b>{idx}. {alb_title}</b>\n🔗 <code>{html.escape(alb_url)}</code>")
     elif attached_album_url:
-        caption_lines.append(f"\n<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>\n🔗 <a href='{attached_album_url}'>Attached Photo Album</a>")
+        caption_lines.append(f"\n<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>\n🔗 <code>{html.escape(attached_album_url)}</code>")
     elif is_vibex:
         caption_lines.append("\n<blockquote>📸 <b>Attached Photo Albums:</b> Not present</blockquote>")
 

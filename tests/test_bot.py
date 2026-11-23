@@ -785,10 +785,13 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         }
         card_vibex = format_post_card(vibex_details, user_pref="all")
         self.assertIn("<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>", card_vibex)
-        self.assertIn("1. <a href='https://mmsvibex.life/photos/sakshi-1/'>Sakshi Album 1 (12 photos)</a>", card_vibex)
-        self.assertIn("2. <a href='https://mmsvibex.life/photos/sakshi-2/'>Sakshi Album 2 (98 photos)</a>", card_vibex)
+        self.assertIn("<code>https://mmsvibex.life/photos/sakshi-1/</code>", card_vibex)
+        self.assertIn("<code>https://mmsvibex.life/photos/sakshi-2/</code>", card_vibex)
         self.assertIn("<blockquote>📹 <b>Attached Video Parts:</b></blockquote>", card_vibex)
-        self.assertIn("🌐 <a href='https://mmsvibex.life/sakshi-video/'>Original Video Page</a>", card_vibex)
+        self.assertIn("<code>https://mmsvibex.life/actor/sakshi/</code>", card_vibex)
+        self.assertIn("🔗 <code>https://mmsvibex.life/sakshi-video/</code>", card_vibex)
+        self.assertNotIn("Original Video Page", card_vibex)
+        self.assertNotIn("cdn.mmsvibex.fit", card_vibex)
 
         # 2. WordPress Locker Post
         wp_details = {
@@ -1100,6 +1103,112 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         nav_buttons = [btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row]
         self.assertIn("cb_search", nav_buttons)
         self.assertIn("cb_main_menu", nav_buttons)
+
+    @patch("bot.execute_platform_search")
+    async def test_sp_choose_lc_and_vibex_search_flow(self, mock_search):
+        """Test clicking LiveCam or MMSVibex search prompts sets awaiting_search_flow and executes on text input."""
+        from bot import callback_query_handler, handle_message
+
+        # 1. LiveCam search prompt button
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_choose:lc"
+        query.message.chat_id = 12345
+        query.message.message_id = 991
+        update.callback_query = query
+        context = MagicMock()
+        context.user_data = {}
+
+        await callback_query_handler(update, context)
+        self.assertIn("awaiting_search_flow", context.user_data)
+        self.assertEqual(context.user_data["awaiting_search_flow"]["plat"], "lc")
+        self.assertEqual(context.user_data["awaiting_search_flow"]["message_id"], 991)
+
+        # User types model name in chat
+        msg_update = MagicMock()
+        msg_update.effective_chat.id = 12345
+        msg_update.effective_user.id = 888
+        msg_update.message.text = "GoddessAnna"
+        msg_update.effective_message = AsyncMock()
+
+        await handle_message(msg_update, context)
+        mock_search.assert_called_once()
+        _, s_kwargs = mock_search.call_args
+        self.assertEqual(s_kwargs.get("plat"), "lc")
+        self.assertEqual(s_kwargs.get("query"), "GoddessAnna")
+
+    @patch("bot.execute_platform_search")
+    async def test_search_flow_overrides_stale_range_states(self, mock_search):
+        """Test that search flow takes priority and clears stale range flows."""
+        from bot import callback_query_handler, handle_message
+
+        # User previously had an active vibex range state
+        context = MagicMock()
+        context.user_data = {
+            "awaiting_vibex_range": {
+                "url": "https://mmsvibex.life/?filter=latest",
+                "sort_key": "latest",
+                "chat_id": 12345,
+                "message_id": 555,
+            }
+        }
+
+        # User clicks search button on MMSVibex hub
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_choose_kw:vibex"
+        query.message.chat_id = 12345
+        query.message.message_id = 888
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+        self.assertNotIn("awaiting_vibex_range", context.user_data)
+        self.assertIn("awaiting_search_flow", context.user_data)
+        self.assertEqual(context.user_data["awaiting_search_flow"]["plat"], "vibex")
+
+        # User sends search term
+        msg_update = MagicMock()
+        msg_update.effective_chat.id = 12345
+        msg_update.effective_user.id = 888
+        msg_update.message.text = "baddie"
+        msg_update.effective_message = AsyncMock()
+
+        await handle_message(msg_update, context)
+        mock_search.assert_called_once()
+        _, s_kwargs = mock_search.call_args
+        self.assertEqual(s_kwargs.get("plat"), "vibex")
+        self.assertEqual(s_kwargs.get("query"), "baddie")
+
+    def test_mmsvibex_post_card_direct_page_and_unhidden_urls(self):
+        """Test MMSVibex post card layout shows original page link, no CDN MP4, and unhidden media links."""
+        details = {
+            "title": "Popular Viral Dance",
+            "post_url": "https://mmsvibex.life/popular-viral-dance/",
+            "tags": ["1080p"],
+            "streaming_links": ["https://cdn.mmsvibex.fit/processed/12345_final.mp4"],
+            "attached_videos": [
+                {"title": "02:04Tamil Girl Sai Part-11", "url": "https://mmsvibex.life/tamil-girl-part-11/"},
+                {"title": "00:22Tamil Girl Sai Part-23", "url": "https://mmsvibex.life/tamil-girl-part-23/"},
+            ],
+            "attached_photo_albums": [
+                {"title": "Dance Album 1 (85 photos)", "url": "https://mmsvibex.life/photos/dance-1/"},
+            ],
+            "site": "mmsvibex",
+        }
+        card = format_post_card(details, user_pref="streamtape")
+        # 1. Main link is original video page URL directly
+        self.assertIn("🔗 <code>https://mmsvibex.life/popular-viral-dance/</code>", card)
+        # 2. No raw CDN mp4 or streamtape fallback warning
+        self.assertNotIn("cdn.mmsvibex.fit", card)
+        self.assertNotIn("Streamtape not available", card)
+        self.assertNotIn("Original Video Page", card)
+        # 3. Attached video parts have unhidden code URLs
+        self.assertIn("<blockquote>📹 <b>Attached Video Parts:</b></blockquote>", card)
+        self.assertIn("<b>1. Tamil Girl Sai Part-11</b>\n🔗 <code>https://mmsvibex.life/tamil-girl-part-11/</code>", card)
+        self.assertIn("<b>2. Tamil Girl Sai Part-23</b>\n🔗 <code>https://mmsvibex.life/tamil-girl-part-23/</code>", card)
+        # 4. Attached photo albums have unhidden code URLs
+        self.assertIn("<blockquote>📸 <b>Attached Photo Albums:</b></blockquote>", card)
+        self.assertIn("<b>1. Dance Album 1 (85 photos)</b>\n🔗 <code>https://mmsvibex.life/photos/dance-1/</code>", card)
 
 
 if __name__ == "__main__":

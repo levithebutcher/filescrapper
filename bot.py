@@ -1891,6 +1891,13 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat:
         cid = update.effective_chat.id
         await cleanup_ephemeral_progress(context, cid)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data.pop("awaiting_search_flow", None)
+        context.user_data.pop("awaiting_search", None)
         prev_card = context.user_data.pop("active_card_msg_id", None)
         if prev_card:
             try:
@@ -2525,6 +2532,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logger.info(f"📩 [handle_message] Received text from Chat {update.effective_chat.id} (User: {update.effective_user.id if update.effective_user else None}): {text!r}")
 
+    # Allow users to stop simply by typing 'stop' or 'cancel' without slash
+    if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
+        await stop_command(update, context)
+        return
+
+    # 0. Interactive Search Keyword Input Flow (HIGHEST PRIORITY)
+    search_flow = context.user_data.pop("awaiting_search_flow", None)
+    if search_flow:
+        clean_kw = text.strip()
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        # Clear any lingering range flows to avoid state conflicts
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+
+        # Ephemeral cleanup: Delete prompt message ("Please send keyword...")
+        prompt_msg_id = search_flow.get("message_id")
+        if prompt_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prompt_msg_id)
+            except Exception:
+                pass
+
+        # Also cleanup any previous active category card
+        old_card_id = context.user_data.pop("active_card_msg_id", None)
+        if old_card_id and old_card_id != prompt_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=old_card_id)
+            except Exception:
+                pass
+
+        await execute_platform_search(
+            update=update,
+            context=context,
+            plat=search_flow["plat"],
+            query=clean_kw,
+            forum_id=search_flow.get("forum_id"),
+            scope_name=search_flow.get("scope_name"),
+            back_callback=search_flow.get("back_callback"),
+        )
+        return
+
+    # Check if user is in an interactive search flow from /search prompt
+    awaiting_plat = context.user_data.pop("awaiting_search", None)
+    if awaiting_plat:
+        clean_text = text.strip()
+        if awaiting_plat == "prompt":
+            context.user_data["search_query"] = clean_text
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
+                    InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
+                ],
+                [
+                    InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
+                    InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
+                ],
+                [
+                    InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
+                ],
+                [
+                    InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ],
+            ])
+            await update.effective_message.reply_text(
+                f"🔍 <b>Search Query:</b> <code>{html.escape(clean_text)}</code>\n\n"
+                "Choose a platform to search:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+        await execute_platform_search(update, context, awaiting_plat, clean_text)
+        return
+
     # 1. Interactive Model Range Input Flow
     model_flow = context.user_data.get("awaiting_model_range")
     if model_flow:
@@ -2931,47 +3018,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Allow users to stop simply by typing 'stop' or 'cancel' without slash
-    if text.lower() in ["stop", "cancel", "/stop", "/cancel", "halt"]:
-        await stop_command(update, context)
-        return
-
-    # Check if user is in an interactive site/forum search keyword input flow
-    search_flow = context.user_data.pop("awaiting_search_flow", None)
-    if search_flow:
-        clean_kw = text.strip()
-        try:
-            await update.effective_message.delete()
-        except Exception:
-            pass
-
-        # Ephemeral cleanup: Delete the prompt message ("Please send keyword...")
-        prompt_msg_id = search_flow.get("message_id")
-        if prompt_msg_id:
-            try:
-                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prompt_msg_id)
-            except Exception:
-                pass
-
-        # Also cleanup any previous active category card
-        old_card_id = context.user_data.pop("active_card_msg_id", None)
-        if old_card_id and old_card_id != prompt_msg_id:
-            try:
-                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=old_card_id)
-            except Exception:
-                pass
-
-        await execute_platform_search(
-            update=update,
-            context=context,
-            plat=search_flow["plat"],
-            query=clean_kw,
-            forum_id=search_flow.get("forum_id"),
-            scope_name=search_flow.get("scope_name"),
-            back_callback=search_flow.get("back_callback"),
-        )
-        return
-
     # Check if user selected numbers from active search results
     search_state = context.user_data.get("active_search_results")
     if search_state and search_state.get("items"):
@@ -3083,39 +3129,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             search_state["message_id"] = new_card_msg.message_id
             context.user_data["active_card_msg_id"] = new_card_msg.message_id
             return
-
-    # Check if user is in an interactive search flow
-    awaiting_plat = context.user_data.pop("awaiting_search", None)
-    if awaiting_plat:
-        clean_text = text.strip()
-        if awaiting_plat == "prompt":
-            context.user_data["search_query"] = clean_text
-            markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
-                    InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
-                ],
-                [
-                    InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
-                    InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
-                ],
-                [
-                    InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
-                ],
-                [
-                    InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-                ],
-            ])
-            await update.effective_message.reply_text(
-                f"🔍 <b>Search Query:</b> <code>{html.escape(clean_text)}</code>\n\n"
-                "Choose a platform to search:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
-            return
-        await execute_platform_search(update, context, awaiting_plat, clean_text)
-        return
 
     if text.startswith("http://") or text.startswith("https://") or any(
         d in text.lower()
@@ -3285,46 +3298,94 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         plat_label = "📹 LiveCam Models"
         example_q = "GoddessAnna"
-        context.user_data["awaiting_search"] = plat
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "lc",
+            "scope_name": "LiveCam Models",
+            "back_callback": "cb_search",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="cb_search"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
         await query.edit_message_text(
             f"<blockquote>🔍 <b>Searching:</b> {plat_label}\n\n"
-            f"✏️ <i>Please send the keyword or name in your next message (e.g. <code>{example_q}</code>):</i></blockquote>",
+            f"✏️ <i>Please send the keyword or model name to search (e.g. <code>{example_q}</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
     elif data == "sp_choose_kw:fm":
-        context.user_data["awaiting_search"] = "fm"
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "fm",
+            "scope_name": "DropMMS Topics",
+            "back_callback": "sp_choose:fm",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:fm"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
         await query.edit_message_text(
             "<blockquote>🔍 <b>Searching:</b> 💬 DropMMS Forum\n\n"
-            "✏️ <i>Please send the keyword or title in your next message (e.g. <code>1080p video</code>):</i></blockquote>",
+            "✏️ <i>Please send the keyword or title to search (e.g. <code>1080p video</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
     elif data == "sp_choose_kw:mmst":
-        context.user_data["awaiting_search"] = "mmst"
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "mmst",
+            "scope_name": "MMSTown Topics",
+            "back_callback": "sp_choose:mmst",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:mmst"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
         await query.edit_message_text(
             "<blockquote>🔍 <b>Searching:</b> 💬 MMSTown Forum\n\n"
-            "✏️ <i>Please send the keyword or title in your next message (e.g. <code>desi video</code>):</i></blockquote>",
+            "✏️ <i>Please send the keyword or title to search (e.g. <code>desi video</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
     elif data == "sp_choose_kw:vibex":
-        context.user_data["awaiting_search"] = "vibex"
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "vibex",
+            "scope_name": "MMSVibex Videos",
+            "back_callback": "sp_choose:vibex",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        context.user_data["active_card_msg_id"] = query.message.message_id
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:vibex"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
         ])
         await query.edit_message_text(
             "<blockquote>🔍 <b>Searching:</b> ⚡ MMSVibex Videos\n\n"
-            "✏️ <i>Please send the keyword or model name in your next message (e.g. <code>baddie</code>):</i></blockquote>",
+            "✏️ <i>Please send the keyword or model name to search (e.g. <code>baddie</code>):</i></blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
