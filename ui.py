@@ -63,12 +63,12 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
 
     caption_lines = [f"<blockquote>{emoji} <b>{title}</b></blockquote>"]
 
-    # Tags
+    # Tags - Compact code pills
     if tags:
         tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
         caption_lines.append(f"🏷️ {tag_str}")
 
-    # Metadata Badges Line: Date • Platform • Category • Duration
+    # Metadata Line: Date • Platform • Category • Duration
     meta_parts = []
     date_display = details.get("date_ist") or details.get("date")
     if date_display:
@@ -174,14 +174,13 @@ def format_search_results_page(
     platform_label: str,
     query: str,
 ) -> str:
-    """Format paginated search results listing text with header blockquote and numbered entries."""
+    """Format paginated search results listing text with header blockquote and sleek numbered entries."""
     q_esc = html.escape(query)
     plat_esc = html.escape(platform_label)
     header = (
         "<blockquote>"
-        f"🔍 <b>Search Results:</b> {q_esc}\n"
-        f"🏛️ <b>Platform:</b> {plat_esc}\n"
-        f"📊 Found: <b>{total_count}</b> results  •  Page <b>{page}/{total_pages}</b>"
+        f"🔍 <b>Results:</b> <code>{q_esc}</code>\n"
+        f"🏛️ <b>Platform:</b> {plat_esc}  •  <b>{total_count}</b> found  •  Page <b>{page}/{total_pages}</b>"
         "</blockquote>\n"
     )
 
@@ -197,9 +196,9 @@ def format_search_results_page(
         if itm.get("duration"):
             meta_info.append(str(itm.get("duration")))
 
-        line = f"<b>{idx}. {t_esc}</b>"
+        line = f"<b>{idx}.</b> {t_esc}"
         if meta_info:
-            line += f" (<i>{' • '.join(meta_info)}</i>)"
+            line += f"  <i>( {' • '.join(meta_info)} )</i>"
         lines.append(line)
 
     return "\n".join(lines)
@@ -219,8 +218,8 @@ def format_listing_menu_card(
         f"{icon} <b>{t_esc}</b>",
     ]
     if total_items > 0:
-        lines.append(f"📊 Total items available: <b>{total_items}</b>")
-    lines.append("Select how many items to scrape or reply with custom range (e.g. <code>1-15</code>):")
+        lines.append(f"📊 Available items: <b>{total_items}</b>")
+    lines.append("Select extraction count or reply with custom range (e.g. <code>1-15</code>):")
     if extra_tips:
         lines.append(f"\n💡 {extra_tips}")
     lines.append("</blockquote>")

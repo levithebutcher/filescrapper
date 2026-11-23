@@ -3,7 +3,7 @@
 Text Templates and Status Message Generators for FileScrapper.
 Centralizes all static command instructions (/start, /help, /domains, /channels),
 status banners, error messages, and prompt text cards for Telegram.
-All wording, instructions, and emoji layouts can be edited here without touching business logic.
+Designed for a premium, minimal, and clean user experience.
 """
 
 import html
@@ -12,75 +12,69 @@ import html
 # --- Static Command Message Templates ---
 
 def get_welcome_message(user_name: str, bot_name: str = "FileScrapper") -> str:
-    """Generate the /start welcome message."""
+    """Generate the sleek, minimal /start welcome card."""
     u_esc = html.escape(user_name or "Friend")
     b_esc = html.escape(bot_name)
     return (
+        f"<blockquote>⚡ <b>{b_esc}</b> • <i>Media Scraper & Stream Extractor</i></blockquote>\n"
         f"✨ <b>Welcome, {u_esc}!</b>\n\n"
-        f"<b>{b_esc}</b> automatically extracts verified video streaming links "
-        "and monitors new forum and cam uploads in real-time.\n\n"
+        "Extract verified streaming links, scrape forums & monitor feeds in real-time.\n\n"
         "<b>⚡ Quick Commands:</b>\n"
-        "• <code>/today</code> — Today's fresh uploads (DropMMS & LiveCamRips)\n"
-        "• <code>/today 4</code> — Get first 4 uploads of today\n"
-        "• <code>/today 1-5</code> — Get uploads 1 to 5\n"
-        "• <code>/today last 5</code> — Get last 5 uploads\n"
+        "• <code>/today [N]</code> — Today's fresh uploads (DropMMS & LiveCam)\n"
         "• <code>/latest</code> — Latest forum releases\n"
-        "• <code>/sethost</code> — Set preferred video player (Streamtape/Vidara/etc.)\n"
-        "• <code>/setlink</code> — LiveCam link format (Streaming/Both/Page)\n"
-        "• <code>/search &lt;name&gt;</code> — Find videos or models\n"
-        "• <code>/scrape &lt;url&gt;</code> — Extract any topic, category, or model\n"
-        "• <code>/stop</code> — Immediately cancel active extraction\n"
-        "• <code>/channels</code> — Manage auto-feed broadcast channels\n\n"
-        "<i>💡 Or paste any DropMMS or LiveCamRips link directly in chat to extract instantly.</i>"
+        "• <code>/search &lt;query&gt;</code> — Search topics, models or videos\n"
+        "• <code>/scrape &lt;url&gt;</code> — Extract any topic or category\n"
+        "• <code>/sethost</code> — Set preferred video player\n"
+        "• <code>/channels</code> — 24/7 Channel auto-broadcast\n\n"
+        "<blockquote>💡 <i>Tip: Paste any supported link directly in chat to extract instantly.</i></blockquote>"
     )
 
 
 def get_help_message() -> str:
-    """Generate the /help user manual."""
+    """Generate the clean, organized /help user guide."""
     return (
-        "📖 <b>Bot User Manual</b>\n\n"
-        "<b>1️⃣ Instant Extraction:</b>\n"
-        "Send any post, model, or category link directly in chat, or use:\n"
-        "• <code>/scrape https://dropmms.com/topic/123-title/</code>\n"
-        "• <code>/scrape https://livecamrips.to/model/36773/GoddessAnna 4</code>\n"
-        "• <code>/scrape https://livecamrips.to/video/16877744</code>\n\n"
-        "<b>2️⃣ Date-Wise & Sliced Updates:</b>\n"
-        "• <code>/today</code> — View all uploads from today\n"
+        "<blockquote>📖 <b>FileScrapper User Manual</b></blockquote>\n\n"
+        "<b>1️⃣ Instant Extraction</b>\n"
+        "Simply send any supported link in chat, or use:\n"
+        "• <code>/scrape &lt;post_or_model_url&gt;</code>\n"
+        "• <code>/scrape &lt;url&gt; 5</code> (first 5 items)\n"
+        "• <code>/scrape &lt;url&gt; 1-10</code> (custom range)\n\n"
+        "<b>2️⃣ Date & Range Slices</b>\n"
+        "• <code>/today</code> — All uploads from today\n"
         "• <code>/today 4</code> — First 4 uploads from today\n"
-        "• <code>/today 1-5</code> — Uploads 1 through 5\n"
         "• <code>/today last 5</code> — Last 5 uploads\n"
         "• <code>/latest</code> — Top 5 newest topics\n\n"
-        "<b>3️⃣ Keyword Search:</b>\n"
-        "• <code>/search</code> — Universal search with interactive buttons\n"
-        "• <code>/search GoddessAnna</code> — Search models or topics directly\n\n"
-        "<b>4️⃣ Preferences:</b>\n"
-        "• <code>/sethost</code> — Set preferred streaming player (Streamtape, etc.)\n"
-        "• <code>/setlink</code> — Choose LiveCam card links (streaming only / both / page only)\n\n"
-        "<b>5️⃣ 24/7 Channel Auto-Poster:</b>\n"
-        "1. Add this bot to your Telegram Channel as <b>Administrator</b>.\n"
-        "2. The bot will automatically link the channel and broadcast new drops every 15 minutes!\n"
-        "3. Or use <code>/setchannel &lt;category_url&gt;</code> inside the channel."
+        "<b>3️⃣ Interactive Search</b>\n"
+        "• <code>/search</code> — Open interactive platform picker\n"
+        "• <code>/search &lt;keyword&gt;</code> — Instant multi-platform search\n\n"
+        "<b>4️⃣ Preferences</b>\n"
+        "• <code>/sethost</code> — Set preferred streaming player (Streamtape, Vidara, etc.)\n"
+        "• <code>/setlink</code> — LiveCam link format (Streaming / Both / Page)\n\n"
+        "<b>5️⃣ 24/7 Channel Auto-Poster</b>\n"
+        "1. Add bot to your Telegram Channel as <b>Admin</b>.\n"
+        "2. Send <code>/setchannel &lt;url&gt;</code> inside the channel.\n"
+        "3. The bot will broadcast newly posted items automatically every 15 mins!"
     )
 
 
 def get_domains_message(domains: list[str]) -> str:
-    """Generate the /domains supported platforms list."""
-    lines = ["🌐 <b>Supported Platforms & Websites:</b>\n"]
+    """Generate the supported platforms listing card."""
+    lines = ["<blockquote>🌐 <b>Supported Platforms & Domains</b></blockquote>\n"]
     for d in sorted(domains):
         lines.append(f"• <code>{html.escape(d)}</code>")
-    lines.append("\n<i>Paste any link from these domains directly in chat to extract instantly.</i>")
+    lines.append("\n<i>💡 Paste any link from these domains directly in chat to extract instantly.</i>")
     return "\n".join(lines)
 
 
 def get_channel_help_message() -> str:
-    """Generate instructions for setting up auto-feed in channels."""
+    """Generate clean instructions for setting up auto-feed in broadcast channels."""
     return (
-        "📢 <b>Channel Auto-Feed Configuration:</b>\n\n"
+        "<blockquote>📢 <b>Channel Auto-Feed Setup</b></blockquote>\n\n"
         "To broadcast new releases automatically:\n"
         "1. Add this bot as an <b>Administrator</b> in your Telegram Channel.\n"
-        "2. Send <code>/setchannel &lt;category_or_forum_url&gt;</code> directly inside the channel.\n"
-        "3. The bot will check every 15 minutes and publish newly posted drops automatically!\n\n"
-        "Use <code>/channels</code> in private chat to manage all registered broadcast feeds."
+        "2. Send <code>/setchannel &lt;category_url&gt;</code> directly inside the channel.\n"
+        "3. New drops will be published automatically every 15 minutes!\n\n"
+        "<i>Use <code>/channels</code> in private chat to manage active feeds.</i>"
     )
 
 
@@ -88,27 +82,27 @@ def get_channel_help_message() -> str:
 
 def msg_scanning_today() -> str:
     """Banner displayed when initiating a date-based /today scan."""
-    return "📅 <i>Scanning today's uploads...</i>"
+    return "<blockquote>📅 <b>Scanning today's uploads...</b></blockquote>"
 
 
 def msg_extracting_streaming_link(source_label: str = "topic") -> str:
     """Banner displayed while parsing links from a single page."""
-    return f"🔍 <i>Extracting streaming links from {html.escape(source_label)}...</i>"
+    return f"<blockquote>🔍 <b>Extracting streaming links from {html.escape(source_label)}...</b></blockquote>"
 
 
 def msg_fetching_latest_releases() -> str:
     """Banner displayed when loading latest forum topics."""
-    return "⚡ <i>Fetching latest forum releases...</i>"
+    return "<blockquote>⚡ <b>Fetching latest forum releases...</b></blockquote>"
 
 
 def msg_scrape_started(found_count: int, item_type: str = "upload") -> str:
     """Status card when items are found and extraction begins."""
-    return f"📅 <b>Found {found_count} {html.escape(item_type)}(s)!</b>\n<i>Extracting links...</i>"
+    return f"<blockquote>🚀 <b>Found {found_count} {html.escape(item_type)}(s)</b>\n<i>Extracting streaming links...</i></blockquote>"
 
 
 def msg_scrape_stopped(delivered_count: int, total_count: int, item_type: str = "post") -> str:
     """Notice when an active scrape is aborted via /stop or button."""
-    return f"🛑 <b>Scrape stopped!</b> Delivered {delivered_count}/{total_count} {html.escape(item_type)}s."
+    return f"<blockquote>🛑 <b>Extraction Stopped!</b>\nDelivered {delivered_count}/{total_count} {html.escape(item_type)}s.</blockquote>"
 
 
 def msg_extraction_complete(delivered_count: int, item_type: str = "topic") -> str:
@@ -116,7 +110,7 @@ def msg_extraction_complete(delivered_count: int, item_type: str = "topic") -> s
     return (
         "<blockquote>"
         "✅ <b>Extraction Complete!</b>\n"
-        f"📁 Delivered: <b>{delivered_count}</b> {html.escape(item_type)}(s)"
+        f"Delivered: <b>{delivered_count}</b> {html.escape(item_type)}(s)"
         "</blockquote>"
     )
 
@@ -125,16 +119,16 @@ def msg_no_uploads_today(target_url: str = "", item_type: str = "model") -> str:
     """Notification when no posts occurred today, with tips on how to fetch recent posts."""
     u_esc = html.escape(target_url)
     return (
-        f"📅 <b>No uploads found today for this {html.escape(item_type)}!</b>\n\n"
-        "<i>Older items were skipped. Tip: Specify a count or range to view recent uploads:</i>\n"
-        f"<code>/today {u_esc} 4</code>\n"
-        f"<code>/scrape {u_esc} 1-5</code>"
+        f"<blockquote>📅 <b>No uploads found today for this {html.escape(item_type)}!</b></blockquote>\n\n"
+        "<i>Tip: Specify a count or range to view recent uploads:</i>\n"
+        f"• <code>/today {u_esc} 4</code>\n"
+        f"• <code>/scrape {u_esc} 1-5</code>"
     )
 
 
 def msg_no_items_found(message: str = "No topics found in this category.") -> str:
     """Notification when zero items match a search or category."""
-    return f"❌ {html.escape(message)}"
+    return f"<blockquote>❌ {html.escape(message)}</blockquote>"
 
 
 def msg_search_prompt(platform_label: str, example_query: str) -> str:
@@ -142,7 +136,7 @@ def msg_search_prompt(platform_label: str, example_query: str) -> str:
     return (
         "<blockquote>"
         f"🔍 <b>Searching:</b> {html.escape(platform_label)}\n\n"
-        f"✏️ <i>Please send the keyword or title in your next message (e.g. <code>{html.escape(example_query)}</code>):</i>"
+        f"✏️ Send keyword or title in your next message (e.g. <code>{html.escape(example_query)}</code>):"
         "</blockquote>"
     )
 
@@ -152,7 +146,7 @@ def msg_universal_search_prompt() -> str:
     return (
         "<blockquote>"
         "🔍 <b>Universal Search Engine</b>\n\n"
-        "Select which platform you would like to explore or search, or type a keyword directly in chat:"
+        "Select a platform below or send a search keyword directly in chat:"
         "</blockquote>"
     )
 
@@ -160,8 +154,10 @@ def msg_universal_search_prompt() -> str:
 def msg_search_query_prompt(query: str) -> str:
     """Prompt for /search with query argument."""
     return (
+        "<blockquote>"
         f"🔍 <b>Search Query:</b> <code>{html.escape(query)}</code>\n\n"
         "Choose a platform to search:"
+        "</blockquote>"
     )
 
 
@@ -169,9 +165,8 @@ def msg_mmsvibex_video_prompt(card_title: str) -> str:
     """Prompt asking user to choose between Normal Mode and Advance Mode."""
     return (
         "<blockquote>"
-        "⚡ <b>MMSVibex Video Detected</b>\n"
+        "⚡ <b>MMSVibex Multi-Part Series</b>\n"
         f"🎬 <b>{html.escape(card_title)}</b>\n\n"
-        "📁 <b>Multi-Part Series Collection Available!</b>\n\n"
         "Select Extraction Mode:\n"
         "• <b>Normal Mode:</b> Single video card + <i>Extract All Parts</i> button\n"
         "• <b>Advance Mode:</b> Automatically extract all parts of this collection"
@@ -182,16 +177,18 @@ def msg_mmsvibex_video_prompt(card_title: str) -> str:
 def msg_chat_busy() -> str:
     """Alert when another scrape is running in the same chat."""
     return (
-        "⚠️ <b>Another extraction is already active in this chat!</b>\n\n"
-        "Please wait for it to finish, or tap <code>/stop</code> to abort it."
+        "<blockquote>"
+        "⚠️ <b>Extraction in Progress</b>\n\n"
+        "Another extraction is active in this chat. Please wait or tap <code>/stop</code>."
+        "</blockquote>"
     )
 
 
 def msg_error(error_text: str) -> str:
     """Standardized error notification."""
-    return f"❌ <b>Error:</b> {html.escape(str(error_text))}"
+    return f"<blockquote>❌ <b>Error:</b> {html.escape(str(error_text))}</blockquote>"
 
 
 def msg_invalid_range_format() -> str:
     """Alert when custom range text cannot be parsed."""
-    return "⚠️ <b>Invalid range format!</b> Please send a valid number or range (e.g. <code>5</code> or <code>1-10</code>)."
+    return "<blockquote>⚠️ <b>Invalid Range:</b> Send a valid number or range (e.g. <code>5</code> or <code>1-10</code>).</blockquote>"

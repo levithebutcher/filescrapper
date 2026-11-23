@@ -1,8 +1,8 @@
 # keyboards.py
 """
 Inline Keyboard Builders for FileScrapper.
-Centralizes all 53 Telegram InlineKeyboardMarkup and button configurations.
-Allows customizing button text, emojis, rows, and grid layouts without altering bot logic.
+Centralizes all Telegram InlineKeyboardMarkup and button configurations.
+Provides a modern, balanced, and responsive grid layout.
 ALL callback_data strings are strictly preserved for 100% handler compatibility.
 """
 
@@ -90,19 +90,19 @@ def build_card_keyboard(details: dict, user_pref: str = "streamtape") -> InlineK
 # --- Main Menu & Command Keyboards ---
 
 def build_main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Clean 2-column menu layout for /start command."""
+    """Sleek 2-column menu layout for /start command."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📅 Today's Drops", callback_data="cb_today"),
-            InlineKeyboardButton("⚡ Latest Posts", callback_data="cb_latest"),
+            InlineKeyboardButton("⚡ Today's Drops", callback_data="cb_today"),
+            InlineKeyboardButton("🔥 Latest Posts", callback_data="cb_latest"),
         ],
         [
+            InlineKeyboardButton("🔍 Search Engine", callback_data="cb_search"),
             InlineKeyboardButton("⚙️ Preferred Player", callback_data="cb_sethost"),
-            InlineKeyboardButton("🔗 LiveCam Links", callback_data="cb_setlink"),
         ],
         [
-            InlineKeyboardButton("🔍 Search Videos", callback_data="cb_search"),
-            InlineKeyboardButton("📢 Channel Setup", callback_data="cb_channel_help"),
+            InlineKeyboardButton("🔗 LiveCam Links", callback_data="cb_setlink"),
+            InlineKeyboardButton("📢 Channel Auto-Feed", callback_data="cb_channel_help"),
         ],
         [
             InlineKeyboardButton("📖 User Guide", callback_data="cb_help"),
@@ -111,37 +111,33 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_host_settings_keyboard(current_pref: str = "streamtape") -> InlineKeyboardMarkup:
-    """Build host selection keyboard with checkmark for current preference."""
-    host_labels = {
-        "streamtape": "🎬 Streamtape",
-        "vidara": "⚡ Vidara",
-        "streamfiles": "📁 StreamFiles",
-        "iplaygo": "▶️ IPlayGo",
-        "lplaygo": "▶️ LPlayGo",
-        "abstream": "📺 AbStream",
-        "uqload": "⚡ Uqload",
-        "streamcash": "💰 StreamCash",
-        "direct_mp4": "⚡ Direct MP4",
-        "direct_zip": "📦 Direct ZIP",
-        "doodstream": "🦤 DoodStream",
-        "streamwish": "💫 StreamWish",
-        "filelions": "🦁 FileLions",
-        "dropload": "💧 DropLoad",
-        "mixdrop": "💧 MixDrop",
-        "streamruby": "💎 StreamRuby",
-        "cloudfam": "☁️ Cloudfam",
-        "all": "🌐 Show All Providers",
-    }
+    """Build host selection keyboard with clear checkmarks in a balanced 2-column grid."""
+    host_configs = [
+        ("streamtape", "🎬 Streamtape"),
+        ("vidara", "⚡ Vidara"),
+        ("streamfiles", "📥 StreamFiles"),
+        ("iplaygo", "▶️ IPlayGo"),
+        ("lplaygo", "▶️ LPlayGo"),
+        ("abstream", "📺 AbStream"),
+        ("uqload", "⚡ Uqload"),
+        ("streamcash", "💰 StreamCash"),
+        ("direct_mp4", "⚡ Direct MP4"),
+        ("direct_zip", "📦 Direct ZIP"),
+        ("doodstream", "🦤 DoodStream"),
+        ("streamwish", "💫 StreamWish"),
+        ("filelions", "🦁 FileLions"),
+        ("dropload", "💧 DropLoad"),
+        ("mixdrop", "💧 MixDrop"),
+        ("streamruby", "💎 StreamRuby"),
+        ("cloudfam", "☁️ Cloudfam"),
+    ]
 
     buttons = []
-    keys = list(host_labels.keys())
-
-    for i in range(0, len(keys) - 1, 2):
+    for i in range(0, len(host_configs), 2):
         row = []
-        for k in keys[i : i + 2]:
-            label = host_labels[k]
-            mark = " ✅" if k == current_pref else ""
-            row.append(InlineKeyboardButton(f"{label}{mark}", callback_data=f"sethost_{k}"))
+        for key, label in host_configs[i : i + 2]:
+            mark = " ✅" if key == current_pref else ""
+            row.append(InlineKeyboardButton(f"{label}{mark}", callback_data=f"sethost_{key}"))
         buttons.append(row)
 
     all_mark = " ✅" if current_pref == "all" else ""
@@ -151,7 +147,7 @@ def get_host_settings_keyboard(current_pref: str = "streamtape") -> InlineKeyboa
 
 
 def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMarkup:
-    """Build LiveCam link mode selection keyboard with checkmarks."""
+    """Build LiveCam link mode selection keyboard with clear checkmarks."""
     modes = [
         ("streaming", "🍿 Streaming Links Only"),
         ("both", "🍿 Streaming + 🌐 Video Page"),
@@ -180,7 +176,7 @@ def build_search_platform_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
         ],
         [
-            InlineKeyboardButton("🌐 Omaal / DesiJugar / GulabiHub", callback_data="sp_choose:wplock"),
+            InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_choose:wplock"),
         ],
         [
             InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
@@ -226,8 +222,8 @@ def build_search_results_keyboard(
         if url:
             sid = db.get_or_create_short_id(url)
             t = itm.get("title") or itm.get("model_name") or f"Item #{idx}"
-            if len(t) > 28:
-                t = t[:25] + "..."
+            if len(t) > 30:
+                t = t[:27] + "..."
             buttons.append([InlineKeyboardButton(f"🎬 #{idx} {t}", callback_data=f"sc_{sid}")])
 
     # 2. Pagination row
@@ -297,7 +293,7 @@ def build_forum_sort_keyboard(short_id: str) -> InlineKeyboardMarkup:
     """Sorting options for forum category pages."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🆕 Upload Date (Start Date)", callback_data=f"sp_csort:{short_id}:start_date"),
+            InlineKeyboardButton("🆕 Start Date", callback_data=f"sp_csort:{short_id}:start_date"),
             InlineKeyboardButton("🔄 Recently Updated", callback_data=f"sp_csort:{short_id}:updated"),
         ],
         [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
