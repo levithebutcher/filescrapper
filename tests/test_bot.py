@@ -44,7 +44,8 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         }
         # Preferred: vidara
         caption = format_post_card(details, user_pref="vidara")
-        self.assertIn("<blockquote>🎬 <b>Sample Movie &lt;4K&gt;</b></blockquote>", caption)
+        self.assertIn("<blockquote>🎬 <b>Sample Movie &lt;4K&gt;</b>", caption)
+        self.assertIn("🏛️ <b>Platform:</b> DropMMS</blockquote>", caption)
         self.assertIn("#4K", caption)
         self.assertIn("⚡ Vidara Links:", caption)
         self.assertIn("1. <code>https://vidara.to/v/part1</code>", caption)
@@ -489,7 +490,7 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         reply_markup = final_call[1].get("reply_markup")
         button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
         self.assertTrue(any(b.startswith("sp_cat:") for b in button_data))
-        self.assertIn("sp_choose_kw:fm", button_data)
+        self.assertNotIn("sp_choose_kw:fm", button_data)
         self.assertIn("cb_search", button_data)
         self.assertIn("sp_cancel", button_data)
 
@@ -718,6 +719,55 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🔝 Latest 10 Posts", btn_texts)
         self.assertIn("🔙 Back to Category", btn_texts)
 
+    @patch("bot.process_topic_scrape")
+    @patch("bot.get_forum_topics")
+    async def test_run_forum_category_scrape_completion_card_and_cleanup(self, mock_get_topics, mock_process):
+        """Test that top progress message is deleted and options card is resurfaced at the bottom."""
+        from bot import run_forum_category_scrape
+
+        mock_get_topics.return_value = [
+            {"title": "Topic 1", "url": "https://dropmms.com/topic/1-one/"},
+            {"title": "Topic 2", "url": "https://dropmms.com/topic/2-two/"},
+        ]
+        bot_mock = AsyncMock()
+        end_msg_mock = MagicMock()
+        end_msg_mock.message_id = 9999
+        bot_mock.send_message.return_value = end_msg_mock
+        status_msg = AsyncMock()
+        status_msg.message_id = 8888
+
+        context = MagicMock()
+        context.user_data = {}
+
+        await run_forum_category_scrape(
+            bot=bot_mock,
+            chat_id=12345,
+            target_url="https://dropmms.com/forum/2-desi/",
+            status_msg=status_msg,
+            cat_title="Desi Videos",
+            context=context,
+        )
+
+        # 1. Ephemeral cleanup: status_msg deleted
+        status_msg.delete.assert_called_once()
+
+        # 2. Resurfaced card sent at bottom
+        bot_mock.send_message.assert_called_once()
+        args, kwargs = bot_mock.send_message.call_args
+        card_text = kwargs.get("text", "")
+        self.assertIn("Extraction Complete!", card_text)
+        self.assertIn("Delivered: <b>2</b> topic(s)", card_text)
+        self.assertIn("Desi Videos", card_text)
+
+        markup = kwargs.get("reply_markup")
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("today" in b for b in btn_data))
+        self.assertTrue(any("yesterday" in b for b in btn_data))
+
+        # 3. Context registered for immediate next range input
+        self.assertIn("awaiting_category_range", context.user_data)
+        self.assertEqual(context.user_data["awaiting_category_range"]["message_id"], 9999)
+
     def test_format_post_card_attached_album_and_sites(self):
         """Test format_post_card handles attached photo albums and suppresses original video page for MMSVibex."""
         # 1. MMSVibex Video with attached album
@@ -885,7 +935,7 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         reply_markup = final_call[1].get("reply_markup")
         button_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
         self.assertTrue(any(b.startswith("sp_cat:") for b in button_data))
-        self.assertIn("sp_choose_kw:mmst", button_data)
+        self.assertNotIn("sp_choose_kw:mmst", button_data)
         self.assertIn("cb_search", button_data)
         self.assertIn("sp_cancel", button_data)
 

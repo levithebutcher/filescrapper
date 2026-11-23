@@ -98,6 +98,8 @@ from ui import (
     format_post_card,
     format_search_results_page,
     format_listing_menu_card,
+    format_category_options_card,
+    format_category_completion_card,
 )
 from keyboards import (
     build_stop_keyboard,
@@ -111,6 +113,7 @@ from keyboards import (
     build_search_results_keyboard,
     build_mmsvibex_mode_keyboard,
     build_slice_selection_keyboard,
+    build_category_options_keyboard,
     build_forum_options_keyboard,
     build_forum_sort_keyboard,
     build_model_options_keyboard,
@@ -203,6 +206,18 @@ async def cancellable_sleep(duration: float, chat_id: int | str, step: float = 0
 # into ui.py, keyboards.py, messages.py, and progress.py for easy customization.
 
 
+async def cleanup_ephemeral_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int | str):
+    """Clean up any leftover progress/status message from a previous command in this chat."""
+    if not context or not hasattr(context, "user_data"):
+        return
+    prev_msg_id = context.user_data.pop(f"active_progress_msg_{chat_id}", None)
+    if prev_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=prev_msg_id)
+        except Exception:
+            pass
+
+
 # --- Post Sender Engine ---
 
 async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None, reply_markup=None):
@@ -213,8 +228,7 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
     target_uid = user_id if user_id else (chat_id if isinstance(chat_id, int) and chat_id > 0 else 0)
     user_pref = db.get_user_host_preference(target_uid) if target_uid else "streamtape"
     caption = format_post_card(details, user_pref)
-    if reply_markup is None:
-        reply_markup = build_card_keyboard(details, user_pref)
+    # Post cards default to NO bottom buttons to avoid chat clutter (links are already in caption)
 
     # Collect thumbnail candidates and download the first valid image into memory
     candidates = details.get("thumbnail_candidates", [])
@@ -521,6 +535,9 @@ async def run_livecam_model_scrape(
     else:
         status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
 
+    if context and status_msg and hasattr(status_msg, "message_id"):
+        context.user_data[f"active_progress_msg_{cid}"] = status_msg.message_id
+
     try:
         raw_videos = await asyncio.to_thread(
             get_livecam_model_videos,
@@ -619,10 +636,12 @@ async def run_forum_category_scrape(
     status_msg=None,
     user_id: int | str = None,
     cat_title: str | None = None,
+    context: ContextTypes.DEFAULT_TYPE = None,
 ):
     """
     Standardized worker to scrape and deliver topics from a DropMMS forum category.
     Supports sorting, date filtering (today, yesterday), flexible range (e.g. 5-10), direct page, stopping, and quoted status cards.
+    Cleans up ephemeral progress cards and resurfaces the working options card at the bottom.
     """
     cid = int(chat_id)
     uid = user_id or cid
@@ -697,6 +716,9 @@ async def run_forum_category_scrape(
             pass
     else:
         status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
+
+    if context and status_msg and hasattr(status_msg, "message_id"):
+        context.user_data[f"active_progress_msg_{cid}"] = status_msg.message_id
 
     try:
         raw_topics = await asyncio.to_thread(
@@ -786,28 +808,51 @@ async def run_forum_category_scrape(
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
-        if not is_scrape_cancelled(cid):
-            try:
-                await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_navigation_keyboard(),
-                )
-            except Exception:
-                try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{len(topics)}</b> topics</blockquote>",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=get_navigation_keyboard(),
-                    )
-                except Exception:
-                    pass
-        else:
+        # 1. Ephemeral cleanup: Delete top progress message so it does not clutter above posts
+        if status_msg:
             try:
                 await status_msg.delete()
             except Exception:
                 pass
+        if context:
+            context.user_data.pop(f"active_progress_msg_{cid}", None)
+
+        # 2. Resurface the options card at the bottom of the chat after all posts are delivered
+        short_id = db.get_or_create_short_id(clean_base)
+        cached_stats = context.user_data.get(f"cat_stats_{short_id}", {}) if context else {}
+        total_str = cached_stats.get("total_str") or "Available"
+        sort_val = sort_by or "start_date"
+        stopped = is_scrape_cancelled(cid)
+        delivered_count = idx if not stopped else max(0, idx - 1)
+
+        end_card_text = format_category_completion_card(
+            delivered_count=delivered_count,
+            cat_title=cat_title,
+            total_str=total_str,
+            sort_val=sort_val,
+            stopped=stopped,
+        )
+        end_markup = build_category_options_keyboard(short_id, sort_val)
+
+        try:
+            end_msg = await bot.send_message(
+                chat_id=cid,
+                text=end_card_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=end_markup,
+            )
+            if context:
+                context.user_data["awaiting_category_range"] = {
+                    "short_id": short_id,
+                    "url": clean_base,
+                    "cat_title": cat_title,
+                    "total_str": total_str,
+                    "sort_by": sort_val,
+                    "chat_id": cid,
+                    "message_id": end_msg.message_id,
+                }
+        except Exception as e:
+            logger.warning(f"Could not send completion options card: {e}")
     except Exception as e:
         logger.error(f"Error scraping forum category {target_url}: {e}", exc_info=True)
         try:
@@ -1116,6 +1161,8 @@ async def setlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Minimal, elegant greeting."""
+    if update.effective_chat:
+        await cleanup_ephemeral_progress(context, update.effective_chat.id)
     user_name = update.effective_user.first_name if update.effective_user else "Friend"
     text = messages.get_welcome_message(user_name=user_name, bot_name=BOT_NAME)
     await update.effective_message.reply_text(
@@ -1126,6 +1173,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clean usage guide."""
+    if update.effective_chat:
+        await cleanup_ephemeral_progress(context, update.effective_chat.id)
     await update.effective_message.reply_text(messages.get_help_message(), parse_mode=ParseMode.HTML)
 
 
@@ -1136,6 +1185,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat_id:
         return
 
+    await cleanup_ephemeral_progress(context, chat_id)
     logger.info(f"🛑 [/stop] Stop requested by user in chat {chat_id}")
     cancel_scrape_for_chat(chat_id)
     await update.effective_message.reply_text(
@@ -1786,6 +1836,8 @@ async def execute_platform_search(
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Interactive universal search engine with direct keyword prompt & platform tabs."""
+    if update.effective_chat:
+        await cleanup_ephemeral_progress(context, update.effective_chat.id)
     msg = update.effective_message
     query = " ".join(context.args).strip() if (context.args and len(context.args) > 0) else ""
 
@@ -2156,6 +2208,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 end_idx=end_idx,
                 is_last_n=is_last_n,
                 user_id=user_id,
+                context=context,
             )
             return
 
@@ -2203,6 +2256,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 end_idx=end_idx,
                 is_last_n=is_last_n,
                 user_id=user_id,
+                context=context,
             )
             return
 
@@ -2251,6 +2305,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 end_idx=end_idx,
                 req_limit=(end_idx if (start_idx is None and end_idx) else None),
                 user_id=user_id,
+                context=context,
             )
             return
 
@@ -2317,6 +2372,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 end_idx=end_idx,
                 is_last_n=is_last_n,
                 user_id=user_id,
+                context=context,
             )
             return
 
@@ -2630,6 +2686,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
             cat_title=cat_flow.get("cat_title"),
+            context=context,
         )
         return
 
@@ -2899,7 +2956,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
                 buttons.append(row)
 
-            buttons.append([InlineKeyboardButton("🔍 Search Topics by Keyword", callback_data="sp_choose_kw:fm")])
             buttons.append([
                 InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
                 InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
@@ -2944,7 +3000,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
                 buttons.append(row)
 
-            buttons.append([InlineKeyboardButton("🔍 Search MMSTown Topics", callback_data="sp_choose_kw:mmst")])
             buttons.append([
                 InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
                 InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
@@ -3377,33 +3432,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "message_id": query.message.message_id,
         }
 
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚡ Today's Posts", callback_data=f"sp_cdate:{short_id}:{sort_val}:today"),
-                InlineKeyboardButton("📆 Yesterday & Today", callback_data=f"sp_cdate:{short_id}:{sort_val}:yesterday"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{short_id}"),
-                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-            ],
-        ])
-
-        prompt_text = (
-            "<blockquote>"
-            f"💬 <b>{html.escape(cat_title)}</b>\n"
-            f"📊 <b>Total Topics:</b> {total_str}\n"
-            f"🎯 <b>Sort:</b> {sort_label}\n\n"
-            "⚡ <b>Quick Filter by Date (IST):</b>\n"
-            "Tap a button above for instant extraction.\n\n"
-            "✏️ <b>Or Enter Custom Range, Count or Page:</b>\n"
-            "• <code>10</code> ➔ First 10 topics\n"
-            "• <code>1-10</code> ➔ Topics 1 to 10\n"
-            "• <code>10-20</code> ➔ Topics 10 to 20\n"
-            "• <code>page 2</code> ➔ Full Page 2 (25 topics)\n"
-            "• <code>today</code> ➔ Today's uploads\n"
-            "• <code>yesterday</code> ➔ Yesterday & Today"
-            "</blockquote>"
-        )
+        markup = build_category_options_keyboard(short_id, sort_val)
+        prompt_text = format_category_options_card(cat_title, total_str, sort_val)
         await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=markup)
     elif data.startswith("sp_cdate:"):
         _, short_id_str, sort_val, date_mode = data.split(":")
@@ -3443,6 +3473,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             status_msg=query.message,
             user_id=query.from_user.id,
             cat_title=cat_title,
+            context=context,
         )
     elif data.startswith("sp_cstm:"):
         short_id = int(data.split(":")[1])
@@ -3508,6 +3539,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             status_msg=query.message,
             user_id=query.from_user.id,
             cat_title=cat_title,
+            context=context,
         )
     elif data == "noop":
         await query.answer()

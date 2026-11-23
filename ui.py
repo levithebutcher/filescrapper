@@ -61,13 +61,6 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     else:
         emoji = "🎬"
 
-    caption_lines = [f"<blockquote>{emoji} <b>{title}</b></blockquote>"]
-
-    # Tags - Compact code pills
-    if tags:
-        tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
-        caption_lines.append(f"🏷️ {tag_str}")
-
     # Metadata Line: Date • Platform • Category • Duration
     meta_parts = []
     date_display = details.get("date_ist") or details.get("date")
@@ -107,8 +100,16 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     if duration:
         meta_parts.append(f"⏱️ <b>Duration:</b> {html.escape(str(duration))}")
 
+    # Title and Metadata enclosed together in blockquote for a unified, clean aesthetic
+    quote_parts = [f"{emoji} <b>{title}</b>"]
     if meta_parts:
-        caption_lines.append("  •  ".join(meta_parts))
+        quote_parts.append("  •  ".join(meta_parts))
+    caption_lines = ["<blockquote>" + "\n".join(quote_parts) + "</blockquote>"]
+
+    # Tags - Compact code pills
+    if tags:
+        tag_str = " ".join([f"<code>#{html.escape(t.lstrip('#'))}</code>" for t in tags[:5]])
+        caption_lines.append(f"🏷️ {tag_str}")
 
     # Streaming Links Section
     if not raw_links:
@@ -224,3 +225,65 @@ def format_listing_menu_card(
         lines.append(f"\n💡 {extra_tips}")
     lines.append("</blockquote>")
     return "\n".join(lines)
+
+
+def format_category_options_card(
+    cat_title: str,
+    total_str: str = "Available",
+    sort_val: str = "start_date",
+) -> str:
+    """Format the forum category options prompt card (Screenshot 3)."""
+    sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
+    return (
+        "<blockquote>"
+        f"💬 <b>{html.escape(cat_title)}</b>\n"
+        f"📊 <b>Total Topics:</b> {html.escape(str(total_str))}\n"
+        f"🎯 <b>Sort:</b> {sort_label}\n\n"
+        "⚡ <b>Quick Filter by Date (IST):</b>\n"
+        "Tap a button below for instant extraction.\n\n"
+        "✏️ <b>Or Enter Custom Range, Count or Page:</b>\n"
+        "• <code>10</code> ➔ First 10 topics\n"
+        "• <code>1-10</code> ➔ Topics 1 to 10\n"
+        "• <code>10-20</code> ➔ Topics 10 to 20\n"
+        "• <code>page 2</code> ➔ Full Page 2 (25 topics)\n"
+        "• <code>today</code> ➔ Today's uploads\n"
+        "• <code>yesterday</code> ➔ Yesterday & Today"
+        "</blockquote>"
+    )
+
+
+def format_category_completion_card(
+    delivered_count: int,
+    cat_title: str,
+    total_str: str = "Available",
+    sort_val: str = "start_date",
+    stopped: bool = False,
+) -> str:
+    """
+    Format extraction completion combined with the category options card at the bottom.
+    Allows user to immediately request more posts or navigate without scrolling back up.
+    """
+    sort_label = "Upload Date (Start Date)" if sort_val == "start_date" else "Recently Updated"
+    status_header = (
+        f"🛑 <b>Scraping stopped!</b> Delivered: <b>{delivered_count}</b> topic(s)"
+        if stopped
+        else f"✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>{delivered_count}</b> topic(s)"
+    )
+    return (
+        f"<blockquote>{status_header}</blockquote>\n\n"
+        "<blockquote>"
+        f"💬 <b>{html.escape(cat_title)}</b>\n"
+        f"📊 <b>Total Topics:</b> {html.escape(str(total_str))}\n"
+        f"🎯 <b>Sort:</b> {sort_label}\n\n"
+        "⚡ <b>Quick Filter by Date (IST):</b>\n"
+        "Tap a button below for instant extraction.\n\n"
+        "✏️ <b>Or Enter Custom Range, Count or Page:</b>\n"
+        "• <code>10</code> ➔ First 10 topics\n"
+        "• <code>1-10</code> ➔ Topics 1 to 10\n"
+        "• <code>10-20</code> ➔ Topics 10 to 20\n"
+        "• <code>page 2</code> ➔ Full Page 2 (25 topics)\n"
+        "• <code>today</code> ➔ Today's uploads\n"
+        "• <code>yesterday</code> ➔ Yesterday & Today"
+        "</blockquote>"
+    )
+

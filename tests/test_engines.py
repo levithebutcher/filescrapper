@@ -222,7 +222,8 @@ class TestEngines(unittest.TestCase):
             "streaming_links": ["https://streamtape.com/e/abc12345"],
         }
         card = format_post_card(details, user_pref="streamtape")
-        self.assertIn("<blockquote>🎬 <b>Universal Sample Video</b></blockquote>", card)
+        self.assertIn("<blockquote>🎬 <b>Universal Sample Video</b>", card)
+        self.assertIn("⏱️ <b>Duration:</b> 14:20</blockquote>", card)
         self.assertIn("🏷️ <code>#1080p</code> <code>#HD</code>", card)
         self.assertIn("📅 <b>Date:</b> 23 Nov 2026, 10:30 AM IST", card)
         self.assertIn("🏛️ <b>Platform:</b> DropMMS", card)
@@ -253,6 +254,29 @@ class TestEngines(unittest.TestCase):
             res_wp = get_wp_post_details("https://desijugar.me/2026/11/23/dance-video/")
             self.assertEqual(res_wp["platform_name"], "DesiJugar")
             self.assertIsNotNone(res_wp["date_ist"])
+
+    def test_category_cards_and_clean_keyboards(self):
+        """Verify forum category prompt card, completion card, and clean keyboards."""
+        from ui import format_category_options_card, format_category_completion_card
+        from keyboards import build_category_options_keyboard
+
+        opt_card = format_category_options_card("Desi Sex", "1075 Topics", "start_date")
+        self.assertIn("💬 <b>Desi Sex</b>", opt_card)
+        self.assertIn("📊 <b>Total Topics:</b> 1075 Topics", opt_card)
+        self.assertIn("🎯 <b>Sort:</b> Upload Date (Start Date)", opt_card)
+        self.assertIn("⚡ <b>Quick Filter by Date (IST):</b>", opt_card)
+        self.assertIn("✏️ <b>Or Enter Custom Range, Count or Page:</b>", opt_card)
+
+        comp_card = format_category_completion_card(5, "Desi Sex", "1075 Topics", "start_date")
+        self.assertIn("<blockquote>✅ <b>Extraction Complete!</b>\n📁 Delivered: <b>5</b> topic(s)</blockquote>", comp_card)
+        self.assertIn("💬 <b>Desi Sex</b>", comp_card)
+
+        kb = build_category_options_keyboard(42, "start_date")
+        btn_data = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("sp_cdate:42:start_date:today", btn_data)
+        self.assertIn("sp_cdate:42:start_date:yesterday", btn_data)
+        self.assertIn("sp_cat:42", btn_data)
+        self.assertIn("sp_cancel", btn_data)
 
 
 if __name__ == "__main__":

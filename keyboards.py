@@ -331,6 +331,20 @@ def build_model_options_keyboard(short_id: str) -> InlineKeyboardMarkup:
     ])
 
 
+def build_category_options_keyboard(short_id: int | str, sort_val: str = "start_date") -> InlineKeyboardMarkup:
+    """Build the working options keyboard for an IPS forum category (Screenshot 3)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Today's Posts", callback_data=f"sp_cdate:{short_id}:{sort_val}:today"),
+            InlineKeyboardButton("📆 Yesterday & Today", callback_data=f"sp_cdate:{short_id}:{sort_val}:yesterday"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=f"sp_cat:{short_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
 def build_channel_management_keyboard() -> InlineKeyboardMarkup:
     """Buttons for /channels management."""
     return InlineKeyboardMarkup([
