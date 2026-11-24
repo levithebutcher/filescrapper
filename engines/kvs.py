@@ -295,6 +295,84 @@ def search_kvs(site_key: str, query: str, page: int = 1, limit: int = 25) -> lis
     return get_kvs_listing_items(search_url, page=page, limit=limit)
 
 
+def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
+    """Search models/tags on KVS sites (LiveCam style)."""
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    encoded_q = quote_plus(clean_q)
+    models = []
+    seen = set()
+
+    if site_key == "xvideotube":
+        base_domain = "https://x-video.tube"
+        search_urls = [
+            f"{base_domain}/search/{encoded_q}/",
+            f"{base_domain}/models/?query={encoded_q}",
+        ]
+    elif site_key == "viralxxxporn":
+        base_domain = "https://viralxxxporn.com"
+        search_urls = [
+            f"{base_domain}/models/?query={encoded_q}",
+            f"{base_domain}/search/{encoded_q}/",
+        ]
+    else:
+        base_domain = "https://hornysapiens.com"
+        search_urls = [
+            f"{base_domain}/models/?query={encoded_q}",
+            f"{base_domain}/search/{encoded_q}/",
+        ]
+
+    for s_url in search_urls:
+        soup = _fetch_soup(s_url)
+        if not soup:
+            continue
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if "/models/" in href or "/tags/" in href:
+                full_url = urljoin(base_domain, href).split("?")[0].rstrip("/") + "/"
+                if full_url in seen or full_url.endswith("/models/") or full_url.endswith("/tags/"):
+                    continue
+                parts = full_url.rstrip("/").split("/")
+                slug = parts[-1]
+                if not slug or slug in seen:
+                    continue
+                seen.add(slug)
+                seen.add(full_url)
+
+                # Clean name
+                name = a.get("title") or a.get_text(strip=True)
+                # Strip view/count noise if embedded in text
+                name = re.sub(r"^\d+%|\d+[\d,.]*\s*(?:views|videos)?|no image", "", name, flags=re.I).strip()
+                if not name or len(name) < 2:
+                    name = slug.replace("-", " ").title()
+
+                models.append({
+                    "name": name,
+                    "url": full_url,
+                    "slug": slug,
+                })
+                if len(models) >= limit:
+                    break
+        if len(models) >= limit:
+            break
+
+    # If no models found, check candidate slug
+    if not models:
+        cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-"))
+        cand_url = f"{base_domain}/models/{cand_slug}/"
+        soup = _fetch_soup(cand_url)
+        if soup and soup.title and "404" not in soup.title.get_text():
+            models.append({
+                "name": clean_q.title(),
+                "url": cand_url,
+                "slug": cand_slug,
+            })
+
+    return models
+
+
 class KvsEngine(BaseEngine):
     """Unified KVS Tube Engine."""
     name: str = "KVSTube"

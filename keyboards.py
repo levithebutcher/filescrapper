@@ -21,20 +21,17 @@ def build_stop_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_navigation_keyboard() -> InlineKeyboardMarkup:
-    """Persistent navigation buttons shown after completed extractions."""
+    """Persistent navigation buttons shown after completed extractions (clean Back and Cancel only)."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
-            InlineKeyboardButton("📁 Categories", callback_data="sp_choose:fm"),
-        ],
-        [
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+            InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])
 
 
 def build_back_cancel_row(
-    back_callback: str = "cb_main_menu",
+    back_callback: str = "cb_search",
     cancel_callback: str = "sp_cancel",
 ) -> list[InlineKeyboardButton]:
     """Reusable Back + Cancel button pair."""
@@ -45,7 +42,7 @@ def build_back_cancel_row(
 
 
 def build_back_cancel_keyboard(
-    back_callback: str = "cb_main_menu",
+    back_callback: str = "cb_search",
     cancel_callback: str = "sp_cancel",
 ) -> InlineKeyboardMarkup:
     """Standard 1-row Back and Cancel inline keyboard."""
@@ -81,8 +78,8 @@ def build_card_keyboard(details: dict, user_pref: str = "streamtape") -> InlineK
         buttons.append(row1)
 
     buttons.append([
-        InlineKeyboardButton("🔍 Search Again", callback_data="cb_search"),
-        InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+        InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
     ])
     return InlineKeyboardMarkup(buttons)
 
@@ -250,74 +247,70 @@ def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") 
 
 
 def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
-    """Hub keyboard for LeakedZone (Search top, Newest/Most Viewed/Longest, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data=f"lz_search:{model_slug}"),
-        ],
-        [
-            InlineKeyboardButton("🆕 Newest", callback_data=f"lz_sort:{model_slug}:newest"),
-            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"lz_sort:{model_slug}:views"),
-            InlineKeyboardButton("⏱️ Longest", callback_data=f"lz_sort:{model_slug}:longest"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
+    """Hub keyboard for LeakedZone (Search top if no model, Newest/Most Viewed/Longest, Back/Cancel)."""
+    rows = []
+    if not model_slug:
+        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:lz")])
+    rows.append([
+        InlineKeyboardButton("🆕 Newest", callback_data=f"lz_sort:{model_slug}:newest"),
+        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"lz_sort:{model_slug}:views"),
+        InlineKeyboardButton("⏱️ Longest", callback_data=f"lz_sort:{model_slug}:longest"),
     ])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
-    """Hub keyboard for X-Video Tube (Search top, Latest/Longest, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data=f"xvid_search:{tag_or_slug}"),
-        ],
-        [
-            InlineKeyboardButton("🆕 Latest", callback_data=f"xvid_sort:{tag_or_slug}:latest"),
-            InlineKeyboardButton("⏱️ Longest", callback_data=f"xvid_sort:{tag_or_slug}:longest"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
+    """Hub keyboard for X-Video Tube (Search top if no model, Latest/Longest, Back/Cancel)."""
+    rows = []
+    if not tag_or_slug:
+        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:xvid")])
+    rows.append([
+        InlineKeyboardButton("🆕 Latest", callback_data=f"xvid_sort:{tag_or_slug}:latest"),
+        InlineKeyboardButton("⏱️ Longest", callback_data=f"xvid_sort:{tag_or_slug}:longest"),
     ])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
-    """Hub keyboard for HornySapiens & ViralXXXPorn (Search top, Latest/Most Viewed/Longest, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data=f"hs_search:{model_slug}"),
-        ],
-        [
-            InlineKeyboardButton("🆕 Latest", callback_data=f"hs_sort:{model_slug}:latest"),
-            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"hs_sort:{model_slug}:views"),
-            InlineKeyboardButton("⏱️ Longest", callback_data=f"hs_sort:{model_slug}:longest"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
+    """Hub keyboard for HornySapiens & ViralXXXPorn (Search top if no model, Latest/Most Viewed/Longest, Back/Cancel)."""
+    rows = []
+    if not model_slug:
+        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:hs")])
+    rows.append([
+        InlineKeyboardButton("🆕 Latest", callback_data=f"hs_sort:{model_slug}:latest"),
+        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"hs_sort:{model_slug}:views"),
+        InlineKeyboardButton("⏱️ Longest", callback_data=f"hs_sort:{model_slug}:longest"),
     ])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_thotchicks_hub_keyboard(actor_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
-    """Hub keyboard for ThotChicks (Search top, Newest/Most Viewed/Longest, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data=f"tc_search:{actor_slug}"),
-        ],
-        [
-            InlineKeyboardButton("🆕 Newest", callback_data=f"tc_sort:{actor_slug}:newest"),
-            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"tc_sort:{actor_slug}:views"),
-            InlineKeyboardButton("⏱️ Longest", callback_data=f"tc_sort:{actor_slug}:longest"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
+    """Hub keyboard for ThotChicks (Search top if no actor, Newest/Most Viewed/Longest, Back/Cancel)."""
+    rows = []
+    if not actor_slug:
+        rows.append([InlineKeyboardButton("🔍 Search Actors", callback_data="sp_choose:tc")])
+    rows.append([
+        InlineKeyboardButton("🆕 Newest", callback_data=f"tc_sort:{actor_slug}:newest"),
+        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"tc_sort:{actor_slug}:views"),
+        InlineKeyboardButton("⏱️ Longest", callback_data=f"tc_sort:{actor_slug}:longest"),
     ])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_mmsdesi_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
@@ -439,7 +432,7 @@ def build_slice_selection_keyboard(
     short_id: str,
     counts: list[int] = None,
     prefix: str = "sp_vrun",
-    back_callback: str = "cb_main_menu",
+    back_callback: str = "cb_search",
 ) -> InlineKeyboardMarkup:
     """Range selection keyboard strictly with only Back and Cancel buttons (no slice buttons)."""
     return InlineKeyboardMarkup([
@@ -468,16 +461,27 @@ def build_model_sort_keyboard(short_id: str | int, back_callback: str = "cb_sear
     ])
 
 
-def build_livecam_models_keyboard(models: list[dict], back_callback: str = "cb_search") -> InlineKeyboardMarkup:
-    """Clean model list keyboard for LiveCam (Card 2) with only model buttons and Back/Cancel."""
+def build_models_keyboard(
+    models: list[dict],
+    callback_prefix: str = "sp_mdl",
+    back_callback: str = "cb_search",
+    icon: str = "📹",
+) -> InlineKeyboardMarkup:
+    """Generic model/actor list keyboard (LiveCam, LeakedZone, KVS, ThotChicks) with only Back and Cancel."""
     buttons = []
     for m in models:
-        buttons.append([InlineKeyboardButton(f"📹 {m['name']}", callback_data=f"sp_mdl:{m['short_id']}")])
+        sid = m.get("short_id") or m.get("slug")
+        buttons.append([InlineKeyboardButton(f"{icon} {m['name']}", callback_data=f"{callback_prefix}:{sid}")])
     buttons.append([
         InlineKeyboardButton("🔙 Back", callback_data=back_callback),
         InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
     ])
     return InlineKeyboardMarkup(buttons)
+
+
+def build_livecam_models_keyboard(models: list[dict], back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Clean model list keyboard for LiveCam (Card 2) with only model buttons and Back/Cancel."""
+    return build_models_keyboard(models, callback_prefix="sp_mdl", back_callback=back_callback, icon="📹")
 
 
 def build_mmsvibex_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:

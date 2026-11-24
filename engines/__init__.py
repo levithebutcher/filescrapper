@@ -117,6 +117,7 @@ from engines.leakedzone import (
     get_leakedzone_video_details,
     get_leakedzone_model_videos,
     search_leakedzone,
+    search_leakedzone_models,
 )
 
 from engines.kvs import (
@@ -128,6 +129,7 @@ from engines.kvs import (
     get_kvs_video_details,
     get_kvs_listing_items,
     search_kvs,
+    search_kvs_models,
 )
 
 from engines.thotchicks import (
@@ -138,6 +140,7 @@ from engines.thotchicks import (
     get_thotchicks_video_details,
     get_thotchicks_listing_items,
     search_thotchicks,
+    search_thotchicks_actors,
 )
 
 from engines.mmsdesi import (

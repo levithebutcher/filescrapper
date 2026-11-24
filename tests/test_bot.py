@@ -1069,7 +1069,8 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         nav_kb = get_navigation_keyboard()
         buttons = [btn.callback_data for row in nav_kb.inline_keyboard for btn in row]
         self.assertIn("cb_search", buttons)
-        self.assertIn("cb_main_menu", buttons)
+        self.assertIn("sp_cancel", buttons)
+        self.assertNotIn("cb_main_menu", buttons)
 
         update = MagicMock()
         query = AsyncMock()
@@ -1109,7 +1110,8 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(kwargs.get("reply_markup"))
         nav_buttons = [btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row]
         self.assertIn("cb_search", nav_buttons)
-        self.assertIn("cb_main_menu", nav_buttons)
+        self.assertIn("sp_cancel", nav_buttons)
+        self.assertNotIn("cb_main_menu", nav_buttons)
 
     @patch("bot.execute_platform_search")
     async def test_sp_choose_lc_and_vibex_search_flow(self, mock_search):

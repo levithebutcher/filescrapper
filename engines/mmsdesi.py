@@ -8,7 +8,9 @@ Trending, Desi New, Desi Old, Tango Strip.
 
 import re
 import html
+import json
 import logging
+import urllib.request
 from urllib.parse import urljoin, quote_plus
 from bs4 import BeautifulSoup
 
@@ -240,10 +242,77 @@ def get_mmsdesi_category_videos(
 
 
 def search_mmsdesi(query: str, page: int = 1, limit: int = 25) -> list[dict]:
-    """Search videos on MMSDesi."""
-    encoded_q = quote_plus(query.strip())
-    search_url = f"https://www.mmsdesi.me/search?q={encoded_q}"
-    return get_mmsdesi_category_videos(search_url, page=page, limit=limit)
+    """Search videos on MMSDesi via official internal API."""
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    encoded_q = quote_plus(clean_q)
+    api_url = f"https://www.mmsdesi.me/api/videos?search={encoded_q}&page={page}&limit={limit}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-App-Client": "mms-web-v1",
+        "Accept": "application/json, text/plain, */*",
+    }
+
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            if isinstance(data, list):
+                raw_videos = data
+            elif isinstance(data, dict):
+                raw_videos = data.get("videos") or data.get("data") or data.get("items") or data.get("results") or []
+                if isinstance(raw_videos, dict):
+                    raw_videos = raw_videos.get("items") or raw_videos.get("videos") or []
+            else:
+                raw_videos = []
+
+            items = []
+            for v in raw_videos:
+                if not isinstance(v, dict):
+                    continue
+                title = v.get("title") or "MMSDesi Video"
+                slug = v.get("slug")
+                if not slug:
+                    continue
+
+                cat_info = v.get("category") or {}
+                if isinstance(cat_info, dict):
+                    cat_slug = cat_info.get("slug") or "trending"
+                else:
+                    cat_slug = str(cat_info) or "trending"
+                video_url = f"https://www.mmsdesi.me/{cat_slug}/{slug}"
+
+                thumb = v.get("thumbnailUrl") or v.get("posterUrl")
+                thumb = _clean_highres_image_url(thumb) if thumb else None
+
+                dur_sec = v.get("duration")
+                dur_str = None
+                if isinstance(dur_sec, (int, float)) and dur_sec > 0:
+                    dur_int = int(dur_sec)
+                    dur_str = f"{dur_int // 60:02d}:{dur_int % 60:02d}"
+
+                created_at = v.get("createdAt")
+                d_ist = format_date_ist(created_at) if created_at else None
+
+                items.append({
+                    "title": title,
+                    "url": video_url,
+                    "thumbnail": thumb,
+                    "duration": dur_str,
+                    "date": created_at,
+                    "date_ist": d_ist or "Recently",
+                })
+                if len(items) >= limit:
+                    break
+            return items
+    except Exception as e:
+        logger.warning(f"Error querying MMSDesi search API: {e}")
+        # Fallback to category crawl
+        search_url = f"https://www.mmsdesi.me/search?q={encoded_q}"
+        return get_mmsdesi_category_videos(search_url, page=page, limit=limit)
 
 
 class MmsDesiEngine(BaseEngine):

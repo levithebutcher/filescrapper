@@ -186,8 +186,14 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         d_esc = html.escape(str(details.get("date_ist") or "Recently"))
         best_mirror = None
         if raw_links:
-            _, filtered_links, _ = filter_links_by_preference(raw_links, user_pref)
-            best_mirror = filtered_links[0] if filtered_links else raw_links[0]
+            # First priority: Streamtape and all its mirror domains
+            st_links = [l for l in raw_links if get_host_key(l) == "streamtape"]
+            if st_links:
+                best_mirror = st_links[0]
+            else:
+                # Fallback following PROVIDER_PRIORITY (lplaygo/luluvido, cloudfam, etc.)
+                _, filtered_links, _ = filter_links_by_preference(raw_links, "streamtape")
+                best_mirror = filtered_links[0] if filtered_links else raw_links[0]
 
         maza_lines = [
             f"📌 <b>Title:</b> {t_esc}",

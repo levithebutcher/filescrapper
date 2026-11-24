@@ -145,6 +145,7 @@ from engines.leakedzone import (
     get_leakedzone_video_details,
     get_leakedzone_model_videos,
     search_leakedzone,
+    search_leakedzone_models,
 )
 
 from engines.kvs import (
@@ -156,6 +157,7 @@ from engines.kvs import (
     get_kvs_video_details,
     get_kvs_listing_items,
     search_kvs,
+    search_kvs_models,
 )
 
 from engines.thotchicks import (
@@ -166,6 +168,7 @@ from engines.thotchicks import (
     get_thotchicks_video_details,
     get_thotchicks_listing_items,
     search_thotchicks,
+    search_thotchicks_actors,
 )
 
 from engines.mmsdesi import (
@@ -293,6 +296,9 @@ __all__ = [
     "get_livecam_video_details",
     "format_livecam_card",
     "search_livecam_models",
+    "search_leakedzone_models",
+    "search_kvs_models",
+    "search_thotchicks_actors",
     "EngineRegistry",
     "registry",
     "get_engine_for_url",

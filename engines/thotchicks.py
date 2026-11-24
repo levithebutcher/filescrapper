@@ -228,6 +228,59 @@ def search_thotchicks(query: str, page: int = 1, limit: int = 25) -> list[dict]:
     return get_thotchicks_listing_items(search_url, page=page, limit=limit)
 
 
+def search_thotchicks_actors(query: str, limit: int = 10) -> list[dict]:
+    """Search actors on ThotChicks (LiveCam style)."""
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    actors = []
+    seen = set()
+
+    # 1. Candidate direct slug
+    cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-"))
+    cand_url = f"https://thotchicks.com/actor/{cand_slug}/"
+    soup = _fetch_soup(cand_url)
+    if soup and soup.title and "404" not in soup.title.get_text() and "not found" not in soup.title.get_text().lower():
+        name = clean_q.title()
+        if soup.title:
+            t_raw = soup.title.get_text(strip=True)
+            if "OnlyFans" in t_raw:
+                name = t_raw.split("OnlyFans")[0].strip(" –-")
+        seen.add(cand_slug)
+        actors.append({
+            "name": name,
+            "url": cand_url,
+            "slug": cand_slug,
+        })
+
+    # 2. Search query page extraction for actor links
+    if len(actors) < limit:
+        search_url = f"https://thotchicks.com/?s={quote_plus(clean_q)}"
+        s_soup = _fetch_soup(search_url)
+        if s_soup:
+            for a in s_soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if "/actor/" in href:
+                    full_url = urljoin("https://thotchicks.com", href).split("?")[0].rstrip("/") + "/"
+                    if full_url.endswith("/actors/"):
+                        continue
+                    slug = full_url.rstrip("/").split("/")[-1]
+                    if not slug or slug in seen:
+                        continue
+                    seen.add(slug)
+                    name = a.get_text(strip=True) or slug.replace("-", " ").title()
+                    actors.append({
+                        "name": name,
+                        "url": full_url,
+                        "slug": slug,
+                    })
+                    if len(actors) >= limit:
+                        break
+
+    return actors
+
+
 class ThotChicksEngine(BaseEngine):
     """ThotChicks Scraper Engine."""
     name: str = "ThotChicks"

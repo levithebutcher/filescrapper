@@ -235,8 +235,8 @@ class TestEngines(unittest.TestCase):
         kb = build_card_keyboard(details, user_pref="streamtape")
         self.assertEqual(kb.inline_keyboard[0][0].text, "🎬 Watch Video")
         self.assertEqual(kb.inline_keyboard[0][0].url, "https://streamtape.com/e/abc12345")
-        self.assertEqual(kb.inline_keyboard[1][0].text, "🔍 Search Again")
-        self.assertEqual(kb.inline_keyboard[1][1].text, "🏛️ Main Menu")
+        self.assertEqual(kb.inline_keyboard[1][0].text, "🔙 Back")
+        self.assertEqual(kb.inline_keyboard[1][1].text, "❌ Cancel")
 
     def test_platform_metadata_in_invision_and_wordpress(self):
         """Verify platform_name is automatically attached in engine post details."""
@@ -505,32 +505,36 @@ class TestEngines(unittest.TestCase):
             build_mmsmaza_hub_keyboard,
         )
 
-        # 1. LeakedZone: Search top, Newest/Most Viewed/Longest, Back/Cancel
+        # 1. LeakedZone: Search top if no model, or model profile sorting buttons
+        lz_hub = build_leakedzone_hub_keyboard("")
+        self.assertEqual(lz_hub.inline_keyboard[0][0].text, "🔍 Search Models")
         lz_kb = build_leakedzone_hub_keyboard("jasmine")
-        self.assertEqual(lz_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
-        self.assertEqual(len(lz_kb.inline_keyboard[1]), 3)
-        self.assertEqual(lz_kb.inline_keyboard[1][0].text, "🆕 Newest")
-        self.assertEqual(lz_kb.inline_keyboard[1][1].text, "👁️ Most Viewed")
-        self.assertEqual(lz_kb.inline_keyboard[1][2].text, "⏱️ Longest")
-        self.assertEqual(lz_kb.inline_keyboard[2][0].text, "🔙 Back")
-        self.assertEqual(lz_kb.inline_keyboard[2][1].text, "❌ Cancel")
+        self.assertEqual(len(lz_kb.inline_keyboard[0]), 3)
+        self.assertEqual(lz_kb.inline_keyboard[0][0].text, "🆕 Newest")
+        self.assertEqual(lz_kb.inline_keyboard[0][1].text, "👁️ Most Viewed")
+        self.assertEqual(lz_kb.inline_keyboard[0][2].text, "⏱️ Longest")
+        self.assertEqual(lz_kb.inline_keyboard[1][0].text, "🔙 Back")
+        self.assertEqual(lz_kb.inline_keyboard[1][1].text, "❌ Cancel")
 
-        # 2. X-Video: Search top, Latest/Longest, Back/Cancel
+        # 2. X-Video: Search top if no model, or model profile sorting buttons
+        xv_hub = build_xvideo_hub_keyboard("")
+        self.assertEqual(xv_hub.inline_keyboard[0][0].text, "🔍 Search Models")
         xv_kb = build_xvideo_hub_keyboard("jasmine")
-        self.assertEqual(xv_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
-        self.assertEqual(len(xv_kb.inline_keyboard[1]), 2)
-        self.assertEqual(xv_kb.inline_keyboard[1][0].text, "🆕 Latest")
-        self.assertEqual(xv_kb.inline_keyboard[1][1].text, "⏱️ Longest")
+        self.assertEqual(len(xv_kb.inline_keyboard[0]), 2)
+        self.assertEqual(xv_kb.inline_keyboard[0][0].text, "🆕 Latest")
+        self.assertEqual(xv_kb.inline_keyboard[0][1].text, "⏱️ Longest")
 
-        # 3. HornySapiens: Search top, Latest/Most Viewed/Longest, Back/Cancel
+        # 3. HornySapiens: Search top if no model, or model profile sorting buttons
+        hs_hub = build_hornysapiens_hub_keyboard("")
+        self.assertEqual(hs_hub.inline_keyboard[0][0].text, "🔍 Search Models")
         hs_kb = build_hornysapiens_hub_keyboard("jasmine")
-        self.assertEqual(hs_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
-        self.assertEqual(len(hs_kb.inline_keyboard[1]), 3)
+        self.assertEqual(len(hs_kb.inline_keyboard[0]), 3)
 
-        # 4. ThotChicks: Search top, Newest/Most Viewed/Longest, Back/Cancel
+        # 4. ThotChicks: Search top if no actor, or actor profile sorting buttons
+        tc_hub = build_thotchicks_hub_keyboard("")
+        self.assertEqual(tc_hub.inline_keyboard[0][0].text, "🔍 Search Actors")
         tc_kb = build_thotchicks_hub_keyboard("jasmine")
-        self.assertEqual(tc_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
-        self.assertEqual(len(tc_kb.inline_keyboard[1]), 3)
+        self.assertEqual(len(tc_kb.inline_keyboard[0]), 3)
 
         # 5. MMSDesi: Search top, 4 Categories, Back/Cancel
         desi_kb = build_mmsdesi_hub_keyboard()
@@ -544,10 +548,123 @@ class TestEngines(unittest.TestCase):
         maza_kb = build_mmsmaza_hub_keyboard()
         self.assertEqual(maza_kb.inline_keyboard[0][0].text, "🔍 Search MMS")
         self.assertEqual(maza_kb.inline_keyboard[1][0].text, "🆕 Newest Releases")
+        self.assertEqual(maza_kb.inline_keyboard[1][0].text, "🆕 Newest Releases")
         self.assertEqual(maza_kb.inline_keyboard[1][1].text, "📂 Categories")
         btn_texts = [b.text for row in maza_kb.inline_keyboard for b in row]
         self.assertNotIn("🔥 Most Viewed", btn_texts)
         self.assertNotIn("⏱️ Longest", btn_texts)
+
+    def test_search_leakedzone_models(self):
+        """Test search_leakedzone_models finds profiles via candidate slug and search results."""
+        from engines.leakedzone import search_leakedzone_models
+
+        html_content = """
+        <html><body>
+            <a href="/jasminesherni">Jasmine Sherni</a>
+            <a href="/actor/other-model">Other Model</a>
+        </body></html>
+        """
+        with patch("engines.leakedzone._fetch_soup", return_value=BeautifulSoup(html_content, "html.parser")):
+            models = search_leakedzone_models("jasmine", limit=5)
+            self.assertGreaterEqual(len(models), 1)
+            self.assertEqual(models[0]["name"], "Jasmine Sherni")
+            self.assertEqual(models[0]["url"], "https://leakedzone.com/jasminesherni")
+
+    def test_search_kvs_models(self):
+        """Test search_kvs_models extracts model slugs and strips noise."""
+        from engines.kvs import search_kvs_models
+
+        html_content = """
+        <html><body>
+            <a href="/models/jasmine-sherni/" title="Jasmine Sherni 150k views">Jasmine Sherni 150k views</a>
+            <a href="/tags/jasminesherni-onlyfans-leaked/">Jasmine Sherni Leaked</a>
+        </body></html>
+        """
+        with patch("engines.kvs._fetch_soup", return_value=BeautifulSoup(html_content, "html.parser")):
+            models = search_kvs_models("hornysapiens", "jasmine", limit=5)
+            self.assertGreaterEqual(len(models), 1)
+            self.assertEqual(models[0]["slug"], "jasmine-sherni")
+
+    def test_search_thotchicks_actors(self):
+        """Test search_thotchicks_actors discovers actor links."""
+        from engines.thotchicks import search_thotchicks_actors
+
+        html_content = """
+        <html><body>
+            <a href="https://thotchicks.com/actor/jasmine-sherni/">Jasmine Sherni</a>
+        </body></html>
+        """
+        with patch("engines.thotchicks._fetch_soup", return_value=BeautifulSoup(html_content, "html.parser")):
+            actors = search_thotchicks_actors("jasmine", limit=5)
+            self.assertGreaterEqual(len(actors), 1)
+            self.assertEqual(actors[0]["slug"], "jasmine-sherni")
+
+    def test_search_mmsdesi_api(self):
+        """Test search_mmsdesi queries internal JSON API correctly."""
+        from engines.mmsdesi import search_mmsdesi
+        import io
+        import json
+
+        mock_json = json.dumps({
+            "videos": [
+                {
+                    "title": "College Girl Hotel MMS",
+                    "slug": "college-girl-hotel-mms",
+                    "category": {"slug": "desi-new"},
+                    "thumbnailUrl": "https://cdn.mmsdesi.me/thumb.jpg",
+                    "duration": 495,
+                    "createdAt": "2026-11-24T12:00:00Z"
+                }
+            ]
+        }).encode("utf-8")
+
+        mock_resp = io.BytesIO(mock_json)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            results = search_mmsdesi("college", page=1, limit=10)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["title"], "College Girl Hotel MMS")
+            self.assertEqual(results[0]["url"], "https://www.mmsdesi.me/desi-new/college-girl-hotel-mms")
+            self.assertEqual(results[0]["duration"], "08:15")
+
+    def test_mmsmaza_streamtape_mirror_priority(self):
+        """Test MMSMaza delivers Streamtape when present, or next available mirror."""
+        from ui import format_post_card
+
+        # 1. When Streamtape is present alongside others
+        details_with_st = {
+            "site": "mmsmaza",
+            "title": "Indian Housewife Bathroom Video",
+            "category": "Indian Leaks",
+            "duration": "08:15",
+            "date_ist": "Today",
+            "post_url": "https://mmsmaza.im/post-123/",
+            "streaming_links": [
+                "https://cloudfam.io/e/8x9q21az",
+                "https://luluvido.com/ryrvym3ce2c4",
+                "https://shavetape.cash/v/p1lm4vzAwYclGK",
+            ],
+        }
+        card_st = format_post_card(details_with_st)
+        self.assertIn("https://shavetape.cash/v/p1lm4vzAwYclGK", card_st)
+        self.assertNotIn("https://cloudfam.io/e/8x9q21az", card_st)
+        self.assertNotIn("https://luluvido.com/ryrvym3ce2c4", card_st)
+
+        # 2. When Streamtape is absent, fall back to next available priority (luluvido/lplaygo)
+        details_without_st = {
+            "site": "mmsmaza",
+            "title": "Indian Housewife Bathroom Video",
+            "category": "Indian Leaks",
+            "duration": "08:15",
+            "date_ist": "Today",
+            "post_url": "https://mmsmaza.im/post-123/",
+            "streaming_links": [
+                "https://cloudfam.io/e/8x9q21az",
+                "https://luluvido.com/ryrvym3ce2c4",
+            ],
+        }
+        card_fallback = format_post_card(details_without_st)
+        self.assertIn("https://luluvido.com/ryrvym3ce2c4", card_fallback)
+        self.assertNotIn("https://cloudfam.io/e/8x9q21az", card_fallback)
 
 
 if __name__ == "__main__":
