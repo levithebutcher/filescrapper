@@ -505,7 +505,10 @@ def _fetch_soup(url: str) -> BeautifulSoup:
     except requests.exceptions.HTTPError as e:
         status_code = e.response.status_code if e.response is not None else "Unknown"
         reason = e.response.reason if e.response is not None else str(e)
-        logger.error(f"HTTP error for {url}: {status_code} - {reason}")
+        if status_code == 404:
+            logger.debug(f"HTTP 404 for {url}: {reason}")
+        else:
+            logger.error(f"HTTP error for {url}: {status_code} - {reason}")
         raise RuntimeError(f"HTTP Error {status_code}: {reason}") from e
     except Exception as e:
         logger.error(f"Unexpected error fetching {url}: {e}")

@@ -1550,6 +1550,74 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         cb_query.edit_message_text.assert_called_once()
         self.assertIn("Search Mode Updated to Model Profile Search (Default)", cb_query.edit_message_text.call_args[0][0])
 
+    @patch("bot.get_kvs_listing_items")
+    async def test_xvid_sort_and_pagination(self, mock_kvs):
+        """Test X-Video sorting returns Next button when 10 items found, and xvid_pg fetches page 2."""
+        from bot import callback_query_handler
+        import db
+
+        # Mock 10 videos returned on page 1
+        mock_kvs.return_value = [
+            {"title": f"Video {i}", "url": f"https://x-video.tube/video/{i}/", "duration": "10:00"}
+            for i in range(1, 11)
+        ]
+
+        # Register a short_id for a tag URL
+        short_id = db.get_or_create_short_id("https://x-video.tube/tags/jasminesherni-onlyfans-leaked/videos/")
+
+        context = MagicMock()
+        context.user_data = {}
+
+        # 1. Tap xvid_sort
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = f"xvid_sort:{short_id}:latest"
+        query.message.chat_id = 12345
+        query.message.message_id = 999
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+
+        mock_kvs.assert_called_once_with(
+            "https://x-video.tube/tags/jasminesherni-onlyfans-leaked/videos/",
+            "latest",
+            1,
+            10,
+        )
+        query.edit_message_text.assert_called_once()
+        call_args = query.edit_message_text.call_args
+        reply_markup = call_args[1]["reply_markup"]
+        btn_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
+        btn_callbacks = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+
+        # Verify Next button is present!
+        self.assertIn("Next ➡️", btn_texts)
+        self.assertIn(f"xvid_pg:{short_id}:latest:2", btn_callbacks)
+
+        # 2. Tap Next (xvid_pg page 2)
+        mock_kvs.reset_mock()
+        mock_kvs.return_value = [
+            {"title": "Video 11", "url": "https://x-video.tube/video/11/", "duration": "12:00"}
+        ]
+        query_pg2 = AsyncMock()
+        query_pg2.data = f"xvid_pg:{short_id}:latest:2"
+        query_pg2.message.chat_id = 12345
+        query_pg2.message.message_id = 999
+        update.callback_query = query_pg2
+
+        await callback_query_handler(update, context)
+
+        mock_kvs.assert_called_once_with(
+            "https://x-video.tube/tags/jasminesherni-onlyfans-leaked/videos/",
+            "latest",
+            2,
+            10,
+        )
+        call_args_pg2 = query_pg2.edit_message_text.call_args
+        btn_texts_pg2 = [btn.text for row in call_args_pg2[1]["reply_markup"].inline_keyboard for btn in row]
+        # Verify Previous button is present on page 2!
+        self.assertIn("⬅️ Previous", btn_texts_pg2)
+
 
 if __name__ == "__main__":
     unittest.main()

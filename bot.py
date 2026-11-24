@@ -1978,11 +1978,21 @@ async def execute_platform_search(
                 f"<i>Matching '{html.escape(clean_query)}'</i>"
                 "</blockquote>"
             )
-            await status_msg.edit_text(
-                card_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
+            try:
+                await status_msg.edit_text(
+                    card_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.debug(f"edit_text failed ({e}), falling back to send_message")
+                if chat_id and context:
+                    status_msg = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=card_text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=markup,
+                    )
         else:
             # Direct video search mode (Previous Github update)
             try:
@@ -2075,11 +2085,21 @@ async def execute_platform_search(
                 f"<i>Matching '{html.escape(clean_query)}'</i>"
                 "</blockquote>"
             )
-            await status_msg.edit_text(
-                card_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
+            try:
+                await status_msg.edit_text(
+                    card_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.debug(f"edit_text failed ({e}), falling back to send_message")
+                if chat_id and context:
+                    status_msg = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=card_text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=markup,
+                    )
         else:
             # Direct video search mode (Previous Github update)
             try:
@@ -2174,11 +2194,21 @@ async def execute_platform_search(
                 f"<i>Matching '{html.escape(clean_query)}'</i>"
                 "</blockquote>"
             )
-            await status_msg.edit_text(
-                card_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
+            try:
+                await status_msg.edit_text(
+                    card_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.debug(f"edit_text failed ({e}), falling back to send_message")
+                if chat_id and context:
+                    status_msg = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=card_text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=markup,
+                    )
         else:
             # Direct video search mode (Previous Github update)
             try:
@@ -2271,11 +2301,21 @@ async def execute_platform_search(
                 f"<i>Matching '{html.escape(clean_query)}'</i>"
                 "</blockquote>"
             )
-            await status_msg.edit_text(
-                card_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup,
-            )
+            try:
+                await status_msg.edit_text(
+                    card_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.debug(f"edit_text failed ({e}), falling back to send_message")
+                if chat_id and context:
+                    status_msg = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=card_text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=markup,
+                    )
         else:
             # Direct video search mode (Previous Github update)
             try:
@@ -5088,10 +5128,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         url = db.get_url_from_short_id(int(target)) if target.isdigit() else target
         slug = target
         if url and (url.startswith("http://") or url.startswith("https://")):
-            slug = url.rstrip("/").split("/")[-1]
+            parts_u = [p for p in url.strip("/").split("/") if p and p not in ("video", "videos")]
+            slug = parts_u[-1] if parts_u else target
         model_name = slug.replace("-", " ").replace("_", " ").title()
         back_cb = "sp_back_lz" if context.user_data.get("last_lz_query") else "cb_search"
-        markup = build_leakedzone_hub_keyboard(model_slug=slug, back_callback=back_cb)
+        markup = build_leakedzone_hub_keyboard(model_slug=target, back_callback=back_cb)
         card_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
@@ -5108,10 +5149,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         url = db.get_url_from_short_id(int(target)) if target.isdigit() else target
         slug = target
         if url and (url.startswith("http://") or url.startswith("https://")):
-            slug = url.rstrip("/").split("/")[-1]
+            parts_u = [p for p in url.strip("/").split("/") if p and p not in ("videos", "video", "tags", "models")]
+            slug = parts_u[-1] if parts_u else target
         model_name = slug.replace("-", " ").replace("_", " ").title()
         back_cb = "sp_back_xvid" if context.user_data.get("last_xvid_query") else "cb_search"
-        markup = build_xvideo_hub_keyboard(tag_or_slug=slug, back_callback=back_cb)
+        markup = build_xvideo_hub_keyboard(tag_or_slug=target, back_callback=back_cb)
         card_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
@@ -5127,10 +5169,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         url = db.get_url_from_short_id(int(target)) if target.isdigit() else target
         slug = target
         if url and (url.startswith("http://") or url.startswith("https://")):
-            slug = url.rstrip("/").split("/")[-1]
+            parts_u = [p for p in url.strip("/").split("/") if p and p not in ("videos", "video", "models", "tags")]
+            slug = parts_u[-1] if parts_u else target
         model_name = slug.replace("-", " ").replace("_", " ").title()
         back_cb = "sp_back_hs" if context.user_data.get("last_hs_query") else "cb_search"
-        markup = build_hornysapiens_hub_keyboard(model_slug=slug, back_callback=back_cb)
+        markup = build_hornysapiens_hub_keyboard(model_slug=target, back_callback=back_cb)
         card_text = (
             "<blockquote>"
             f"📹 <b>{html.escape(model_name)}</b>\n"
@@ -5146,10 +5189,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         url = db.get_url_from_short_id(int(target)) if target.isdigit() else target
         slug = target
         if url and (url.startswith("http://") or url.startswith("https://")):
-            slug = url.rstrip("/").split("/")[-1]
+            parts_u = [p for p in url.strip("/").split("/") if p and p not in ("videos", "video", "actor", "actors")]
+            slug = parts_u[-1] if parts_u else target
         model_name = slug.replace("-", " ").replace("_", " ").title()
         back_cb = "sp_back_tc" if context.user_data.get("last_tc_query") else "cb_search"
-        markup = build_thotchicks_hub_keyboard(actor_slug=slug, back_callback=back_cb)
+        markup = build_thotchicks_hub_keyboard(actor_slug=target, back_callback=back_cb)
         card_text = (
             "<blockquote>"
             f"💃 <b>{html.escape(model_name)}</b>\n"
@@ -5379,12 +5423,19 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    elif data.startswith("lz_sort:"):
+    elif data.startswith("lz_sort:") or data.startswith("lz_pg:"):
         parts = data.split(":")
         model_slug = parts[1] if len(parts) > 1 and parts[1] else "jasminesherni"
         sort_val = parts[2] if len(parts) > 2 else "newest"
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+        target = model_slug
+        if target.isdigit():
+            real_url = db.get_url_from_short_id(int(target))
+            if real_url:
+                parts_u = [p for p in real_url.strip("/").split("/") if p and p not in ("video", "videos")]
+                target = parts_u[-1] if parts_u else target
         try:
-            results = await asyncio.to_thread(get_leakedzone_model_videos, model_slug, sort_val, 1, 10)
+            results = await asyncio.to_thread(get_leakedzone_model_videos, target, sort_val, page, 10)
         except Exception as e:
             await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
             return
@@ -5394,45 +5445,50 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
             ])
-            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            await query.edit_message_text("<blockquote>❌ No more videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
             return
 
+        total_pages = max(page + 1, 2) if len(results) >= 10 else page
+        total_count = (page - 1) * 10 + len(results) + (10 if len(results) >= 10 else 0)
+        display_name = target.replace("-", " ").replace("_", " ").title()
         card_text = format_clean_search_results_page(
-            query=f"{model_slug} ({sort_val.title()})",
+            query=f"{display_name} ({sort_val.title()})",
             scope_name="LeakedZone",
-            page=1,
-            total_pages=1,
-            total_count=len(results),
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
             items=results,
             delivered_indices=set(),
         )
         markup = build_search_results_clean_keyboard(
-            page=1,
-            total_pages=1,
-            page_callback_prefix="sp_fp:lz:all",
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=f"lz_pg:{model_slug}:{sort_val}",
             back_callback=back_cb,
         )
         context.user_data["active_search_results"] = {
             "plat": "lz",
-            "query": model_slug,
+            "query": target,
             "scope_name": "LeakedZone",
             "forum_id": None,
-            "page": 1,
-            "total_pages": 1,
-            "total_count": len(results),
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "items": results,
             "delivered_indices": set(),
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": f"lz_pg:{model_slug}:{sort_val}",
         }
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
-    elif data.startswith("xvid_sort:"):
+    elif data.startswith("xvid_sort:") or data.startswith("xvid_pg:"):
         parts = data.split(":")
         slug = parts[1] if len(parts) > 1 and parts[1] else "jasminesherni-onlyfans-leaked"
         sort_val = parts[2] if len(parts) > 2 else "latest"
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
         target_url = None
         if slug.isdigit():
             target_url = db.get_url_from_short_id(int(slug))
@@ -5444,7 +5500,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 target_url = f"https://x-video.tube/tags/{slug}-onlyfans-leaked/videos/"
         try:
-            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, 1, 10)
+            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, page, 10)
         except Exception as e:
             await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
             return
@@ -5454,22 +5510,29 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
             ])
-            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            await query.edit_message_text("<blockquote>❌ No more videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
             return
 
+        total_pages = max(page + 1, 2) if len(results) >= 10 else page
+        total_count = (page - 1) * 10 + len(results) + (10 if len(results) >= 10 else 0)
+        display_name = slug
+        if target_url:
+            parts_u = [p for p in target_url.strip("/").split("/") if p and p not in ("videos", "video", "tags", "models")]
+            if parts_u:
+                display_name = parts_u[-1].replace("-", " ").replace("_", " ").title()
         card_text = format_clean_search_results_page(
-            query=f"{slug} ({sort_val.title()})",
+            query=f"{display_name} ({sort_val.title()})",
             scope_name="X-Video Tube",
-            page=1,
-            total_pages=1,
-            total_count=len(results),
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
             items=results,
             delivered_indices=set(),
         )
         markup = build_search_results_clean_keyboard(
-            page=1,
-            total_pages=1,
-            page_callback_prefix="sp_fp:xvid:all",
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=f"xvid_pg:{slug}:{sort_val}",
             back_callback=back_cb,
         )
         context.user_data["active_search_results"] = {
@@ -5477,29 +5540,31 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "query": slug,
             "scope_name": "X-Video Tube",
             "forum_id": None,
-            "page": 1,
-            "total_pages": 1,
-            "total_count": len(results),
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "items": results,
             "delivered_indices": set(),
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": f"xvid_pg:{slug}:{sort_val}",
         }
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
-    elif data.startswith("hs_sort:"):
+    elif data.startswith("hs_sort:") or data.startswith("hs_pg:"):
         parts = data.split(":")
         slug = parts[1] if len(parts) > 1 and parts[1] else "jasmine-sherni"
         sort_val = parts[2] if len(parts) > 2 else "latest"
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
         target_url = None
         if slug.isdigit():
             target_url = db.get_url_from_short_id(int(slug))
         if not target_url:
             target_url = f"https://hornysapiens.com/models/{slug}/"
         try:
-            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, 1, 10)
+            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, page, 10)
         except Exception as e:
             await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
             return
@@ -5509,22 +5574,29 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
             ])
-            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            await query.edit_message_text("<blockquote>❌ No more videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
             return
 
+        total_pages = max(page + 1, 2) if len(results) >= 10 else page
+        total_count = (page - 1) * 10 + len(results) + (10 if len(results) >= 10 else 0)
+        display_name = slug
+        if target_url:
+            parts_u = [p for p in target_url.strip("/").split("/") if p and p not in ("videos", "video", "tags", "models")]
+            if parts_u:
+                display_name = parts_u[-1].replace("-", " ").replace("_", " ").title()
         card_text = format_clean_search_results_page(
-            query=f"{slug} ({sort_val.title()})",
+            query=f"{display_name} ({sort_val.title()})",
             scope_name="HornySapiens",
-            page=1,
-            total_pages=1,
-            total_count=len(results),
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
             items=results,
             delivered_indices=set(),
         )
         markup = build_search_results_clean_keyboard(
-            page=1,
-            total_pages=1,
-            page_callback_prefix="sp_fp:hs:all",
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=f"hs_pg:{slug}:{sort_val}",
             back_callback=back_cb,
         )
         context.user_data["active_search_results"] = {
@@ -5532,29 +5604,31 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "query": slug,
             "scope_name": "HornySapiens",
             "forum_id": None,
-            "page": 1,
-            "total_pages": 1,
-            "total_count": len(results),
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "items": results,
             "delivered_indices": set(),
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": f"hs_pg:{slug}:{sort_val}",
         }
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
-    elif data.startswith("tc_sort:"):
+    elif data.startswith("tc_sort:") or data.startswith("tc_pg:"):
         parts = data.split(":")
         slug = parts[1] if len(parts) > 1 and parts[1] else "jasmine-sherni"
         sort_val = parts[2] if len(parts) > 2 else "newest"
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
         target_url = None
         if slug.isdigit():
             target_url = db.get_url_from_short_id(int(slug))
         if not target_url:
             target_url = f"https://thotchicks.com/actor/{slug}/"
         try:
-            results = await asyncio.to_thread(get_thotchicks_listing_items, target_url, sort_val, 1, 10)
+            results = await asyncio.to_thread(get_thotchicks_listing_items, target_url, sort_val, page, 10)
         except Exception as e:
             await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
             return
@@ -5564,22 +5638,29 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
             ])
-            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            await query.edit_message_text("<blockquote>❌ No more videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
             return
 
+        total_pages = max(page + 1, 2) if len(results) >= 10 else page
+        total_count = (page - 1) * 10 + len(results) + (10 if len(results) >= 10 else 0)
+        display_name = slug
+        if target_url:
+            parts_u = [p for p in target_url.strip("/").split("/") if p and p not in ("videos", "video", "tags", "models", "actor", "actors")]
+            if parts_u:
+                display_name = parts_u[-1].replace("-", " ").replace("_", " ").title()
         card_text = format_clean_search_results_page(
-            query=f"{slug} ({sort_val.title()})",
+            query=f"{display_name} ({sort_val.title()})",
             scope_name="ThotChicks",
-            page=1,
-            total_pages=1,
-            total_count=len(results),
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
             items=results,
             delivered_indices=set(),
         )
         markup = build_search_results_clean_keyboard(
-            page=1,
-            total_pages=1,
-            page_callback_prefix="sp_fp:tc:all",
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=f"tc_pg:{slug}:{sort_val}",
             back_callback=back_cb,
         )
         context.user_data["active_search_results"] = {
@@ -5587,24 +5668,27 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "query": slug,
             "scope_name": "ThotChicks",
             "forum_id": None,
-            "page": 1,
-            "total_pages": 1,
-            "total_count": len(results),
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "items": results,
             "delivered_indices": set(),
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": f"tc_pg:{slug}:{sort_val}",
         }
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
-    elif data.startswith("desi_cat:"):
-        cat_key = data.split(":")[1]
+    elif data.startswith("desi_cat:") or data.startswith("desi_pg:"):
+        parts = data.split(":")
+        cat_key = parts[1]
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
         cat_names = {"trending": "Trending", "desi-new": "Desi New", "desi-old": "Desi Old", "tango-strip": "Tango Strip"}
         cat_name = cat_names.get(cat_key, "Desi New")
         try:
-            results = await asyncio.to_thread(get_mmsdesi_category_videos, cat_key, 1, 10)
+            results = await asyncio.to_thread(get_mmsdesi_category_videos, cat_key, page, 10)
         except Exception as e:
             await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
             return
@@ -5614,22 +5698,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
             ])
-            await query.edit_message_text("<blockquote>❌ No videos found in this category.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            await query.edit_message_text("<blockquote>❌ No more videos found in this category.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
             return
 
+        total_pages = max(page + 1, 2) if len(results) >= 10 else page
+        total_count = (page - 1) * 10 + len(results) + (10 if len(results) >= 10 else 0)
         card_text = format_clean_search_results_page(
             query=f"Category: {cat_name}",
             scope_name="MMSDesi",
-            page=1,
-            total_pages=1,
-            total_count=len(results),
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
             items=results,
             delivered_indices=set(),
         )
         markup = build_search_results_clean_keyboard(
-            page=1,
-            total_pages=1,
-            page_callback_prefix="sp_fp:desi:all",
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=f"desi_pg:{cat_key}",
             back_callback=back_cb,
         )
         context.user_data["active_search_results"] = {
@@ -5637,14 +5723,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "query": cat_name,
             "scope_name": "MMSDesi",
             "forum_id": None,
-            "page": 1,
-            "total_pages": 1,
-            "total_count": len(results),
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "items": results,
             "delivered_indices": set(),
             "chat_id": query.message.chat_id,
             "message_id": query.message.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": f"desi_pg:{cat_key}",
         }
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return

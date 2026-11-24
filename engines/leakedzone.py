@@ -250,10 +250,20 @@ def get_leakedzone_model_videos(
 def search_leakedzone(query: str, page: int = 1, limit: int = 25) -> list[dict]:
     """Search videos on LeakedZone."""
     encoded_q = quote_plus(query.strip())
-    search_url = f"https://leakedzone.com/search?q={encoded_q}"
+    search_url = f"https://leakedzone.com/search?search={encoded_q}"
     if page > 1:
         search_url += f"&page={page}"
-    return get_leakedzone_model_videos(search_url, page=1, limit=limit)
+    try:
+        return get_leakedzone_model_videos(search_url, page=1, limit=limit)
+    except Exception as e:
+        logger.debug(f"Direct LeakedZone search note: {e}. Trying candidate profile...")
+        cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", query.strip().lower().replace(" ", ""))
+        if cand_slug:
+            try:
+                return get_leakedzone_model_videos(cand_slug, page=page, limit=limit)
+            except Exception:
+                pass
+        return []
 
 
 def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
@@ -268,52 +278,59 @@ def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
     # 1. Candidate direct slugs
     candidate_slugs = [
         re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "")),
-        re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-")),
+        re.sub(r"[^a-zA-Z0-9_-]", "-", clean_q.lower()),
+        re.sub(r"[^a-zA-Z0-9_-]", "_", clean_q.lower()),
     ]
     for slug in candidate_slugs:
         if slug and slug not in seen:
             model_url = f"https://leakedzone.com/{slug}"
-            soup = _fetch_soup(model_url)
-            if soup and soup.title and "404" not in soup.title.get_text() and "not found" not in soup.title.get_text().lower():
-                name = clean_q.title()
-                h1 = soup.find("h1")
-                if h1:
-                    name = h1.get_text(strip=True)
-                elif soup.title:
-                    t_raw = soup.title.get_text(strip=True)
-                    if "OnlyFans" in t_raw:
-                        name = t_raw.split("OnlyFans")[0].strip(" —-(")
-                seen.add(slug)
-                models.append({
-                    "name": name,
-                    "url": model_url,
-                    "slug": slug,
-                })
-                break
+            try:
+                soup = _fetch_soup(model_url)
+                if soup and soup.title and "404" not in soup.title.get_text() and "not found" not in soup.title.get_text().lower():
+                    name = clean_q.title()
+                    h1 = soup.find("h1")
+                    if h1:
+                        name = h1.get_text(strip=True)
+                    elif soup.title:
+                        t_raw = soup.title.get_text(strip=True)
+                        if "OnlyFans" in t_raw:
+                            name = t_raw.split("OnlyFans")[0].strip(" —-(")
+                    seen.add(slug)
+                    models.append({
+                        "name": name,
+                        "url": model_url,
+                        "slug": slug,
+                    })
+                    break
+            except Exception as e:
+                logger.debug(f"Candidate slug check failed for {model_url}: {e}")
 
     # 2. Search query page extraction
     query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
     if len(models) < limit:
-        search_url = f"https://leakedzone.com/search?q={quote_plus(clean_q)}"
-        soup = _fetch_soup(search_url)
-        if soup:
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                m = re.search(r"^/([a-zA-Z0-9_-]+)(?:/video/)?", href)
-                if m:
-                    cand_slug = m.group(1).lower()
-                    if cand_slug not in seen and not any(x in cand_slug for x in ["search", "login", "register", "terms", "privacy", "dmca"]):
-                        name = a.get_text(strip=True) or cand_slug.replace("-", " ").title()
-                        if query_tokens and not any(t in cand_slug or t in name.lower() for t in query_tokens):
-                            continue
-                        seen.add(cand_slug)
-                        models.append({
-                            "name": name,
-                            "url": f"https://leakedzone.com/{cand_slug}",
-                            "slug": cand_slug,
-                        })
-                        if len(models) >= limit:
-                            break
+        search_url = f"https://leakedzone.com/search?search={quote_plus(clean_q)}"
+        try:
+            soup = _fetch_soup(search_url)
+            if soup:
+                for a in soup.find_all("a", href=True):
+                    href = a["href"].strip()
+                    m = re.search(r"^/([a-zA-Z0-9_-]+)(?:/video/)?", href)
+                    if m:
+                        cand_slug = m.group(1).lower()
+                        if cand_slug not in seen and not any(x in cand_slug for x in ["search", "login", "register", "terms", "privacy", "dmca"]):
+                            name = a.get_text(strip=True) or cand_slug.replace("-", " ").title()
+                            if query_tokens and not any(t in cand_slug or t in name.lower() for t in query_tokens):
+                                continue
+                            seen.add(cand_slug)
+                            models.append({
+                                "name": name,
+                                "url": f"https://leakedzone.com/{cand_slug}",
+                                "slug": cand_slug,
+                            })
+                            if len(models) >= limit:
+                                break
+        except Exception as e:
+            logger.debug(f"LeakedZone search query page extraction note: {e}")
 
     return models
 
