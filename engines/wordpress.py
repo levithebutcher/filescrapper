@@ -8,7 +8,7 @@ and other WordPress-based lockers and tube blogs.
 import re
 import html
 import logging
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from engines.base import (
@@ -36,16 +36,19 @@ def is_wp_locker_url(url: str) -> bool:
 
 
 def is_wp_locker_listing_url(url: str) -> bool:
-    """Check if URL is a WordPress category, tag, author, or home archive page."""
-    if not is_wp_locker_url(url):
+    """Check if URL is a WordPress category, tag, author, search, or home archive page."""
+    if not url or not is_wp_locker_url(url):
         return False
-    u = url.lower().split("?")[0].rstrip("/")
-    if u in [
+    u = url.lower().split("#")[0]
+    if "?s=" in u or "&s=" in u:
+        return True
+    u_base = u.split("?")[0].rstrip("/")
+    if u_base in [
         "https://omaal63.net", "https://desijugar.me", "https://gulabihub.com",
         "http://omaal63.net", "http://desijugar.me", "http://gulabihub.com"
     ]:
         return True
-    return any(p in u for p in ["/category/", "/tag/", "/author/", "/page/"])
+    return any(p in u_base for p in ["/category/", "/tag/", "/author/", "/page/"])
 
 
 def is_wp_locker_post_url(url: str) -> bool:
@@ -131,12 +134,17 @@ def get_wp_post_details(post_url: str) -> dict:
 
 
 def get_wp_listing_posts(listing_url: str, page: int = 1, limit: int = 25) -> list[dict]:
-    """Fetch post items from WordPress locker listing or category page with pagination."""
-    clean_base = listing_url.split("?")[0].split("#")[0].rstrip("/")
+    """Fetch post items from WordPress locker listing, search, or category page with pagination."""
+    parsed = urlparse(listing_url)
+    clean_path = parsed.path.rstrip("/")
+    clean_path = re.sub(r"/page/\d+/?$", "", clean_path)
+    clean_base = f"{parsed.scheme}://{parsed.netloc}{clean_path}".rstrip("/")
+    query_str = f"?{parsed.query}" if parsed.query else ""
+
     if page == 1:
-        target_url = f"{clean_base}/"
+        target_url = f"{clean_base}/{query_str}"
     else:
-        target_url = f"{clean_base}/page/{page}/"
+        target_url = f"{clean_base}/page/{page}/{query_str}"
 
     soup = _fetch_soup(target_url)
     posts = []
@@ -147,17 +155,36 @@ def get_wp_listing_posts(listing_url: str, page: int = 1, limit: int = 25) -> li
         articles = soup.find_all("div", class_=re.compile(r"post|item-video|thumb-block", re.I))
 
     for art in articles:
-        link = art.find("a", href=True)
+        classes = art.get("class", [])
+        if any(c in classes for c in ["no-results", "not-found"]):
+            continue
+
+        h_elem = art.find(["h1", "h2", "h3", "h4"], class_=re.compile(r"title|entry-title", re.I))
+        link = h_elem.find("a", href=True) if h_elem else None
+
+        if not link:
+            for a in art.find_all("a", href=True):
+                href_cand = a["href"].strip()
+                if not any(x in href_cand for x in ["/category/", "/tag/", "/author/", "?s="]):
+                    link = a
+                    break
+
         if not link:
             continue
+
         href = urljoin(target_url, link["href"].strip())
         if href in seen or not href.startswith("http"):
             continue
 
-        title_elem = art.find(["h2", "h3", "h4", "span"], class_=re.compile(r"title|entry-title", re.I)) or link
-        title = title_elem.get_text(strip=True) if title_elem else link.get("title", "")
+        title = ""
+        if h_elem:
+            title = h_elem.get_text(strip=True)
+        if not title and link.get("title"):
+            title = link["title"].strip()
         if not title:
-            title = "Untitled Post"
+            title = link.get_text(strip=True)
+        if not title or title.lower() in ("nothing found", "no results", "page not found", "untitled post"):
+            continue
 
         img = art.find("img")
         thumb = None

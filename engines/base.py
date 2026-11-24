@@ -353,14 +353,19 @@ def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
     - Falls back to cloudscraper if curl_cffi is unavailable or fails.
     - Uses robust requests.Session for standard sites with connection pooling.
     """
-    is_cf_target = "livecamrips.to" in url.lower()
+    is_cf_target = any(d in url.lower() for d in ["livecamrips.to", "omaal63.net", "desijugar.me", "gulabihub.com"])
+
+    domain_match = re.search(r"https?://[^/]+", url)
+    fetch_headers = dict(HEADERS)
+    if domain_match:
+        fetch_headers["Referer"] = domain_match.group(0) + "/"
 
     if is_cf_target:
         session = get_cffi_session()
         if session:
             for browser in ["chrome120", "chrome124", "safari17_0", "edge101"]:
                 try:
-                    resp = session.get(url, impersonate=browser, timeout=timeout)
+                    resp = session.get(url, headers=fetch_headers, impersonate=browser, timeout=timeout)
                     if resp.status_code < 400:
                         return resp
                     logger.debug(f"curl_cffi ({browser}) returned status {resp.status_code} for {url}")
@@ -373,7 +378,7 @@ def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
                 resp = scraper.get(
                     url,
                     timeout=timeout,
-                    headers=HEADERS,
+                    headers=fetch_headers,
                     proxies=PROXIES if PROXIES else None,
                 )
                 if resp.status_code < 400:
@@ -381,13 +386,13 @@ def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
             except Exception as e:
                 logger.debug(f"cloudscraper fetch note for {url}: {e}")
 
-    resp = _session.get(url, timeout=timeout)
+    resp = _session.get(url, headers=fetch_headers, timeout=timeout)
     if resp.status_code == 403:
         session = get_cffi_session()
         if session:
             for browser in ["chrome120", "chrome124"]:
                 try:
-                    cffi_resp = session.get(url, impersonate=browser, timeout=timeout)
+                    cffi_resp = session.get(url, headers=fetch_headers, impersonate=browser, timeout=timeout)
                     if cffi_resp.status_code < 400:
                         return cffi_resp
                 except Exception:
@@ -398,7 +403,7 @@ def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
                 cs_resp = scraper.get(
                     url,
                     timeout=timeout,
-                    headers=HEADERS,
+                    headers=fetch_headers,
                     proxies=PROXIES if PROXIES else None,
                 )
                 if cs_resp.status_code < 400:

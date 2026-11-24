@@ -278,6 +278,33 @@ class TestEngines(unittest.TestCase):
         self.assertIn("sp_cat:42", btn_data)
         self.assertIn("sp_cancel", btn_data)
 
+    def test_get_wp_listing_posts_search_query_preservation(self):
+        """Verify get_wp_listing_posts preserves search query ?s=... on page 1 and page 2+."""
+        from engines.wordpress import get_wp_listing_posts
+
+        html_content = """
+        <html><body>
+        <article class="post">
+            <header class="entry-header">
+                <h2 class="entry-title"><a href="https://omaal63.net/aditi-post/">Aditi Viral MMS</a></h2>
+            </header>
+            <img src="https://omaal63.net/thumb.jpg"/>
+        </article>
+        </body></html>
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        with patch("engines.wordpress._fetch_soup", return_value=soup) as mock_fetch:
+            res = get_wp_listing_posts("https://omaal63.net/?s=Aditi", page=1, limit=10)
+            mock_fetch.assert_called_with("https://omaal63.net/?s=Aditi")
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["title"], "Aditi Viral MMS")
+            self.assertEqual(res[0]["url"], "https://omaal63.net/aditi-post/")
+
+        with patch("engines.wordpress._fetch_soup", return_value=soup) as mock_fetch:
+            res_p2 = get_wp_listing_posts("https://omaal63.net/?s=Aditi", page=2, limit=10)
+            mock_fetch.assert_called_with("https://omaal63.net/page/2/?s=Aditi")
+            self.assertEqual(len(res_p2), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
