@@ -53,6 +53,19 @@ def build_back_cancel_keyboard(
 
 def build_card_keyboard(details: dict, user_pref: str = "streamtape") -> InlineKeyboardMarkup:
     """Build interactive action buttons for the universal post card."""
+    s_low = str(details.get("site") or "").lower()
+    u_low = str(details.get("post_url") or "").lower()
+    is_site_1_to_4 = s_low in ("leakedzone", "xvideo", "xvideotube", "x-video", "hornysapiens", "viralxxxporn", "thotchicks") or any(
+        d in u_low for d in ("leakedzone.com", "x-video.tube", "hornysapiens.com", "viralxxxporn.com", "thotchicks.com")
+    )
+    if is_site_1_to_4:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+            ]
+        ])
+
     buttons = []
     raw_links = details.get("streaming_links", [])
     watch_url = None

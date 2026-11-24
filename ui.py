@@ -61,20 +61,14 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         mod_esc = html.escape(details.get("model_name") or "Model")
         dur_esc = html.escape(str(details.get("duration") or "N/A"))
         d_esc = html.escape(str(details.get("date_ist") or "Recently"))
-        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
         lz_lines = [
             f"📌 <b>Title:</b> {t_esc}",
             f"👤 <b>Model:</b> {mod_esc}, LeakedZone",
             f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
             "",
-            "🔗 <b>Direct Stream Link (HLS .m3u8):</b>",
+            "🔗 <b>Direct Video Page Link:</b>",
+            f"<code>{post_url}</code>" if post_url else "<i>Page URL not available</i>",
         ]
-        if st_link:
-            lz_lines.append(f"<code>{html.escape(st_link)}</code>")
-        else:
-            lz_lines.append("<i>Stream not available</i>")
-        if post_url:
-            lz_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
         return "\n".join(lz_lines)
 
     # --- 2. X-Video Tube Card ---
@@ -84,20 +78,14 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         qual_esc = html.escape(details.get("quality") or "1080p Full HD")
         dur_esc = html.escape(str(details.get("duration") or "N/A"))
         d_esc = html.escape(str(details.get("date_ist") or "Recently"))
-        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
         xv_lines = [
             f"📌 <b>Title:</b> {t_esc}",
             f"🏷️ <b>Tag:</b> {tag_esc}, X-Video Tube",
             f"⚡ <b>Quality:</b> {qual_esc}  •  ⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
             "",
-            "🔗 <b>Direct MP4 Video Link:</b>",
+            "🔗 <b>Direct Video Page Link:</b>",
+            f"<code>{post_url}</code>" if post_url else "<i>Page URL not available</i>",
         ]
-        if st_link:
-            xv_lines.append(f"<code>{html.escape(st_link)}</code>")
-        else:
-            xv_lines.append("<i>Stream not available</i>")
-        if post_url:
-            xv_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
         return "\n".join(xv_lines)
 
     # --- 3. HornySapiens / ViralXXXPorn Card ---
@@ -108,20 +96,14 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         qual_esc = html.escape(details.get("quality") or "1080p Full HD")
         dur_esc = html.escape(str(details.get("duration") or "N/A"))
         d_esc = html.escape(str(details.get("date_ist") or "Recently"))
-        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
         hs_lines = [
             f"📌 <b>Title:</b> {t_esc}",
             f"👤 <b>Model:</b> {mod_esc}, {plat}",
             f"⚡ <b>Quality:</b> {qual_esc}  •  ⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
             "",
-            "🔗 <b>Direct MP4 Video Link:</b>",
+            "🔗 <b>Direct Video Page Link:</b>",
+            f"<code>{post_url}</code>" if post_url else "<i>Page URL not available</i>",
         ]
-        if st_link:
-            hs_lines.append(f"<code>{html.escape(st_link)}</code>")
-        else:
-            hs_lines.append("<i>Stream not available</i>")
-        if post_url:
-            hs_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
         return "\n".join(hs_lines)
 
     # --- 4. ThotChicks Card ---
@@ -130,20 +112,14 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
         act_esc = html.escape(details.get("actor_name") or details.get("model_name") or "Actor")
         dur_esc = html.escape(str(details.get("duration") or "N/A"))
         d_esc = html.escape(str(details.get("date_ist") or "Recently"))
-        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
         tc_lines = [
             f"📌 <b>Title:</b> {t_esc}",
             f"👤 <b>Actor:</b> {act_esc}, ThotChicks",
             f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
             "",
-            "🔗 <b>Direct Stream Link (.m3u8):</b>",
+            "🔗 <b>Direct Video Page Link:</b>",
+            f"<code>{post_url}</code>" if post_url else "<i>Page URL not available</i>",
         ]
-        if st_link:
-            tc_lines.append(f"<code>{html.escape(st_link)}</code>")
-        else:
-            tc_lines.append("<i>Stream not available</i>")
-        if post_url:
-            tc_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
         return "\n".join(tc_lines)
 
     # --- 5. MMSDesi Card ---

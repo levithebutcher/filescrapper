@@ -292,6 +292,7 @@ def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
                 break
 
     # 2. Search query page extraction
+    query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
     if len(models) < limit:
         search_url = f"https://leakedzone.com/search?q={quote_plus(clean_q)}"
         soup = _fetch_soup(search_url)
@@ -302,8 +303,10 @@ def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
                 if m:
                     cand_slug = m.group(1).lower()
                     if cand_slug not in seen and not any(x in cand_slug for x in ["search", "login", "register", "terms", "privacy", "dmca"]):
-                        seen.add(cand_slug)
                         name = a.get_text(strip=True) or cand_slug.replace("-", " ").title()
+                        if query_tokens and not any(t in cand_slug or t in name.lower() for t in query_tokens):
+                            continue
+                        seen.add(cand_slug)
                         models.append({
                             "name": name,
                             "url": f"https://leakedzone.com/{cand_slug}",

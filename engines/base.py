@@ -422,7 +422,7 @@ def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT):
     - Falls back to cloudscraper if curl_cffi is unavailable or fails.
     - Uses robust requests.Session for standard sites with connection pooling.
     """
-    is_cf_target = any(d in url.lower() for d in ["livecamrips.to", "omaal63.net", "desijugar.me", "gulabihub.com"])
+    is_cf_target = any(d in url.lower() for d in ["livecamrips.to", "leakedzone.com", "omaal63.net", "desijugar.me", "gulabihub.com"])
 
     domain_match = re.search(r"https?://[^/]+", url)
     fetch_headers = dict(HEADERS)

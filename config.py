@@ -103,6 +103,9 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
 # Default LiveCamRips link mode: "streaming" (default), "both", "page"
 DEFAULT_LIVECAM_LINK_MODE = os.getenv("DEFAULT_LIVECAM_LINK_MODE", "streaming").strip().lower()
 
+# Search Mode for Sites 1-4: "model" (default, LiveCam model profile search) or "video" (direct video keyword search)
+DEFAULT_SEARCH_MODE = os.getenv("SEARCH_MODE", "model").strip().lower()
+
 # Proxy configuration
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip()
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "").strip()

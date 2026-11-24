@@ -301,31 +301,69 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
     if not clean_q:
         return []
 
-    encoded_q = quote_plus(clean_q)
     models = []
     seen = set()
+    query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
 
     if site_key == "xvideotube":
         base_domain = "https://x-video.tube"
-        search_urls = [
-            f"{base_domain}/search/{encoded_q}/",
-            f"{base_domain}/models/?query={encoded_q}",
-        ]
     elif site_key == "viralxxxporn":
         base_domain = "https://viralxxxporn.com"
-        search_urls = [
-            f"{base_domain}/models/?query={encoded_q}",
-            f"{base_domain}/search/{encoded_q}/",
-        ]
     else:
         base_domain = "https://hornysapiens.com"
-        search_urls = [
-            f"{base_domain}/models/?query={encoded_q}",
-            f"{base_domain}/search/{encoded_q}/",
+
+    # 1. First test candidate direct model / tag profile slugs
+    slug_hyphen = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-"))
+    slug_compact = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", ""))
+
+    candidate_paths = []
+    if site_key == "xvideotube":
+        candidate_paths = [
+            (f"/tags/{slug_compact}-onlyfans-leaked/videos/", f"{clean_q.title()} OnlyFans Leaked", f"{slug_compact}-onlyfans-leaked"),
+            (f"/models/{slug_hyphen}/", clean_q.title(), slug_hyphen),
+            (f"/tags/{slug_hyphen}-onlyfans-leaked/videos/", f"{clean_q.title()} OnlyFans Leaked", f"{slug_hyphen}-onlyfans-leaked"),
+            (f"/tags/{slug_hyphen}/videos/", clean_q.title(), slug_hyphen),
+        ]
+    else:
+        candidate_paths = [
+            (f"/models/{slug_hyphen}/", clean_q.title(), slug_hyphen),
+            (f"/models/{slug_compact}/", clean_q.title(), slug_compact),
+            (f"/tags/{slug_hyphen}/", clean_q.title(), slug_hyphen),
         ]
 
+    for rel_path, display_name, cand_slug in candidate_paths:
+        full_cand_url = urljoin(base_domain, rel_path)
+        if full_cand_url in seen or cand_slug in seen:
+            continue
+        try:
+            cand_soup = _fetch_soup(full_cand_url)
+            if cand_soup and cand_soup.title:
+                t_str = cand_soup.title.get_text().lower()
+                if "404" not in t_str and "not found" not in t_str and "error" not in t_str:
+                    seen.add(full_cand_url)
+                    seen.add(cand_slug)
+                    models.append({
+                        "name": display_name,
+                        "url": full_cand_url,
+                        "slug": cand_slug,
+                    })
+                    if len(models) >= limit:
+                        return models
+        except Exception:
+            pass
+
+    # 2. Search listing scan with strict query token matching (ignoring unrelated sidebar widgets)
+    encoded_q = quote_plus(clean_q)
+    search_urls = [
+        f"{base_domain}/search/{encoded_q}/",
+        f"{base_domain}/models/?query={encoded_q}",
+    ]
+
     for s_url in search_urls:
-        soup = _fetch_soup(s_url)
+        try:
+            soup = _fetch_soup(s_url)
+        except Exception:
+            continue
         if not soup:
             continue
         for a in soup.find_all("a", href=True):
@@ -338,16 +376,19 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
                 slug = parts[-1]
                 if not slug or slug in seen:
                     continue
-                seen.add(slug)
-                seen.add(full_url)
 
                 # Clean name
                 name = a.get("title") or a.get_text(strip=True)
-                # Strip view/count noise if embedded in text
                 name = re.sub(r"^\d+%|\d+[\d,.]*\s*(?:views|videos)?|no image", "", name, flags=re.I).strip()
                 if not name or len(name) < 2:
                     name = slug.replace("-", " ").title()
 
+                # Strict validation: Must match at least one token from search query
+                if query_tokens and not any(t in slug.lower() or t in name.lower() for t in query_tokens):
+                    continue
+
+                seen.add(slug)
+                seen.add(full_url)
                 models.append({
                     "name": name,
                     "url": full_url,
@@ -357,18 +398,6 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
                     break
         if len(models) >= limit:
             break
-
-    # If no models found, check candidate slug
-    if not models:
-        cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-"))
-        cand_url = f"{base_domain}/models/{cand_slug}/"
-        soup = _fetch_soup(cand_url)
-        if soup and soup.title and "404" not in soup.title.get_text():
-            models.append({
-                "name": clean_q.title(),
-                "url": cand_url,
-                "slug": cand_slug,
-            })
 
     return models
 

@@ -1511,6 +1511,45 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data["active_search_results"]["plat"], "wp_omaal")
         self.assertEqual(context.user_data["active_search_results"]["page_callback_prefix"], "sp_wppag_search:omaal")
 
+    async def test_searchmode_command_and_callbacks(self):
+        """Test /mode command displays mode chooser, and callback switches mode cleanly."""
+        from bot import searchmode_command, callback_query_handler, get_search_mode, set_search_mode
+
+        # Ensure default is model
+        set_search_mode("model")
+        self.assertEqual(get_search_mode(), "model")
+
+        update = MagicMock()
+        update.effective_message = AsyncMock()
+        context = MagicMock()
+        context.args = []
+
+        # 1. /mode without args displays toggle options
+        await searchmode_command(update, context)
+        update.effective_message.reply_text.assert_called_once()
+        text_arg = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Model Profile Search (Default)", text_arg)
+        reply_markup = update.effective_message.reply_text.call_args[1]["reply_markup"]
+        btn_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn("setmode_model", btn_data)
+        self.assertIn("setmode_video", btn_data)
+
+        # 2. /mode video with direct argument
+        context.args = ["video"]
+        await searchmode_command(update, context)
+        self.assertEqual(get_search_mode(), "video")
+
+        # 3. Callback query switching back to model
+        cb_update = MagicMock()
+        cb_query = AsyncMock()
+        cb_query.data = "setmode_model"
+        cb_update.callback_query = cb_query
+
+        await callback_query_handler(cb_update, context)
+        self.assertEqual(get_search_mode(), "model")
+        cb_query.edit_message_text.assert_called_once()
+        self.assertIn("Search Mode Updated to Model Profile Search (Default)", cb_query.edit_message_text.call_args[0][0])
+
 
 if __name__ == "__main__":
     unittest.main()

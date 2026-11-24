@@ -372,9 +372,9 @@ class TestEngines(unittest.TestCase):
         self.assertIn("📌 <b>Title:</b> Jasmine Sherni Exclusive Private Session", card)
         self.assertIn("👤 <b>Model:</b> Jasmine Sherni, LeakedZone", card)
         self.assertIn("⏱️ <b>Duration:</b> 14m 28s  •  📅 <b>Added:</b> 2 days ago", card)
-        self.assertIn("🔗 <b>Direct Stream Link (HLS .m3u8):</b>", card)
-        self.assertIn("<code>https://stream.leakedzone.com/hls/22079644/master.m3u8</code>", card)
-        self.assertIn('<a href="https://leakedzone.com/jasminesherni/video/22079644">Source Webpage</a>', card)
+        self.assertIn("🔗 <b>Direct Video Page Link:</b>", card)
+        self.assertIn("<code>https://leakedzone.com/jasminesherni/video/22079644</code>", card)
+        self.assertNotIn("Source Webpage", card)
 
     def test_kvs_card_format(self):
         """Test KVS post card formatting for X-Video Tube and HornySapiens."""
@@ -395,8 +395,9 @@ class TestEngines(unittest.TestCase):
         self.assertIn("📌 <b>Title:</b> Jasmine Sherni OnlyFans Leaked", xv_card)
         self.assertIn("🏷️ <b>Tag:</b> jasminesherni-onlyfans-leaked, X-Video Tube", xv_card)
         self.assertIn("⚡ <b>Quality:</b> 1080p Full HD", xv_card)
-        self.assertIn("<code>https://cdn.x-video.tube/videos/340835/1080p.mp4?validfrom=123</code>", xv_card)
-        self.assertIn('<a href="https://x-video.tube/video/340835/jasmine-sherni/">Source Webpage</a>', xv_card)
+        self.assertIn("🔗 <b>Direct Video Page Link:</b>", xv_card)
+        self.assertIn("<code>https://x-video.tube/video/340835/jasmine-sherni/</code>", xv_card)
+        self.assertNotIn("Source Webpage", xv_card)
 
         # HornySapiens
         hs_details = {
@@ -412,8 +413,9 @@ class TestEngines(unittest.TestCase):
         hs_card = format_post_card(hs_details)
         self.assertIn("📌 <b>Title:</b> Jasmine Sherni Hardcore", hs_card)
         self.assertIn("👤 <b>Model:</b> Jasmine Sherni, HornySapiens", hs_card)
-        self.assertIn("<code>https://cdn.hornysapiens.com/get_file/1/video/304192/1080p.mp4</code>", hs_card)
-        self.assertIn('<a href="https://hornysapiens.com/videos/304192/jasmine-sherni/">Source Webpage</a>', hs_card)
+        self.assertIn("🔗 <b>Direct Video Page Link:</b>", hs_card)
+        self.assertIn("<code>https://hornysapiens.com/videos/304192/jasmine-sherni/</code>", hs_card)
+        self.assertNotIn("Source Webpage", hs_card)
 
     def test_thotchicks_card_format(self):
         """Test ThotChicks post card formatting."""
@@ -431,9 +433,9 @@ class TestEngines(unittest.TestCase):
         card = format_post_card(details)
         self.assertIn("📌 <b>Title:</b> Jasmine Sherni POV Video", card)
         self.assertIn("👤 <b>Actor:</b> Jasmine Sherni, ThotChicks", card)
-        self.assertIn("🔗 <b>Direct Stream Link (.m3u8):</b>", card)
-        self.assertIn("<code>https://edge.thotplay.com/hls/live/video_token/playlist.m3u8</code>", card)
-        self.assertIn('<a href="https://thotchicks.com/jasmine-sherni-pov/">Source Webpage</a>', card)
+        self.assertIn("🔗 <b>Direct Video Page Link:</b>", card)
+        self.assertIn("<code>https://thotchicks.com/jasmine-sherni-pov/</code>", card)
+        self.assertNotIn("Source Webpage", card)
 
     def test_mmsdesi_card_format(self):
         """Test MMSDesi post card formatting with attached photos."""
@@ -548,11 +550,32 @@ class TestEngines(unittest.TestCase):
         maza_kb = build_mmsmaza_hub_keyboard()
         self.assertEqual(maza_kb.inline_keyboard[0][0].text, "🔍 Search MMS")
         self.assertEqual(maza_kb.inline_keyboard[1][0].text, "🆕 Newest Releases")
-        self.assertEqual(maza_kb.inline_keyboard[1][0].text, "🆕 Newest Releases")
         self.assertEqual(maza_kb.inline_keyboard[1][1].text, "📂 Categories")
         btn_texts = [b.text for row in maza_kb.inline_keyboard for b in row]
         self.assertNotIn("🔥 Most Viewed", btn_texts)
         self.assertNotIn("⏱️ Longest", btn_texts)
+
+    def test_card_keyboard_watch_button_suppression(self):
+        """Verify build_card_keyboard suppresses [Watch Video] button for sites 1-4."""
+        from keyboards import build_card_keyboard
+
+        # Sites 1-4: strictly NO Watch Video button, only Back and Cancel
+        for site_key in ["leakedzone", "xvideotube", "hornysapiens", "thotchicks"]:
+            kb = build_card_keyboard({"post_url": "https://example.com/post/123", "site": site_key})
+            all_texts = [btn.text for row in kb.inline_keyboard for btn in row]
+            self.assertFalse(any("Watch Video" in t for t in all_texts), f"Watch Video button found for {site_key}")
+            self.assertEqual(len(kb.inline_keyboard), 1)
+            self.assertEqual(kb.inline_keyboard[0][0].text, "🔙 Back")
+            self.assertEqual(kb.inline_keyboard[0][1].text, "❌ Cancel")
+
+        # Other platforms: Watch Video button is retained when streaming links are present
+        kb_other = build_card_keyboard({
+            "post_url": "https://example.com/post/123",
+            "site": "omaal",
+            "streaming_links": ["https://streamtape.com/v/test12345"],
+        })
+        all_texts_other = [btn.text for row in kb_other.inline_keyboard for btn in row]
+        self.assertTrue(any("Watch Video" in t for t in all_texts_other))
 
     def test_search_leakedzone_models(self):
         """Test search_leakedzone_models finds profiles via candidate slug and search results."""
