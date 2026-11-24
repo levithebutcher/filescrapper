@@ -104,6 +104,7 @@ from engines.wordpress import (
     is_wp_locker_post_url,
     get_wp_post_details,
     get_wp_listing_posts,
+    get_wp_categories,
 )
 
 from engines.tube import (
@@ -225,6 +226,7 @@ __all__ = [
     "is_wp_locker_post_url",
     "get_wp_post_details",
     "get_wp_listing_posts",
+    "get_wp_categories",
     "MediaTubeEngine",
     "is_mmsvibex_url",
     "is_mmsvibex_photo_url",

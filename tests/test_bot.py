@@ -825,7 +825,11 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sp_choose:mmst", button_data)   # MMSTown
         self.assertIn("sp_choose:vibex", button_data)  # MMSVibex
         self.assertIn("sp_choose:lc", button_data)     # LiveCamRips
-        self.assertIn("sp_choose:wplock", button_data) # WP Locker
+        self.assertIn("sp_wpsite:omaal", button_data)      # Omaal63
+        self.assertIn("sp_wpsite:desijugar", button_data)  # DesiJugar
+        self.assertIn("sp_wpsite:gulabi", button_data)     # GulabiHub
+        self.assertIn("cb_main_menu", button_data)         # Back
+        self.assertIn("sp_cancel", button_data)            # Cancel
 
     @patch("bot.send_post_card")
     @patch("bot.get_mmsvibex_video_details")
@@ -1325,6 +1329,128 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("awaiting_search_flow", context.user_data)
         self.assertEqual(context.user_data["awaiting_search_flow"]["plat"], "lc")
         query.edit_message_text.assert_called_once()
+
+    def test_build_search_platform_keyboard_3_columns(self):
+        """Test build_search_platform_keyboard has 3 buttons per row and Back + Cancel."""
+        from keyboards import build_search_platform_keyboard
+
+        kb = build_search_platform_keyboard()
+        grid = kb.inline_keyboard
+        # Row 1: DropMMS, MMSTown, MMSVibex
+        self.assertEqual(len(grid[0]), 3)
+        self.assertEqual(grid[0][0].callback_data, "sp_choose:fm")
+        self.assertEqual(grid[0][1].callback_data, "sp_choose:mmst")
+        self.assertEqual(grid[0][2].callback_data, "sp_choose:vibex")
+
+        # Row 2: LiveCam, Omaal63, DesiJugar
+        self.assertEqual(len(grid[1]), 3)
+        self.assertEqual(grid[1][0].callback_data, "sp_choose:lc")
+        self.assertEqual(grid[1][1].callback_data, "sp_wpsite:omaal")
+        self.assertEqual(grid[1][2].callback_data, "sp_wpsite:desijugar")
+
+        # Row 3: GulabiHub
+        self.assertEqual(len(grid[2]), 1)
+        self.assertEqual(grid[2][0].callback_data, "sp_wpsite:gulabi")
+
+        # Row 4: Back, Cancel
+        self.assertEqual(len(grid[3]), 2)
+        self.assertEqual(grid[3][0].text, "🔙 Back")
+        self.assertEqual(grid[3][0].callback_data, "cb_main_menu")
+        self.assertEqual(grid[3][1].text, "❌ Cancel")
+        self.assertEqual(grid[3][1].callback_data, "sp_cancel")
+
+    async def test_sp_wpsite_hub_callback(self):
+        """Test tapping a WordPress site shows the Site Hub card with Search, Newest, Categories, Back, Cancel."""
+        from bot import callback_query_handler
+
+        context = MagicMock()
+        context.user_data = {}
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_wpsite:omaal"
+        query.message.chat_id = 12345
+        query.message.message_id = 999
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+
+        query.edit_message_text.assert_called_once()
+        args, kwargs = query.edit_message_text.call_args
+        self.assertIn("Omaal63 Hub", args[0])
+        reply_markup = kwargs.get("reply_markup")
+        btn_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        self.assertIn("sp_wpsearch:omaal", btn_data)
+        self.assertIn("sp_wplatest:omaal", btn_data)
+        self.assertIn("sp_wpcats:omaal", btn_data)
+        self.assertIn("cb_search", btn_data)
+        self.assertIn("sp_cancel", btn_data)
+
+    @patch("bot.get_wp_categories")
+    async def test_sp_wpcats_callback(self, mock_cats):
+        """Test tapping Categories fetches live categories and displays them in a grid."""
+        from bot import callback_query_handler
+
+        mock_cats.return_value = [
+            {"name": "Stripchat Live", "url": "https://omaal63.net/category/stripchat-live/"},
+            {"name": "Desi MMS", "url": "https://omaal63.net/category/desi-mms/"},
+        ]
+
+        context = MagicMock()
+        context.user_data = {}
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_wpcats:omaal"
+        query.message.chat_id = 12345
+        query.message.message_id = 999
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+
+        mock_cats.assert_called_once_with("omaal")
+        self.assertEqual(query.edit_message_text.call_count, 2)
+        args, kwargs = query.edit_message_text.call_args
+        self.assertIn("Omaal63 Categories", args[0])
+        self.assertIn("Select a category to browse:", args[0])
+
+    @patch("bot.get_wp_listing_posts")
+    async def test_sp_wpcat_post_listing_callback(self, mock_listing):
+        """Test tapping a specific category displays Option 2 clean numbered post list in blockquote."""
+        from bot import callback_query_handler
+
+        mock_listing.return_value = [
+            {"title": "Stripchat Video 1", "url": "https://omaal63.net/stripchat-video-1/"},
+            {"title": "Stripchat Video 2", "url": "https://omaal63.net/stripchat-video-2/"},
+        ]
+
+        context = MagicMock()
+        context.user_data = {
+            "wpcat_101": {
+                "name": "Stripchat Live",
+                "url": "https://omaal63.net/category/stripchat-live/",
+                "site_key": "omaal",
+            }
+        }
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "sp_wpcat:omaal:101"
+        query.message.chat_id = 12345
+        query.message.message_id = 999
+        update.callback_query = query
+
+        await callback_query_handler(update, context)
+
+        query.edit_message_text.assert_called()
+        args, kwargs = query.edit_message_text.call_args
+        self.assertIn("Stripchat Live", args[0])
+        self.assertIn("Stripchat Video 1", args[0])
+        self.assertIn("<blockquote>", args[0])
+        self.assertIn("active_search_results", context.user_data)
+        search_state = context.user_data["active_search_results"]
+        self.assertEqual(search_state["plat"], "wp_omaal")
+        self.assertTrue(search_state.get("is_category_browse"))
 
 
 if __name__ == "__main__":

@@ -383,6 +383,70 @@ def format_search_completion_card(
     return "\n".join(lines)
 
 
+def format_clean_category_posts_page(
+    site_name: str,
+    cat_name: str,
+    page: int,
+    total_pages: int,
+    total_count: int,
+    items: list[dict],
+    delivered_indices: set[int] | None = None,
+) -> str:
+    """Format clean, readable category posts with numbers 1 to 10 in blockquotes."""
+    delivered_indices = delivered_indices or set()
+    lines = [
+        "<blockquote>"
+        f"📁 <b>{html.escape(site_name)}: {html.escape(cat_name)}</b>\n"
+        f"📊 <b>Category Posts:</b> (Page {page}/{total_pages})\n"
+        "🕒 <b>Sort:</b> Newest Uploads (Date Wise)"
+        "</blockquote>\n"
+    ]
+
+    for idx, itm in enumerate(items, start=1):
+        t_esc = html.escape(itm.get("title") or "Untitled Post")
+        badge = " ✅ <i>(Delivered)</i>" if idx in delivered_indices else ""
+        date_str = itm.get("date_ist") or itm.get("date") or ""
+        meta_sub = f"\n<i>{html.escape(str(date_str))}</i>" if date_str else ""
+        lines.append(f"<blockquote><b>{idx}.</b> <b>{t_esc}</b>{badge}{meta_sub}</blockquote>")
+
+    lines.append(
+        "\n<blockquote>"
+        "💡 <b>How to Extract:</b>\n"
+        "Reply with any number (e.g. <code>1</code>, <code>2</code>, <code>1-3</code>, or <code>all</code>) to get the post!"
+        "</blockquote>"
+    )
+    return "\n".join(lines)
+
+
+def format_category_browse_completion_card(
+    delivered_summary: str,
+    site_name: str,
+    cat_name: str,
+    page: int,
+    total_pages: int,
+    items: list[dict],
+    delivered_indices: set[int] | None = None,
+) -> str:
+    """Format resurfaced category browse card with completion note at the bottom."""
+    base_card = format_clean_category_posts_page(
+        site_name=site_name,
+        cat_name=cat_name,
+        page=page,
+        total_pages=total_pages,
+        total_count=len(items),
+        items=items,
+        delivered_indices=delivered_indices,
+    )
+    note = (
+        "\n<blockquote>"
+        "✅ <b>Extraction Complete!</b>\n"
+        f"⚡ Delivered: <b>{html.escape(delivered_summary)}</b>\n\n"
+        "<i>You can select more numbers above or navigate pages below.</i>"
+        "</blockquote>"
+    )
+    return base_card + note
+
+
 def parse_search_selection(text: str, total_items: int) -> list[int]:
     """
     Parse user selection from numbered search list (e.g. '1', '2', '1-3', 'all', '1, 3').

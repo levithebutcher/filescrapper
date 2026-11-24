@@ -165,45 +165,90 @@ def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMar
 # --- Search & Platform Selection Keyboards ---
 
 def build_search_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform selection keyboard for /search with no args."""
+    """Platform selection keyboard for /search with no args (3 buttons per row, with WordPress sites displayed)."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 DropMMS Forum", callback_data="sp_choose:fm"),
-            InlineKeyboardButton("💬 MMSTown Forum", callback_data="sp_choose:mmst"),
+            InlineKeyboardButton("💬 DropMMS", callback_data="sp_choose:fm"),
+            InlineKeyboardButton("💬 MMSTown", callback_data="sp_choose:mmst"),
+            InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_choose:vibex"),
         ],
         [
-            InlineKeyboardButton("⚡ MMSVibex Videos", callback_data="sp_choose:vibex"),
-            InlineKeyboardButton("📹 LiveCam Models", callback_data="sp_choose:lc"),
+            InlineKeyboardButton("📹 LiveCam", callback_data="sp_choose:lc"),
+            InlineKeyboardButton("🌐 Omaal63", callback_data="sp_wpsite:omaal"),
+            InlineKeyboardButton("🌐 DesiJugar", callback_data="sp_wpsite:desijugar"),
         ],
         [
-            InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_choose:wplock"),
+            InlineKeyboardButton("🌐 GulabiHub", callback_data="sp_wpsite:gulabi"),
         ],
         [
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+            InlineKeyboardButton("🔙 Back", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])
 
 
 def build_search_execute_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform execution keyboard for /search with query."""
+    """Platform execution keyboard for /search with query (3 buttons per row, with WordPress sites displayed)."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
             InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
-        ],
-        [
             InlineKeyboardButton("⚡ MMSVibex", callback_data="sp_do:vibex"),
+        ],
+        [
             InlineKeyboardButton("📹 LiveCam", callback_data="sp_do:lc"),
+            InlineKeyboardButton("🌐 Omaal63", callback_data="sp_do:omaal"),
+            InlineKeyboardButton("🌐 DesiJugar", callback_data="sp_do:desijugar"),
         ],
         [
-            InlineKeyboardButton("🌐 WordPress Lockers", callback_data="sp_do:wplock"),
+            InlineKeyboardButton("🌐 GulabiHub", callback_data="sp_do:gulabi"),
         ],
         [
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
+            InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])
+
+
+def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for WordPress locker sites (Card 2)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data=f"sp_wpsearch:{site_key}"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Newest Posts", callback_data=f"sp_wplatest:{site_key}"),
+            InlineKeyboardButton("📁 Categories", callback_data=f"sp_wpcats:{site_key}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_wp_categories_keyboard(
+    categories: list[dict],
+    site_key: str,
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Category selection keyboard for WordPress sites (2 per row with Back/Cancel)."""
+    back_cb = back_callback or f"sp_wpsite:{site_key}"
+    buttons = []
+    for i in range(0, len(categories), 2):
+        row = []
+        c1 = categories[i]
+        row.append(InlineKeyboardButton(f"📁 {c1['name']}", callback_data=f"sp_wpcat:{site_key}:{c1['short_id']}"))
+        if i + 1 < len(categories):
+            c2 = categories[i + 1]
+            row.append(InlineKeyboardButton(f"📁 {c2['name']}", callback_data=f"sp_wpcat:{site_key}:{c2['short_id']}"))
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_cb),
+        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def build_search_results_keyboard(

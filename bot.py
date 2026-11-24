@@ -88,6 +88,7 @@ from scraper import (
     is_wp_locker_post_url,
     get_wp_post_details,
     get_wp_listing_posts,
+    get_wp_categories,
     search_forum_advanced,
     get_universal_post_details,
 )
@@ -102,6 +103,8 @@ from ui import (
     format_category_completion_card,
     format_clean_search_results_page,
     format_search_completion_card,
+    format_clean_category_posts_page,
+    format_category_browse_completion_card,
     parse_search_selection,
 )
 from keyboards import (
@@ -125,6 +128,8 @@ from keyboards import (
     build_forum_sort_keyboard,
     build_model_options_keyboard,
     build_model_sort_keyboard,
+    build_wp_site_hub_keyboard,
+    build_wp_categories_keyboard,
     build_channel_management_keyboard,
     build_back_cancel_row,
     build_back_cancel_keyboard,
@@ -1057,6 +1062,7 @@ async def run_wp_listing_scrape(
     status_msg=None,
     user_id: int | str = None,
     listing_title: str | None = None,
+    context=None,
 ):
     """
     Worker to scrape and deliver posts from WordPress locker/tube sites (Omaal63, DesiJugar, GulabiHub).
@@ -1128,22 +1134,50 @@ async def run_wp_listing_scrape(
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
         if not is_scrape_cancelled(cid):
+            back_cb = "cb_search"
+            if "omaal63" in target_url:
+                back_cb = "sp_wpsite:omaal"
+            elif "desijugar" in target_url:
+                back_cb = "sp_wpsite:desijugar"
+            elif "gulabihub" in target_url:
+                back_cb = "sp_wpsite:gulabi"
+
+            end_card_text = (
+                f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>\n\n"
+                "<blockquote>"
+                f"🌐 <b>{html.escape(title)}</b>\n\n"
+                "Reply in chat with a custom range, count or page:\n"
+                "• <code>5</code> ➔ First 5 posts\n"
+                "• <code>1-15</code> ➔ Posts 1 to 15\n"
+                "• <code>page 2</code> ➔ Full Page 2"
+                "</blockquote>"
+            )
+            end_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 Back", callback_data=back_cb),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+                ],
+            ])
             try:
-                await status_msg.edit_text(
-                    f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>",
+                end_msg = await bot.send_message(
+                    chat_id=cid,
+                    text=end_card_text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=get_navigation_keyboard(),
+                    reply_markup=end_markup,
                 )
-            except Exception:
+                if context:
+                    context.user_data["awaiting_wp_range"] = {
+                        "url": target_url,
+                        "site_name": title,
+                        "chat_id": cid,
+                        "message_id": end_msg.message_id,
+                    }
                 try:
-                    await bot.send_message(
-                        chat_id=cid,
-                        text=f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=get_navigation_keyboard(),
-                    )
+                    await status_msg.delete()
                 except Exception:
                     pass
+            except Exception as e:
+                logger.warning(f"Could not send completion card for WP listing: {e}")
         else:
             try:
                 await status_msg.delete()
@@ -1750,65 +1784,76 @@ async def execute_platform_search(
             reply_markup=markup,
         )
 
-    elif plat == "wplock":
+    elif plat in ("wplock", "omaal", "desijugar", "gulabi") or plat.startswith("wp_"):
+        site_key = plat.replace("wp_", "") if plat != "wplock" else "desijugar"
+        site_map = {
+            "omaal": ("Omaal63", "https://omaal63.net"),
+            "desijugar": ("DesiJugar", "https://desijugar.me"),
+            "gulabi": ("GulabiHub", "https://gulabihub.com"),
+        }
+        site_name, base_url = site_map.get(site_key, ("Omaal63", "https://omaal63.net"))
+        search_url = f"{base_url}/?s={quote_plus(clean_query)}"
         try:
-            search_url = f"https://desijugar.me/?s={quote_plus(clean_query)}"
-            results = await asyncio.to_thread(get_wp_listing_posts, search_url, page, 8)
+            results = await asyncio.to_thread(get_wp_listing_posts, search_url, page, 10)
         except Exception as e:
             await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
             return
 
+        back_cb = f"sp_wpsite:{site_key}"
         if not results:
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:wplock")],
-                [InlineKeyboardButton("🔙 Back to Search", callback_data="cb_search")],
+                [InlineKeyboardButton("🔄 Search Again", callback_data=f"sp_wpsearch:{site_key}")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
             ])
             context.user_data["search_query"] = clean_query
             await status_msg.edit_text(
-                f"❌ No locker posts found for <b>{html.escape(clean_query)}</b>.",
+                f"<blockquote>❌ No posts found on <b>{site_name}</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
             return
 
-        text = f"🔎 <b>WordPress Locker Posts Matching '{html.escape(clean_query)}':</b>\n\n"
-        buttons = []
-        items_for_active = []
-        for idx, r in enumerate(results, start=1):
-            short_id = db.get_or_create_short_id(r["url"])
-            text += f"{idx}. <b>{html.escape(r['title'])}</b>\n"
-            btn = InlineKeyboardButton(f"🌐 Extract #{idx}", callback_data=f"sc_{short_id}")
-            buttons.append([btn])
-            items_for_active.append({
-                "title": r["title"],
-                "url": r["url"],
-                "short_id": short_id,
-            })
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
 
-        context.user_data["active_listing"] = {
-            "title": f"WordPress: '{clean_query}'",
-            "type": "search",
-            "platform": "wplock",
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name=site_name,
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = f"sp_wppag_search:{site_key}:{clean_query}"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": f"wp_{site_key}",
             "query": clean_query,
+            "scope_name": site_name,
+            "forum_id": None,
             "page": page,
-            "total_pages": 1,
-            "items": items_for_active,
-            "delivered_ids": set(),
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
         }
 
-        buttons.append([
-            InlineKeyboardButton("🔄 New Search", callback_data="cb_search"),
-            InlineKeyboardButton("📁 Change Platform", callback_data="cb_search"),
-        ])
-        buttons.append([
-            InlineKeyboardButton("🏛️ Main Menu", callback_data="cb_main_menu"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ])
         await status_msg.edit_text(
-            text,
+            card_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=markup,
         )
 
     else:
@@ -2644,6 +2689,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             else:
                                 details = await asyncio.to_thread(get_mmsvibex_video_details, url)
                             await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        elif search_state["plat"].startswith("wp_") or search_state["plat"] == "wplock":
+                            details = await asyncio.to_thread(get_wp_post_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
                         else:
                             await process_topic_scrape(
                                 bot=context.bot,
@@ -2675,21 +2723,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-            # Resurface search results card with completion note at the bottom
-            item_noun = "item(s)" if search_state["plat"] == "vibex" else "topic(s)"
-            completion_text = format_search_completion_card(
-                delivered_summary=f"{len(delivered_this_round)} {item_noun}",
-                query=search_state["query"],
-                scope_name=search_state["scope_name"],
-                page=search_state["page"],
-                total_pages=search_state["total_pages"],
-                total_count=search_state["total_count"],
-                items=search_state["items"],
-                delivered_indices=search_state["delivered_indices"],
-            )
+            # Resurface search results or category browse card with completion note at the bottom
+            item_noun = "item(s)" if (search_state["plat"] in ("vibex", "wplock") or search_state["plat"].startswith("wp_")) else "topic(s)"
+            if search_state.get("is_category_browse"):
+                completion_text = format_category_browse_completion_card(
+                    delivered_summary=f"{len(delivered_this_round)} {item_noun}",
+                    site_name=search_state.get("site_name", "WordPress"),
+                    cat_name=search_state.get("cat_name", "Category"),
+                    page=search_state["page"],
+                    total_pages=search_state["total_pages"],
+                    items=search_state["items"],
+                    delivered_indices=search_state["delivered_indices"],
+                )
+            else:
+                completion_text = format_search_completion_card(
+                    delivered_summary=f"{len(delivered_this_round)} {item_noun}",
+                    query=search_state["query"],
+                    scope_name=search_state["scope_name"],
+                    page=search_state["page"],
+                    total_pages=search_state["total_pages"],
+                    total_count=search_state["total_count"],
+                    items=search_state["items"],
+                    delivered_indices=search_state["delivered_indices"],
+                )
 
-            fid_str = str(search_state["forum_id"]) if search_state.get("forum_id") else "all"
-            page_pfx = f"sp_fp:{search_state['plat']}:{fid_str}"
+            if search_state.get("page_callback_prefix"):
+                page_pfx = search_state["page_callback_prefix"]
+            else:
+                fid_str = str(search_state["forum_id"]) if search_state.get("forum_id") else "all"
+                page_pfx = f"sp_fp:{search_state['plat']}:{fid_str}"
+
             clean_markup = build_search_results_clean_keyboard(
                 page=search_state["page"],
                 total_pages=search_state["total_pages"],
@@ -3571,7 +3634,70 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "desijugar": ("DesiJugar", "https://desijugar.me/"),
             "gulabi": ("GulabiHub", "https://gulabihub.com/"),
         }
-        s_info = site_map.get(site_key, ("Archive", "https://desijugar.me/"))
+        s_info = site_map.get(site_key, ("Omaal63", "https://omaal63.net/"))
+        site_name, target_url = s_info
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data.pop("awaiting_search", None)
+
+        markup = build_wp_site_hub_keyboard(site_key=site_key, back_callback="cb_search")
+        card_text = (
+            "<blockquote>"
+            f"🌐 <b>{site_name} Hub</b>\n"
+            "Select an option or search inside this website:"
+            "</blockquote>"
+        )
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["active_card_msg_id"] = query.message.message_id
+        return
+
+    elif data.startswith("sp_wpsearch:"):
+        _, site_key = data.split(":")
+        site_map = {
+            "omaal": "Omaal63",
+            "desijugar": "DesiJugar",
+            "gulabi": "GulabiHub",
+        }
+        site_name = site_map.get(site_key, "Website")
+        context.user_data.pop("awaiting_model_range", None)
+        context.user_data.pop("awaiting_vibex_range", None)
+        context.user_data.pop("awaiting_category_range", None)
+        context.user_data.pop("awaiting_wp_range", None)
+        context.user_data.pop("active_search_results", None)
+        context.user_data.pop("awaiting_search", None)
+
+        context.user_data["awaiting_search_flow"] = {
+            "plat": f"wp_{site_key}",
+            "scope_name": f"{site_name} Videos",
+            "back_callback": f"sp_wpsite:{site_key}",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "site_key": site_key,
+        }
+        context.user_data["active_card_msg_id"] = query.message.message_id
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data=f"sp_wpsite:{site_key}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {site_name}</b>\n"
+            f"🌐 <b>Scope:</b> Entire Website ({site_name})\n\n"
+            "✏️ <i>Please send the keyword or title to search (e.g. <code>baddie</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data.startswith("sp_wplatest:"):
+        _, site_key = data.split(":")
+        site_map = {
+            "omaal": ("Omaal63", "https://omaal63.net/"),
+            "desijugar": ("DesiJugar", "https://desijugar.me/"),
+            "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+        }
+        s_info = site_map.get(site_key, ("Omaal63", "https://omaal63.net/"))
         site_name, target_url = s_info
         context.user_data["awaiting_wp_range"] = {
             "url": target_url,
@@ -3582,19 +3708,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         }
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_wpapply:{site_key}:1-5"),
-                InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_wpapply:{site_key}:1-10"),
-                InlineKeyboardButton("🔝 Top 20", callback_data=f"sp_wpapply:{site_key}:1-20"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Back", callback_data="sp_choose:wplock"),
+                InlineKeyboardButton("🔙 Back", callback_data=f"sp_wpsite:{site_key}"),
                 InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
             ],
         ])
         card_text = (
             "<blockquote>"
-            f"🌐 <b>{site_name} Latest Drops</b>\n\n"
-            "Select quick count above or reply in chat with a custom range:\n"
+            f"🌐 <b>{site_name}: Latest Posts</b>\n\n"
+            "Reply in chat with a custom range, count or page:\n"
             "• <code>5</code> ➔ First 5 posts\n"
             "• <code>1-15</code> ➔ Posts 1 to 15\n"
             "• <code>page 2</code> ➔ Full Page 2"
@@ -3602,6 +3723,236 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["active_card_msg_id"] = query.message.message_id
+        return
+
+    elif data.startswith("sp_wpcats:"):
+        _, site_key = data.split(":")
+        site_map = {
+            "omaal": "Omaal63",
+            "desijugar": "DesiJugar",
+            "gulabi": "GulabiHub",
+        }
+        site_name = site_map.get(site_key, "Website")
+        try:
+            await query.edit_message_text(
+                f"<blockquote>📁 <b>{site_name} Categories</b>\n⏳ <i>Fetching categories...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+        raw_cats = await asyncio.to_thread(get_wp_categories, site_key)
+        if not raw_cats:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=f"sp_wpsite:{site_key}"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text(
+                f"<blockquote>📁 <b>{site_name} Categories</b>\n⚠️ <i>No categories found or site unreachable.</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        cat_items = []
+        for c in raw_cats:
+            sid = db.get_or_create_short_id(c["url"])
+            context.user_data[f"wpcat_{sid}"] = {
+                "name": c["name"],
+                "url": c["url"],
+                "site_key": site_key,
+            }
+            cat_items.append({"name": c["name"], "short_id": sid})
+
+        markup = build_wp_categories_keyboard(cat_items, site_key=site_key, back_callback=f"sp_wpsite:{site_key}")
+        card_text = (
+            "<blockquote>"
+            f"📁 <b>{site_name} Categories</b>\n"
+            "Select a category to browse:"
+            "</blockquote>"
+        )
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        context.user_data["active_card_msg_id"] = query.message.message_id
+        return
+
+    elif data.startswith("sp_wpcat:"):
+        parts = data.split(":")
+        site_key = parts[1]
+        cat_sid = int(parts[2])
+        page = 1
+
+        cat_info = context.user_data.get(f"wpcat_{cat_sid}")
+        cat_url = cat_info["url"] if cat_info else db.get_url_from_short_id(cat_sid)
+        cat_name = cat_info.get("name", "Category") if cat_info else "Category"
+
+        site_map = {
+            "omaal": "Omaal63",
+            "desijugar": "DesiJugar",
+            "gulabi": "GulabiHub",
+        }
+        site_name = site_map.get(site_key, "WordPress")
+
+        try:
+            await query.edit_message_text(
+                f"<blockquote>📁 <b>{site_name}: {cat_name}</b>\n⏳ <i>Fetching posts (Page {page})...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+        results = await asyncio.to_thread(get_wp_listing_posts, cat_url, page, 10)
+        back_cb = f"sp_wpcats:{site_key}"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text(
+                f"<blockquote>📁 <b>{site_name}: {cat_name}</b>\n⚠️ <i>No posts found in this category.</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        card_text = format_clean_category_posts_page(
+            site_name=site_name,
+            cat_name=cat_name,
+            page=page,
+            total_pages=total_pages,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = f"sp_wppag_cat:{site_key}:{cat_sid}"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": f"wp_{site_key}",
+            "is_category_browse": True,
+            "site_name": site_name,
+            "cat_name": cat_name,
+            "query": cat_name,
+            "scope_name": f"{site_name}: {cat_name}",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+            "page_callback_prefix": page_pfx,
+            "cat_sid": cat_sid,
+            "cat_url": cat_url,
+        }
+
+        await query.edit_message_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        context.user_data["active_card_msg_id"] = query.message.message_id
+        return
+
+    elif data.startswith("sp_wppag_cat:"):
+        parts = data.split(":")
+        site_key = parts[1]
+        cat_sid = int(parts[2])
+        page = int(parts[3])
+
+        cat_info = context.user_data.get(f"wpcat_{cat_sid}")
+        cat_url = cat_info["url"] if cat_info else db.get_url_from_short_id(cat_sid)
+        cat_name = cat_info.get("name", "Category") if cat_info else "Category"
+
+        site_map = {
+            "omaal": "Omaal63",
+            "desijugar": "DesiJugar",
+            "gulabi": "GulabiHub",
+        }
+        site_name = site_map.get(site_key, "WordPress")
+
+        try:
+            await query.edit_message_text(
+                f"<blockquote>📁 <b>{site_name}: {cat_name}</b>\n⏳ <i>Fetching posts (Page {page})...</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+        results = await asyncio.to_thread(get_wp_listing_posts, cat_url, page, 10)
+        back_cb = f"sp_wpcats:{site_key}"
+        if not results:
+            page = max(1, page - 1)
+            results = await asyncio.to_thread(get_wp_listing_posts, cat_url, page, 10)
+
+        total_pages = max(page + 1, page) if len(results) == 10 else page
+        card_text = format_clean_category_posts_page(
+            site_name=site_name,
+            cat_name=cat_name,
+            page=page,
+            total_pages=total_pages,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = f"sp_wppag_cat:{site_key}:{cat_sid}"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": f"wp_{site_key}",
+            "is_category_browse": True,
+            "site_name": site_name,
+            "cat_name": cat_name,
+            "query": cat_name,
+            "scope_name": f"{site_name}: {cat_name}",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+            "page_callback_prefix": page_pfx,
+            "cat_sid": cat_sid,
+            "cat_url": cat_url,
+        }
+
+        await query.edit_message_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        context.user_data["active_card_msg_id"] = query.message.message_id
+        return
+
+    elif data.startswith("sp_wppag_search:"):
+        parts = data.split(":")
+        site_key = parts[1]
+        s_query = parts[2]
+        page = int(parts[3])
+        await execute_platform_search(
+            update=update,
+            context=context,
+            plat=f"wp_{site_key}",
+            query=s_query,
+            edit_msg=query.message,
+            page=page,
+            back_callback=f"sp_wpsite:{site_key}",
+        )
         return
 
     elif data.startswith("sp_wpapply:"):

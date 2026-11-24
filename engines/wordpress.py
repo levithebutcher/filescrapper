@@ -192,6 +192,40 @@ def get_wp_listing_posts(listing_url: str, page: int = 1, limit: int = 25) -> li
     return posts
 
 
+def get_wp_categories(site_key: str) -> list[dict]:
+    """Fetch categories from supported WordPress sites (Omaal63, DesiJugar, GulabiHub)."""
+    site_urls = {
+        "omaal": "https://omaal63.net/",
+        "desijugar": "https://desijugar.me/",
+        "gulabi": "https://gulabihub.com/categories/",
+    }
+    target = site_urls.get(site_key.lower().strip())
+    if not target:
+        return []
+
+    soup = _fetch_soup(target)
+    if not soup:
+        return []
+
+    categories = []
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if "/category/" in href:
+            clean_url = href.split("?")[0].rstrip("/") + "/"
+            name = a.get_text(strip=True)
+            if not name or name.lower() in ("categories", "category", "uncategorized") or len(name) > 35:
+                continue
+            if clean_url not in seen:
+                seen.add(clean_url)
+                categories.append({
+                    "name": name,
+                    "url": clean_url,
+                })
+
+    return categories
+
+
 class WordPressLockerEngine(BaseEngine):
     """WordPress Locker & Tube Engine."""
     name: str = "WordPressLocker"
