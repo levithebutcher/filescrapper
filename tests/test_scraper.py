@@ -522,6 +522,37 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(get_host_display_name("https://cloudfam.io/a014faa8d6f4"), "☁️ Cloudfam")
         self.assertEqual(get_host_key("https://cloudfam.io/a014faa8d6f4"), "cloudfam")
 
+    def test_mirror_domains_and_exclusions(self):
+        """Test mirror domains for streamtape, lplaygo, and rejection of frdl.io/ads."""
+        from scraper import _is_streaming_link, get_host_display_name, get_host_key, filter_links_by_preference
+
+        # Streamtape mirror
+        strtape_url = "https://strtape.site/v/p1lm4vzAwYclGK"
+        self.assertTrue(_is_streaming_link(strtape_url))
+        self.assertEqual(get_host_display_name(strtape_url), "🎬 Streamtape")
+        self.assertEqual(get_host_key(strtape_url), "streamtape")
+
+        # LPlayGo mirror
+        lulu_url = "https://luluvido.com/ryrvym3ce2c4"
+        self.assertTrue(_is_streaming_link(lulu_url))
+        self.assertEqual(get_host_display_name(lulu_url), "▶️ iPlayGo")
+        self.assertEqual(get_host_key(lulu_url), "iplaygo")
+
+        badge, filtered, is_fallback = filter_links_by_preference([lulu_url], "lplaygo")
+        self.assertEqual(badge, "▶️ iPlayGo")
+        self.assertEqual(filtered, [lulu_url])
+        self.assertFalse(is_fallback)
+
+        badge, filtered, is_fallback = filter_links_by_preference([strtape_url], "streamtape")
+        self.assertEqual(badge, "🎬 Streamtape")
+        self.assertEqual(filtered, [strtape_url])
+        self.assertFalse(is_fallback)
+
+        # Excluded spam/ad hosts
+        self.assertFalse(_is_streaming_link("https://frdl.io/2sliuajap8ub/0e59.mp4.html"))
+        self.assertFalse(_is_streaming_link("https://a-ads.com/campaign/123"))
+        self.assertFalse(_is_streaming_link("https://tsyndicate.com/ad/xyz"))
+
     def test_parse_and_format_date_ist(self):
         """Test parsing ISO timestamp to IST and human-readable string formatting."""
         from scraper import parse_to_ist, format_date_ist

@@ -181,7 +181,7 @@ def build_search_platform_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌐 GulabiHub", callback_data="sp_wpsite:gulabi"),
         ],
         [
-            InlineKeyboardButton("🔙 Back", callback_data="cb_main_menu"),
+            InlineKeyboardButton("🔙 Back", callback_data="sp_cancel"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])

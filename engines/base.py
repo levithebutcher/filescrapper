@@ -84,11 +84,83 @@ def _create_session() -> requests.Session:
 _session = _create_session()
 
 
+# Streaming Provider Mirrors & Exclusions
+STREAMTAPE_MIRRORS = (
+    "streamtape",
+    "strtape",
+    "strcloud",
+    "strtpe",
+    "streamta.pe",
+    "tapecontent",
+    "shavetape",
+    "scloud.online",
+)
+
+LPLAYGO_MIRRORS = (
+    "lplaygo",
+    "iplaygo",
+    "luluvido",
+    "luluvise",
+    "lulustream",
+    "luluvdo",
+    "playgo.",
+    "lplay.to",
+)
+
+DOOD_MIRRORS = (
+    "doodstream",
+    "dood.",
+    "ds2play",
+    "do0od",
+    "d000d",
+    "d0o0d",
+)
+
+STREAMWISH_MIRRORS = (
+    "streamwish",
+    "wishembed",
+    "wishfast",
+    "flaswish",
+    "swhoi",
+    "sfastwish",
+    "embedwish",
+)
+
+FILELIONS_MIRRORS = (
+    "filelions",
+    "lionembed",
+)
+
+ABSTREAM_MIRRORS = (
+    "abstream",
+    "abysscdn",
+)
+
+MIXDROP_MIRRORS = (
+    "mixdrop",
+    "mdzsmutpcvykb",
+)
+
+EXCLUDED_STREAMING_DOMAINS = (
+    "frdl.io",
+    "a-ads.com",
+    "tsyndicate.com",
+    "doubleclick",
+    "exoclick",
+    "juicyads",
+)
+
+
 def _is_streaming_link(url: str) -> bool:
     """Check if URL belongs to any supported streaming domain or direct video/archive link."""
     if not url or not isinstance(url, str):
         return False
     try:
+        domain = urlparse(url).netloc.lower()
+        if not domain:
+            domain = url.split("/")[0].lower()
+        if any(ign in domain for ign in EXCLUDED_STREAMING_DOMAINS):
+            return False
         u_low = url.lower().split("?")[0].strip()
         if u_low.endswith(".mp4") or u_low.endswith(".zip"):
             return True
@@ -96,9 +168,6 @@ def _is_streaming_link(url: str) -> bool:
             return True
         if "/processed/" in u_low and ".mp4" in u_low:
             return True
-        domain = urlparse(url).netloc.lower()
-        if not domain:
-            domain = url.split("/")[0].lower()
         return any(sd in domain for sd in STREAMING_DOMAINS)
     except Exception:
         return False
@@ -165,29 +234,29 @@ def get_host_display_name(url: str) -> str:
             return "⚡ Direct MP4"
         elif clean_path.endswith(".zip") or "/downloads/" in u_low:
             return "📦 Download ZIP"
-        elif "streamtape" in domain:
+        elif any(m in domain for m in STREAMTAPE_MIRRORS):
             return "🎬 Streamtape"
         elif "vidara" in domain:
             return "⚡ Vidara"
         elif "streamfile" in domain:
             return "📥 Streamfiles"
-        elif "iplaygo" in domain or "lplaygo" in domain:
+        elif any(m in domain for m in LPLAYGO_MIRRORS):
             return "▶️ iPlayGo"
-        elif "abstream" in domain:
+        elif any(m in domain for m in ABSTREAM_MIRRORS):
             return "📺 ABStream"
         elif "uqload" in domain:
             return "⚡ Uqload"
         elif "streamcash" in domain:
             return "💰 Streamcash"
-        elif "dood" in domain:
+        elif any(m in domain for m in DOOD_MIRRORS):
             return "🎥 Doodstream"
-        elif "streamwish" in domain:
+        elif any(m in domain for m in STREAMWISH_MIRRORS):
             return "✨ Streamwish"
-        elif "filelions" in domain:
+        elif any(m in domain for m in FILELIONS_MIRRORS):
             return "🦁 Filelions"
         elif "dropload" in domain:
             return "📦 Dropload"
-        elif "mixdrop" in domain or "mdzsmutpcvykb" in domain:
+        elif any(m in domain for m in MIXDROP_MIRRORS):
             return "💧 Mixdrop"
         elif "streamruby" in domain:
             return "💎 Streamruby"
@@ -210,29 +279,29 @@ def get_host_key(url: str) -> str:
             return "direct_mp4"
         elif clean_path.endswith(".zip") or "/downloads/" in u_low:
             return "direct_zip"
-        elif "streamtape" in domain:
+        elif any(m in domain for m in STREAMTAPE_MIRRORS):
             return "streamtape"
         elif "vidara" in domain:
             return "vidara"
         elif "streamfile" in domain:
             return "streamfiles"
-        elif "iplaygo" in domain or "lplaygo" in domain:
+        elif any(m in domain for m in LPLAYGO_MIRRORS):
             return "iplaygo"
-        elif "abstream" in domain:
+        elif any(m in domain for m in ABSTREAM_MIRRORS):
             return "abstream"
         elif "uqload" in domain:
             return "uqload"
         elif "streamcash" in domain:
             return "streamcash"
-        elif "dood" in domain:
+        elif any(m in domain for m in DOOD_MIRRORS):
             return "doodstream"
-        elif "streamwish" in domain:
+        elif any(m in domain for m in STREAMWISH_MIRRORS):
             return "streamwish"
-        elif "filelions" in domain:
+        elif any(m in domain for m in FILELIONS_MIRRORS):
             return "filelions"
         elif "dropload" in domain:
             return "dropload"
-        elif "mixdrop" in domain or "mdzsmutpcvykb" in domain:
+        elif any(m in domain for m in MIXDROP_MIRRORS):
             return "mixdrop"
         elif "streamruby" in domain:
             return "streamruby"

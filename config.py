@@ -31,22 +31,60 @@ if _custom_domains:
     STREAMING_DOMAINS = [d.strip().lower() for d in _custom_domains.split(",") if d.strip()]
 else:
     STREAMING_DOMAINS = [
-        "streamtape.com",
-        "vidara.to",
-        "streamfiles.net",
-        "streamfile.net",
-        "lplaygo.com",
-        "abstream.to",
-        "uqload.com",
-        "uqload.vc",
-        "streamcash.to",
-        "doodstream.com",
+        # Streamtape & Mirrors
+        "streamtape",
+        "strtape",
+        "strcloud",
+        "strtpe",
+        "streamta.pe",
+        "tapecontent",
+        "shavetape",
+        "scloud.online",
+        # LPlayGo / iPlayGo / LuluStream & Mirrors
+        "lplaygo",
+        "iplaygo",
+        "luluvido",
+        "luluvise",
+        "lulustream",
+        "luluvdo",
+        "playgo.",
+        "lplay.to",
+        # Vidara & Mirrors
+        "vidara",
+        # StreamFiles & Mirrors
+        "streamfile",
+        "streamfiles",
+        # ABStream & Mirrors
+        "abstream",
+        "abysscdn",
+        # Uqload & Mirrors
+        "uqload",
+        # StreamCash & Mirrors
+        "streamcash",
+        # Doodstream & Mirrors
+        "doodstream",
         "dood.",
+        "ds2play",
+        "do0od",
+        "d000d",
+        "d0o0d",
+        # StreamWish & Mirrors
         "streamwish",
+        "wishembed",
+        "wishfast",
+        "flaswish",
+        "swhoi",
+        "sfastwish",
+        "embedwish",
+        # FileLions & Mirrors
         "filelions",
+        "lionembed",
+        # DropLoad, MixDrop, StreamRuby, Cloudfam
         "dropload",
         "mixdrop",
+        "mdzsmutpcvykb",
         "streamruby",
+        "cloudfam",
         "cloudfam.io",
     ]
 

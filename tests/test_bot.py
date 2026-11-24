@@ -828,8 +828,7 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sp_wpsite:omaal", button_data)      # Omaal63
         self.assertIn("sp_wpsite:desijugar", button_data)  # DesiJugar
         self.assertIn("sp_wpsite:gulabi", button_data)     # GulabiHub
-        self.assertIn("cb_main_menu", button_data)         # Back
-        self.assertIn("sp_cancel", button_data)            # Cancel
+        self.assertIn("sp_cancel", button_data)            # Back & Cancel clean prompt
 
     @patch("bot.send_post_card")
     @patch("bot.get_mmsvibex_video_details")
@@ -1355,7 +1354,7 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         # Row 4: Back, Cancel
         self.assertEqual(len(grid[3]), 2)
         self.assertEqual(grid[3][0].text, "🔙 Back")
-        self.assertEqual(grid[3][0].callback_data, "cb_main_menu")
+        self.assertEqual(grid[3][0].callback_data, "sp_cancel")
         self.assertEqual(grid[3][1].text, "❌ Cancel")
         self.assertEqual(grid[3][1].callback_data, "sp_cancel")
 

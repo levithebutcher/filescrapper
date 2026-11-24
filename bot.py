@@ -4438,9 +4438,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("awaiting_search_flow", None)
         context.user_data.pop("active_search_results", None)
         try:
-            await query.edit_message_text("<blockquote>❌ Cancelled.</blockquote>", parse_mode=ParseMode.HTML)
+            await query.message.delete()
         except Exception:
-            pass
+            try:
+                await query.edit_message_text("<blockquote>❌ Cancelled.</blockquote>", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
     elif data == "cb_help":
         await help_command(update, context)
     elif data == "cb_domains":
