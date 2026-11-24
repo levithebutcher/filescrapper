@@ -305,6 +305,250 @@ class TestEngines(unittest.TestCase):
             mock_fetch.assert_called_with("https://omaal63.net/page/2/?s=Aditi")
             self.assertEqual(len(res_p2), 1)
 
+    def test_new_platforms_registry_resolution(self):
+        """Verify default registry resolves engines for all 6 new platforms."""
+        from engines.leakedzone import LeakedZoneEngine
+        from engines.kvs import KvsEngine
+        from engines.thotchicks import ThotChicksEngine
+        from engines.mmsdesi import MmsDesiEngine
+
+        # LeakedZone
+        e_lz = get_engine_for_url("https://leakedzone.com/jasminesherni/video/22079644")
+        self.assertIsInstance(e_lz, LeakedZoneEngine)
+        self.assertEqual(e_lz.name, "LeakedZone")
+
+        # X-Video Tube
+        e_xv = get_engine_for_url("https://x-video.tube/video/340835/jasmine-sherni/")
+        self.assertIsInstance(e_xv, KvsEngine)
+        self.assertEqual(e_xv.name, "KVSTube")
+
+        # HornySapiens & ViralXXXPorn
+        e_hs = get_engine_for_url("https://hornysapiens.com/videos/304192/jasmine-sherni/")
+        self.assertIsInstance(e_hs, KvsEngine)
+        e_vx = get_engine_for_url("https://viralxxxporn.com/videos/304192/jasmine-sherni/")
+        self.assertIsInstance(e_vx, KvsEngine)
+
+        # ThotChicks
+        e_tc = get_engine_for_url("https://thotchicks.com/jasmine-sherni-video/")
+        self.assertIsInstance(e_tc, ThotChicksEngine)
+        self.assertEqual(e_tc.name, "ThotChicks")
+
+        # MMSDesi
+        e_desi = get_engine_for_url("https://www.mmsdesi.me/watch/vandana-pathak-exclusive")
+        self.assertIsInstance(e_desi, MmsDesiEngine)
+        self.assertEqual(e_desi.name, "MMSDesi")
+
+        # MMSMaza (registered in WordPressLockerEngine)
+        e_maza = get_engine_for_url("https://mmsmaza.im/indian-housewife-video/")
+        self.assertIsInstance(e_maza, WordPressLockerEngine)
+        self.assertEqual(e_maza.name, "WordPressLocker")
+
+    def test_leakedzone_token_crack_and_card_format(self):
+        """Test LeakedZone JWPlayer token decoding and post card formatting."""
+        from engines.leakedzone import decode_leakedzone_token
+        from ui import format_post_card
+
+        # Valid token test: s.slice(16); s.slice(0, -16); atob(s.reverse())
+        # Let's craft a token for: https://leakedzone.com/m3u8/test.m3u8
+        import base64
+        url = "https://leakedzone.com/m3u8/test.m3u8"
+        b64_rev = base64.b64encode(url.encode("utf-8")).decode("utf-8")[::-1]
+        token = "1234567890123456" + b64_rev + "1234567890123456"
+
+        decoded = decode_leakedzone_token(token)
+        self.assertEqual(decoded, url)
+
+        # Post card formatting
+        details = {
+            "title": "Jasmine Sherni Exclusive Private Session",
+            "model_name": "Jasmine Sherni",
+            "duration": "14m 28s",
+            "date_ist": "2 days ago",
+            "streaming_link": "https://stream.leakedzone.com/hls/22079644/master.m3u8",
+            "post_url": "https://leakedzone.com/jasminesherni/video/22079644",
+            "site": "leakedzone",
+        }
+        card = format_post_card(details)
+        self.assertIn("📌 <b>Title:</b> Jasmine Sherni Exclusive Private Session", card)
+        self.assertIn("👤 <b>Model:</b> Jasmine Sherni, LeakedZone", card)
+        self.assertIn("⏱️ <b>Duration:</b> 14m 28s  •  📅 <b>Added:</b> 2 days ago", card)
+        self.assertIn("🔗 <b>Direct Stream Link (HLS .m3u8):</b>", card)
+        self.assertIn("<code>https://stream.leakedzone.com/hls/22079644/master.m3u8</code>", card)
+        self.assertIn('<a href="https://leakedzone.com/jasminesherni/video/22079644">Source Webpage</a>', card)
+
+    def test_kvs_card_format(self):
+        """Test KVS post card formatting for X-Video Tube and HornySapiens."""
+        from ui import format_post_card
+
+        # X-Video
+        xv_details = {
+            "title": "Jasmine Sherni OnlyFans Leaked",
+            "model_name": "jasminesherni-onlyfans-leaked",
+            "quality": "1080p Full HD",
+            "duration": "18m 42s",
+            "date_ist": "3 days ago",
+            "streaming_link": "https://cdn.x-video.tube/videos/340835/1080p.mp4?validfrom=123",
+            "post_url": "https://x-video.tube/video/340835/jasmine-sherni/",
+            "site": "xvideotube",
+        }
+        xv_card = format_post_card(xv_details)
+        self.assertIn("📌 <b>Title:</b> Jasmine Sherni OnlyFans Leaked", xv_card)
+        self.assertIn("🏷️ <b>Tag:</b> jasminesherni-onlyfans-leaked, X-Video Tube", xv_card)
+        self.assertIn("⚡ <b>Quality:</b> 1080p Full HD", xv_card)
+        self.assertIn("<code>https://cdn.x-video.tube/videos/340835/1080p.mp4?validfrom=123</code>", xv_card)
+        self.assertIn('<a href="https://x-video.tube/video/340835/jasmine-sherni/">Source Webpage</a>', xv_card)
+
+        # HornySapiens
+        hs_details = {
+            "title": "Jasmine Sherni Hardcore",
+            "model_name": "Jasmine Sherni",
+            "quality": "1080p Full HD",
+            "duration": "24m 10s",
+            "date_ist": "1 week ago",
+            "streaming_link": "https://cdn.hornysapiens.com/get_file/1/video/304192/1080p.mp4",
+            "post_url": "https://hornysapiens.com/videos/304192/jasmine-sherni/",
+            "site": "hornysapiens",
+        }
+        hs_card = format_post_card(hs_details)
+        self.assertIn("📌 <b>Title:</b> Jasmine Sherni Hardcore", hs_card)
+        self.assertIn("👤 <b>Model:</b> Jasmine Sherni, HornySapiens", hs_card)
+        self.assertIn("<code>https://cdn.hornysapiens.com/get_file/1/video/304192/1080p.mp4</code>", hs_card)
+        self.assertIn('<a href="https://hornysapiens.com/videos/304192/jasmine-sherni/">Source Webpage</a>', hs_card)
+
+    def test_thotchicks_card_format(self):
+        """Test ThotChicks post card formatting."""
+        from ui import format_post_card
+
+        details = {
+            "title": "Jasmine Sherni POV Video",
+            "actor_name": "Jasmine Sherni",
+            "duration": "16m 50s",
+            "date_ist": "4 days ago",
+            "streaming_link": "https://edge.thotplay.com/hls/live/video_token/playlist.m3u8",
+            "post_url": "https://thotchicks.com/jasmine-sherni-pov/",
+            "site": "thotchicks",
+        }
+        card = format_post_card(details)
+        self.assertIn("📌 <b>Title:</b> Jasmine Sherni POV Video", card)
+        self.assertIn("👤 <b>Actor:</b> Jasmine Sherni, ThotChicks", card)
+        self.assertIn("🔗 <b>Direct Stream Link (.m3u8):</b>", card)
+        self.assertIn("<code>https://edge.thotplay.com/hls/live/video_token/playlist.m3u8</code>", card)
+        self.assertIn('<a href="https://thotchicks.com/jasmine-sherni-pov/">Source Webpage</a>', card)
+
+    def test_mmsdesi_card_format(self):
+        """Test MMSDesi post card formatting with attached photos."""
+        from ui import format_post_card
+
+        # Case 1: with attached photos
+        details = {
+            "title": "Cute College Girl Viral Hotel MMS Video",
+            "category_name": "Desi New",
+            "duration": "08m 15s",
+            "date_ist": "Today",
+            "streaming_link": "https://cdn.mmsdesi.me/media/videos/hotel-mms-720p.mp4",
+            "attached_photos": [
+                "https://cdn.mmsdesi.me/media/photos/01.jpg",
+                "https://cdn.mmsdesi.me/media/photos/02.jpg",
+            ],
+            "post_url": "https://www.mmsdesi.me/watch/hotel-mms-viral-video",
+            "site": "mmsdesi",
+        }
+        card = format_post_card(details)
+        self.assertIn("📌 <b>Title:</b> Cute College Girl Viral Hotel MMS Video", card)
+        self.assertIn("📁 <b>Category:</b> Desi New, MMSDesi", card)
+        self.assertIn("🔗 <b>Main Direct Video Link:</b>", card)
+        self.assertIn("<code>https://cdn.mmsdesi.me/media/videos/hotel-mms-720p.mp4</code>", card)
+        self.assertIn("📸 <b>Attached Photo Album (2 Photos):</b>", card)
+        self.assertIn("1. <code>https://cdn.mmsdesi.me/media/photos/01.jpg</code>", card)
+        self.assertIn("2. <code>https://cdn.mmsdesi.me/media/photos/02.jpg</code>", card)
+        self.assertIn('<a href="https://www.mmsdesi.me/watch/hotel-mms-viral-video">Source Webpage</a>', card)
+
+        # Case 2: without photos -> 'Not present'
+        details["attached_photos"] = []
+        card_no_photo = format_post_card(details)
+        self.assertIn("📸 <b>Attached Photo Album:</b> Not present", card_no_photo)
+
+    def test_mmsmaza_card_format_single_link(self):
+        """Test MMSMaza delivers only ONE single best streaming mirror link."""
+        from ui import format_post_card
+
+        details = {
+            "title": "Indian Housewife Viral Bathroom Video",
+            "category_name": "Indian Leaks",
+            "duration": "11m 30s",
+            "date_ist": "Yesterday",
+            "streaming_links": [
+                "https://shavetape.cash/v/p1lm4vzAwYclGK",
+                "https://luluvido.com/ryrvym3ce2c4",
+                "https://cloudfam.io/e/8x9q21az",
+            ],
+            "post_url": "https://mmsmaza.im/indian-housewife-video/",
+            "site": "mmsmaza",
+        }
+        card = format_post_card(details, user_pref="streamtape")
+        self.assertIn("📌 <b>Title:</b> Indian Housewife Viral Bathroom Video", card)
+        self.assertIn("📂 <b>Category:</b> Indian Leaks, MMSMaza", card)
+        self.assertIn("🔗 <b>Streaming Mirror Link:</b>", card)
+        self.assertIn("<code>https://shavetape.cash/v/p1lm4vzAwYclGK</code>", card)
+        self.assertNotIn("https://luluvido.com", card)
+        self.assertNotIn("https://cloudfam.io", card)
+        self.assertIn('<a href="https://mmsmaza.im/indian-housewife-video/">Source Webpage</a>', card)
+
+    def test_hub_keyboards_structure(self):
+        """Verify Hub Keyboards have Search on top row and follow exact button specs."""
+        from keyboards import (
+            build_leakedzone_hub_keyboard,
+            build_xvideo_hub_keyboard,
+            build_hornysapiens_hub_keyboard,
+            build_thotchicks_hub_keyboard,
+            build_mmsdesi_hub_keyboard,
+            build_mmsmaza_hub_keyboard,
+        )
+
+        # 1. LeakedZone: Search top, Newest/Most Viewed/Longest, Back/Cancel
+        lz_kb = build_leakedzone_hub_keyboard("jasmine")
+        self.assertEqual(lz_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
+        self.assertEqual(len(lz_kb.inline_keyboard[1]), 3)
+        self.assertEqual(lz_kb.inline_keyboard[1][0].text, "🆕 Newest")
+        self.assertEqual(lz_kb.inline_keyboard[1][1].text, "👁️ Most Viewed")
+        self.assertEqual(lz_kb.inline_keyboard[1][2].text, "⏱️ Longest")
+        self.assertEqual(lz_kb.inline_keyboard[2][0].text, "🔙 Back")
+        self.assertEqual(lz_kb.inline_keyboard[2][1].text, "❌ Cancel")
+
+        # 2. X-Video: Search top, Latest/Longest, Back/Cancel
+        xv_kb = build_xvideo_hub_keyboard("jasmine")
+        self.assertEqual(xv_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
+        self.assertEqual(len(xv_kb.inline_keyboard[1]), 2)
+        self.assertEqual(xv_kb.inline_keyboard[1][0].text, "🆕 Latest")
+        self.assertEqual(xv_kb.inline_keyboard[1][1].text, "⏱️ Longest")
+
+        # 3. HornySapiens: Search top, Latest/Most Viewed/Longest, Back/Cancel
+        hs_kb = build_hornysapiens_hub_keyboard("jasmine")
+        self.assertEqual(hs_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
+        self.assertEqual(len(hs_kb.inline_keyboard[1]), 3)
+
+        # 4. ThotChicks: Search top, Newest/Most Viewed/Longest, Back/Cancel
+        tc_kb = build_thotchicks_hub_keyboard("jasmine")
+        self.assertEqual(tc_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
+        self.assertEqual(len(tc_kb.inline_keyboard[1]), 3)
+
+        # 5. MMSDesi: Search top, 4 Categories, Back/Cancel
+        desi_kb = build_mmsdesi_hub_keyboard()
+        self.assertEqual(desi_kb.inline_keyboard[0][0].text, "🔍 Search Videos")
+        self.assertEqual(desi_kb.inline_keyboard[1][0].text, "🔥 Trending")
+        self.assertEqual(desi_kb.inline_keyboard[1][1].text, "⚡ Desi New")
+        self.assertEqual(desi_kb.inline_keyboard[2][0].text, "📦 Desi Old")
+        self.assertEqual(desi_kb.inline_keyboard[2][1].text, "💃 Tango Strip")
+
+        # 6. MMSMaza: Search top, Newest Releases, Categories, Back/Cancel (No Most Viewed or Longest!)
+        maza_kb = build_mmsmaza_hub_keyboard()
+        self.assertEqual(maza_kb.inline_keyboard[0][0].text, "🔍 Search MMS")
+        self.assertEqual(maza_kb.inline_keyboard[1][0].text, "🆕 Newest Releases")
+        self.assertEqual(maza_kb.inline_keyboard[1][1].text, "📂 Categories")
+        btn_texts = [b.text for row in maza_kb.inline_keyboard for b in row]
+        self.assertNotIn("🔥 Most Viewed", btn_texts)
+        self.assertNotIn("⏱️ Longest", btn_texts)
+
 
 if __name__ == "__main__":
     unittest.main()

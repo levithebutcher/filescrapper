@@ -10,6 +10,10 @@ from engines.invision import InvisionCommunityEngine
 from engines.wordpress import WordPressLockerEngine
 from engines.tube import MediaTubeEngine
 from engines.livecam import LiveCamEngine
+from engines.leakedzone import LeakedZoneEngine
+from engines.kvs import KvsEngine
+from engines.thotchicks import ThotChicksEngine
+from engines.mmsdesi import MmsDesiEngine
 from engines.universal import UniversalFallbackEngine
 
 
@@ -70,7 +74,19 @@ registry.register(MediaTubeEngine())
 # 4. LiveCam Engine (LiveCamRips)
 registry.register(LiveCamEngine())
 
-# 5. Universal Fallback Engine (for unknown/new domains)
+# 5. LeakedZone Engine (leakedzone.com)
+registry.register(LeakedZoneEngine())
+
+# 6. KVS Tube Engine (x-video.tube, hornysapiens.com, viralxxxporn.com)
+registry.register(KvsEngine())
+
+# 7. ThotChicks Engine (thotchicks.com)
+registry.register(ThotChicksEngine())
+
+# 8. MMSDesi Engine (mmsdesi.me)
+registry.register(MmsDesiEngine())
+
+# 9. Universal Fallback Engine (for unknown/new domains)
 registry.register(UniversalFallbackEngine())
 
 

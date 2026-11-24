@@ -1351,16 +1351,29 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(grid[1][1].callback_data, "sp_wpsite:omaal")
         self.assertEqual(grid[1][2].callback_data, "sp_wpsite:desijugar")
 
-        # Row 3: GulabiHub
-        self.assertEqual(len(grid[2]), 1)
+        # Row 3: GulabiHub, MMSMaza, MMSDesi
+        self.assertEqual(len(grid[2]), 3)
         self.assertEqual(grid[2][0].callback_data, "sp_wpsite:gulabi")
+        self.assertEqual(grid[2][1].callback_data, "sp_wpsite:mmsmaza")
+        self.assertEqual(grid[2][2].callback_data, "sp_choose:desi")
 
-        # Row 4: Back, Cancel
-        self.assertEqual(len(grid[3]), 2)
-        self.assertEqual(grid[3][0].text, "🔙 Back")
-        self.assertEqual(grid[3][0].callback_data, "sp_cancel")
-        self.assertEqual(grid[3][1].text, "❌ Cancel")
-        self.assertEqual(grid[3][1].callback_data, "sp_cancel")
+        # Row 4: LeakedZone, X-Video, HornySapiens
+        self.assertEqual(len(grid[3]), 3)
+        self.assertEqual(grid[3][0].callback_data, "sp_choose:lz")
+        self.assertEqual(grid[3][1].callback_data, "sp_choose:xvid")
+        self.assertEqual(grid[3][2].callback_data, "sp_choose:hs")
+
+        # Row 5: ThotChicks
+        self.assertEqual(len(grid[4]), 1)
+        self.assertEqual(grid[4][0].callback_data, "sp_choose:tc")
+
+        # Last Row: Back, Cancel
+        last_row = grid[-1]
+        self.assertEqual(len(last_row), 2)
+        self.assertEqual(last_row[0].text, "🔙 Back")
+        self.assertEqual(last_row[0].callback_data, "sp_cancel")
+        self.assertEqual(last_row[1].text, "❌ Cancel")
+        self.assertEqual(last_row[1].callback_data, "sp_cancel")
 
     async def test_sp_wpsite_hub_callback(self):
         """Test tapping a WordPress site shows the Site Hub card with Search, Newest, Categories, Back, Cancel."""

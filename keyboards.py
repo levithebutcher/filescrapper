@@ -165,7 +165,7 @@ def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMar
 # --- Search & Platform Selection Keyboards ---
 
 def build_search_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform selection keyboard for /search with no args (3 buttons per row, with WordPress sites displayed)."""
+    """Platform selection keyboard for /search with no args (3 buttons per row, with WordPress & Tube sites displayed)."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💬 DropMMS", callback_data="sp_choose:fm"),
@@ -179,6 +179,16 @@ def build_search_platform_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🌐 GulabiHub", callback_data="sp_wpsite:gulabi"),
+            InlineKeyboardButton("🔥 MMSMaza", callback_data="sp_wpsite:mmsmaza"),
+            InlineKeyboardButton("📹 MMSDesi", callback_data="sp_choose:desi"),
+        ],
+        [
+            InlineKeyboardButton("🔓 LeakedZone", callback_data="sp_choose:lz"),
+            InlineKeyboardButton("📺 X-Video", callback_data="sp_choose:xvid"),
+            InlineKeyboardButton("🔞 HornySapiens", callback_data="sp_choose:hs"),
+        ],
+        [
+            InlineKeyboardButton("💃 ThotChicks", callback_data="sp_choose:tc"),
         ],
         [
             InlineKeyboardButton("🔙 Back", callback_data="sp_cancel"),
@@ -188,7 +198,7 @@ def build_search_platform_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_search_execute_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform execution keyboard for /search with query (3 buttons per row, with WordPress sites displayed)."""
+    """Platform execution keyboard for /search with query (3 buttons per row, with WordPress & Tube sites displayed)."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
@@ -202,6 +212,16 @@ def build_search_execute_platform_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🌐 GulabiHub", callback_data="sp_do:gulabi"),
+            InlineKeyboardButton("🔥 MMSMaza", callback_data="sp_do:mmsmaza"),
+            InlineKeyboardButton("📹 MMSDesi", callback_data="sp_do:desi"),
+        ],
+        [
+            InlineKeyboardButton("🔓 LeakedZone", callback_data="sp_do:lz"),
+            InlineKeyboardButton("📺 X-Video", callback_data="sp_do:xvid"),
+            InlineKeyboardButton("🔞 HornySapiens", callback_data="sp_do:hs"),
+        ],
+        [
+            InlineKeyboardButton("💃 ThotChicks", callback_data="sp_do:tc"),
         ],
         [
             InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
@@ -212,6 +232,8 @@ def build_search_execute_platform_keyboard() -> InlineKeyboardMarkup:
 
 def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for WordPress locker sites (Card 2)."""
+    if site_key == "mmsmaza":
+        return build_mmsmaza_hub_keyboard(back_callback)
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 Search Videos", callback_data=f"sp_wpsearch:{site_key}"),
@@ -219,6 +241,115 @@ def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") 
         [
             InlineKeyboardButton("⚡ Newest Posts", callback_data=f"sp_wplatest:{site_key}"),
             InlineKeyboardButton("📁 Categories", callback_data=f"sp_wpcats:{site_key}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for LeakedZone (Search top, Newest/Most Viewed/Longest, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data=f"lz_search:{model_slug}"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Newest", callback_data=f"lz_sort:{model_slug}:newest"),
+            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"lz_sort:{model_slug}:views"),
+            InlineKeyboardButton("⏱️ Longest", callback_data=f"lz_sort:{model_slug}:longest"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for X-Video Tube (Search top, Latest/Longest, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data=f"xvid_search:{tag_or_slug}"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Latest", callback_data=f"xvid_sort:{tag_or_slug}:latest"),
+            InlineKeyboardButton("⏱️ Longest", callback_data=f"xvid_sort:{tag_or_slug}:longest"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for HornySapiens & ViralXXXPorn (Search top, Latest/Most Viewed/Longest, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data=f"hs_search:{model_slug}"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Latest", callback_data=f"hs_sort:{model_slug}:latest"),
+            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"hs_sort:{model_slug}:views"),
+            InlineKeyboardButton("⏱️ Longest", callback_data=f"hs_sort:{model_slug}:longest"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_thotchicks_hub_keyboard(actor_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for ThotChicks (Search top, Newest/Most Viewed/Longest, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data=f"tc_search:{actor_slug}"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Newest", callback_data=f"tc_sort:{actor_slug}:newest"),
+            InlineKeyboardButton("👁️ Most Viewed", callback_data=f"tc_sort:{actor_slug}:views"),
+            InlineKeyboardButton("⏱️ Longest", callback_data=f"tc_sort:{actor_slug}:longest"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_mmsdesi_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for MMSDesi (Search top, 4 Categories, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search Videos", callback_data="desi_search"),
+        ],
+        [
+            InlineKeyboardButton("🔥 Trending", callback_data="desi_cat:trending"),
+            InlineKeyboardButton("⚡ Desi New", callback_data="desi_cat:desi-new"),
+        ],
+        [
+            InlineKeyboardButton("📦 Desi Old", callback_data="desi_cat:desi-old"),
+            InlineKeyboardButton("💃 Tango Strip", callback_data="desi_cat:tango-strip"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
+    ])
+
+
+def build_mmsmaza_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Hub keyboard for MMSMaza (Search top, Newest Releases, Categories, Back/Cancel)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Search MMS", callback_data="sp_wpsearch:mmsmaza"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Newest Releases", callback_data="sp_wplatest:mmsmaza"),
+            InlineKeyboardButton("📂 Categories", callback_data="sp_wpcats:mmsmaza"),
         ],
         [
             InlineKeyboardButton("🔙 Back", callback_data=back_callback),
@@ -308,14 +439,14 @@ def build_slice_selection_keyboard(
     short_id: str,
     counts: list[int] = None,
     prefix: str = "sp_vrun",
+    back_callback: str = "cb_main_menu",
 ) -> InlineKeyboardMarkup:
-    """Quick count slice buttons (Top 5, Top 10, Top 20) with Cancel."""
-    if counts is None:
-        counts = [5, 10, 20]
-    row = [InlineKeyboardButton(f"🔝 Top {c}", callback_data=f"{prefix}:{short_id}:{c}") for c in counts]
+    """Range selection keyboard strictly with only Back and Cancel buttons (no slice buttons)."""
     return InlineKeyboardMarkup([
-        row,
-        [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
+        ],
     ])
 
 
@@ -424,32 +555,28 @@ def build_search_results_clean_keyboard(
     return InlineKeyboardMarkup(buttons)
 
 
-def build_forum_options_keyboard(short_id: str) -> InlineKeyboardMarkup:
-    """Slice and sorting options for forum categories."""
+def build_forum_options_keyboard(short_id: str, back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Options for forum categories with Back and Cancel."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚡ Top 5 Posts", callback_data=f"sp_frun:{short_id}:5"),
-            InlineKeyboardButton("⚡ Top 10 Posts", callback_data=f"sp_frun:{short_id}:10"),
+            InlineKeyboardButton("📅 Today Only", callback_data=f"sp_ftoday:{short_id}"),
         ],
         [
-            InlineKeyboardButton("📅 Today Only", callback_data=f"sp_ftoday:{short_id}"),
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ]
     ])
 
 
-def build_model_options_keyboard(short_id: str) -> InlineKeyboardMarkup:
-    """Options for LiveCam model pages."""
+def build_model_options_keyboard(short_id: str, back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+    """Options for LiveCam model pages with Back and Cancel."""
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔝 Top 5", callback_data=f"sp_mrun:{short_id}:5"),
-            InlineKeyboardButton("🔝 Top 10", callback_data=f"sp_mrun:{short_id}:10"),
-        ],
         [
             InlineKeyboardButton("📅 Today Only", callback_data=f"sp_mtoday:{short_id}"),
             InlineKeyboardButton("🌐 All Videos", callback_data=f"sp_mall:{short_id}"),
         ],
         [
+            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ]
     ])

@@ -32,7 +32,7 @@ def is_wp_locker_url(url: str) -> bool:
     if not url or not isinstance(url, str):
         return False
     u = url.lower()
-    return any(dom in u for dom in ["omaal63.net", "desijugar.me", "gulabihub.com"])
+    return any(dom in u for dom in ["omaal63.net", "desijugar.me", "gulabihub.com", "mmsmaza.im"])
 
 
 def is_wp_locker_listing_url(url: str) -> bool:
@@ -44,8 +44,8 @@ def is_wp_locker_listing_url(url: str) -> bool:
         return True
     u_base = u.split("?")[0].rstrip("/")
     if u_base in [
-        "https://omaal63.net", "https://desijugar.me", "https://gulabihub.com",
-        "http://omaal63.net", "http://desijugar.me", "http://gulabihub.com"
+        "https://omaal63.net", "https://desijugar.me", "https://gulabihub.com", "https://mmsmaza.im",
+        "http://omaal63.net", "http://desijugar.me", "http://gulabihub.com", "http://mmsmaza.im"
     ]:
         return True
     return any(p in u_base for p in ["/category/", "/tag/", "/author/", "/page/"])
@@ -109,18 +109,30 @@ def get_wp_post_details(post_url: str) -> dict:
 
     # Detect platform name from URL
     p_low = post_url.lower()
+    site_key = "wp_locker"
     if "omaal63" in p_low:
         platform_name = "Omaal63"
     elif "desijugar" in p_low:
         platform_name = "DesiJugar"
     elif "gulabihub" in p_low:
         platform_name = "GulabiHub"
+    elif "mmsmaza" in p_low:
+        platform_name = "MMSMaza"
+        site_key = "mmsmaza"
     else:
         platform_name = "WordPress Locker"
+
+    # Category extraction from breadcrumbs/meta if available
+    category_name = None
+    cat_elem = soup.find("a", href=re.compile(r"/category/[^/]+"))
+    if cat_elem:
+        category_name = cat_elem.get_text(strip=True)
 
     return {
         "title": title,
         "clean_title": clean_title,
+        "category": category_name,
+        "category_name": category_name,
         "tags": tags,
         "thumbnail": thumbnail,
         "thumbnail_candidates": [thumbnail] if thumbnail else [],
@@ -129,7 +141,7 @@ def get_wp_post_details(post_url: str) -> dict:
         "date": post_date_raw,
         "date_ist": post_date_ist,
         "platform_name": platform_name,
-        "site": "wp_locker",
+        "site": site_key,
     }
 
 
@@ -225,6 +237,7 @@ def get_wp_categories(site_key: str) -> list[dict]:
         "omaal": "https://omaal63.net/",
         "desijugar": "https://desijugar.me/",
         "gulabi": "https://gulabihub.com/categories/",
+        "mmsmaza": "https://mmsmaza.im/categories/",
     }
     target = site_urls.get(site_key.lower().strip())
     if not target:
@@ -256,7 +269,7 @@ def get_wp_categories(site_key: str) -> list[dict]:
 class WordPressLockerEngine(BaseEngine):
     """WordPress Locker & Tube Engine."""
     name: str = "WordPressLocker"
-    domains: list[str] = ["omaal63.net", "desijugar.me", "gulabihub.com"]
+    domains: list[str] = ["omaal63.net", "desijugar.me", "gulabihub.com", "mmsmaza.im"]
     supported_sorts: dict[UniversalSort, str] = {
         UniversalSort.NEWEST: "date",
     }

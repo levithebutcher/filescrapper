@@ -51,9 +51,163 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     tags = details.get("tags", [])
     raw_links = details.get("streaming_links", [])
 
-    # Dynamic emoji header based on content type
     s_low = str(details.get("site") or "").lower()
     p_low = str(details.get("platform_name") or details.get("platform") or "").lower()
+    u_low = str(details.get("post_url") or "").lower()
+
+    # --- 1. LeakedZone Card ---
+    if s_low == "leakedzone" or "leakedzone.com" in u_low:
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        mod_esc = html.escape(details.get("model_name") or "Model")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Recently"))
+        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
+        lz_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"👤 <b>Model:</b> {mod_esc}, LeakedZone",
+            f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
+            "",
+            "🔗 <b>Direct Stream Link (HLS .m3u8):</b>",
+        ]
+        if st_link:
+            lz_lines.append(f"<code>{html.escape(st_link)}</code>")
+        else:
+            lz_lines.append("<i>Stream not available</i>")
+        if post_url:
+            lz_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(lz_lines)
+
+    # --- 2. X-Video Tube Card ---
+    if s_low in ("xvideo", "xvideotube", "x-video") or "x-video.tube" in u_low:
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        tag_esc = html.escape(details.get("model_name") or details.get("tag") or "Video")
+        qual_esc = html.escape(details.get("quality") or "1080p Full HD")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Recently"))
+        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
+        xv_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"🏷️ <b>Tag:</b> {tag_esc}, X-Video Tube",
+            f"⚡ <b>Quality:</b> {qual_esc}  •  ⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
+            "",
+            "🔗 <b>Direct MP4 Video Link:</b>",
+        ]
+        if st_link:
+            xv_lines.append(f"<code>{html.escape(st_link)}</code>")
+        else:
+            xv_lines.append("<i>Stream not available</i>")
+        if post_url:
+            xv_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(xv_lines)
+
+    # --- 3. HornySapiens / ViralXXXPorn Card ---
+    if s_low in ("hornysapiens", "viralxxxporn") or "hornysapiens.com" in u_low or "viralxxxporn.com" in u_low:
+        plat = "ViralXXXPorn" if "viralxxxporn" in u_low or s_low == "viralxxxporn" else "HornySapiens"
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        mod_esc = html.escape(details.get("model_name") or "Model")
+        qual_esc = html.escape(details.get("quality") or "1080p Full HD")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Recently"))
+        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
+        hs_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"👤 <b>Model:</b> {mod_esc}, {plat}",
+            f"⚡ <b>Quality:</b> {qual_esc}  •  ⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
+            "",
+            "🔗 <b>Direct MP4 Video Link:</b>",
+        ]
+        if st_link:
+            hs_lines.append(f"<code>{html.escape(st_link)}</code>")
+        else:
+            hs_lines.append("<i>Stream not available</i>")
+        if post_url:
+            hs_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(hs_lines)
+
+    # --- 4. ThotChicks Card ---
+    if s_low == "thotchicks" or "thotchicks.com" in u_low:
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        act_esc = html.escape(details.get("actor_name") or details.get("model_name") or "Actor")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Recently"))
+        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
+        tc_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"👤 <b>Actor:</b> {act_esc}, ThotChicks",
+            f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Added:</b> {d_esc}",
+            "",
+            "🔗 <b>Direct Stream Link (.m3u8):</b>",
+        ]
+        if st_link:
+            tc_lines.append(f"<code>{html.escape(st_link)}</code>")
+        else:
+            tc_lines.append("<i>Stream not available</i>")
+        if post_url:
+            tc_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(tc_lines)
+
+    # --- 5. MMSDesi Card ---
+    if s_low == "mmsdesi" or "mmsdesi.me" in u_low:
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        cat_esc = html.escape(details.get("category_name") or details.get("category") or "Desi New")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Today"))
+        st_link = details.get("streaming_link") or (raw_links[0] if raw_links else "")
+        attached_photos = details.get("attached_photos") or []
+        desi_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"📁 <b>Category:</b> {cat_esc}, MMSDesi",
+            f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Date:</b> {d_esc}",
+            "",
+            "🔗 <b>Main Direct Video Link:</b>",
+        ]
+        if st_link:
+            desi_lines.append(f"<code>{html.escape(st_link)}</code>")
+        else:
+            desi_lines.append("<i>Video link not available</i>")
+
+        desi_lines.append("")
+        if attached_photos:
+            desi_lines.append(f"📸 <b>Attached Photo Album ({len(attached_photos)} Photos):</b>")
+            for idx, p_url in enumerate(attached_photos, 1):
+                desi_lines.append(f"{idx}. <code>{html.escape(p_url)}</code>")
+        else:
+            desi_lines.append("📸 <b>Attached Photo Album:</b> Not present")
+
+        if post_url:
+            desi_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(desi_lines)
+
+    # --- 6. MMSMaza Card ---
+    if s_low == "mmsmaza" or "mmsmaza.im" in u_low:
+        t_esc = html.escape(details.get("title", "Untitled Video"))
+        cat_esc = html.escape(details.get("category_name") or details.get("category") or "Indian Leaks")
+        dur_esc = html.escape(str(details.get("duration") or "N/A"))
+        d_esc = html.escape(str(details.get("date_ist") or "Recently"))
+        best_mirror = None
+        if raw_links:
+            _, filtered_links, _ = filter_links_by_preference(raw_links, user_pref)
+            best_mirror = filtered_links[0] if filtered_links else raw_links[0]
+
+        maza_lines = [
+            f"📌 <b>Title:</b> {t_esc}",
+            f"📂 <b>Category:</b> {cat_esc}, MMSMaza",
+        ]
+        if details.get("duration"):
+            maza_lines.append(f"⏱️ <b>Duration:</b> {dur_esc}  •  📅 <b>Date:</b> {d_esc}")
+        else:
+            maza_lines.append(f"📅 <b>Date:</b> {d_esc}")
+        maza_lines.append("")
+        maza_lines.append("🔗 <b>Streaming Mirror Link:</b>")
+        if best_mirror:
+            maza_lines.append(f"<code>{html.escape(best_mirror)}</code>")
+        else:
+            maza_lines.append("<i>Streaming link not available</i>")
+        if post_url:
+            maza_lines.append(f"\n🌐 <a href=\"{post_url}\">Source Webpage</a>")
+        return "\n".join(maza_lines)
+
+    # Dynamic emoji header based on content type
     if s_low == "livecam" or "livecam" in p_low:
         emoji = "📹"
     elif "photo" in title.lower() or "album" in title.lower() or details.get("is_photo"):

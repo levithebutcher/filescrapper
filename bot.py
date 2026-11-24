@@ -89,6 +89,30 @@ from scraper import (
     get_wp_post_details,
     get_wp_listing_posts,
     get_wp_categories,
+    is_leakedzone_url,
+    is_leakedzone_video_url,
+    is_leakedzone_model_url,
+    get_leakedzone_video_details,
+    get_leakedzone_model_videos,
+    search_leakedzone,
+    is_kvs_url,
+    is_kvs_video_url,
+    is_kvs_listing_url,
+    get_kvs_video_details,
+    get_kvs_listing_items,
+    search_kvs,
+    is_thotchicks_url,
+    is_thotchicks_actor_url,
+    is_thotchicks_video_url,
+    get_thotchicks_video_details,
+    get_thotchicks_listing_items,
+    search_thotchicks,
+    is_mmsdesi_url,
+    is_mmsdesi_video_url,
+    is_mmsdesi_listing_url,
+    get_mmsdesi_video_details,
+    get_mmsdesi_category_videos,
+    search_mmsdesi,
     search_forum_advanced,
     get_universal_post_details,
 )
@@ -130,6 +154,12 @@ from keyboards import (
     build_model_sort_keyboard,
     build_wp_site_hub_keyboard,
     build_wp_categories_keyboard,
+    build_leakedzone_hub_keyboard,
+    build_xvideo_hub_keyboard,
+    build_hornysapiens_hub_keyboard,
+    build_thotchicks_hub_keyboard,
+    build_mmsdesi_hub_keyboard,
+    build_mmsmaza_hub_keyboard,
     build_channel_management_keyboard,
     build_back_cancel_row,
     build_back_cancel_keyboard,
@@ -1141,6 +1171,8 @@ async def run_wp_listing_scrape(
                 back_cb = "sp_wpsite:desijugar"
             elif "gulabihub" in target_url:
                 back_cb = "sp_wpsite:gulabi"
+            elif "mmsmaza" in target_url:
+                back_cb = "sp_wpsite:mmsmaza"
 
             end_card_text = (
                 f"<blockquote>✅ <b>Extraction Complete!</b>\n🌐 Delivered: <b>{len(posts)}</b> posts</blockquote>\n\n"
@@ -1784,12 +1816,13 @@ async def execute_platform_search(
             reply_markup=markup,
         )
 
-    elif plat in ("wplock", "omaal", "desijugar", "gulabi") or plat.startswith("wp_"):
+    elif plat in ("wplock", "omaal", "desijugar", "gulabi", "mmsmaza") or plat.startswith("wp_"):
         site_key = plat.replace("wp_", "") if plat != "wplock" else "desijugar"
         site_map = {
             "omaal": ("Omaal63", "https://omaal63.net"),
             "desijugar": ("DesiJugar", "https://desijugar.me"),
             "gulabi": ("GulabiHub", "https://gulabihub.com"),
+            "mmsmaza": ("MMSMaza", "https://mmsmaza.im"),
         }
         site_name, base_url = site_map.get(site_key, ("Omaal63", "https://omaal63.net"))
         search_url = f"{base_url}/?s={quote_plus(clean_query)}"
@@ -1850,6 +1883,328 @@ async def execute_platform_search(
             "message_id": status_msg.message_id,
             "back_callback": back_cb,
             "page_callback_prefix": page_pfx,
+        }
+
+        await status_msg.edit_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    elif plat == "lz":
+        try:
+            results = await asyncio.to_thread(search_leakedzone, clean_query, page, 10)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:lz"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:lz")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"<blockquote>❌ No videos found on <b>LeakedZone</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
+
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name="LeakedZone",
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:lz:all"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "lz",
+            "query": clean_query,
+            "scope_name": "LeakedZone",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
+        }
+
+        await status_msg.edit_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    elif plat in ("xvid", "xvideo", "xvideotube"):
+        try:
+            results = await asyncio.to_thread(search_kvs, "xvideotube", clean_query, page, 10)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:xvid"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:xvid")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"<blockquote>❌ No videos found on <b>X-Video Tube</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
+
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name="X-Video Tube",
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:xvid:all"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "xvid",
+            "query": clean_query,
+            "scope_name": "X-Video Tube",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
+        }
+
+        await status_msg.edit_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    elif plat in ("hs", "hornysapiens", "viralxxxporn"):
+        plat_label = "ViralXXXPorn" if plat == "viralxxxporn" else "HornySapiens"
+        site_k = "viralxxxporn" if plat == "viralxxxporn" else "hornysapiens"
+        try:
+            results = await asyncio.to_thread(search_kvs, site_k, clean_query, page, 10)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:hs"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:hs")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"<blockquote>❌ No videos found on <b>{plat_label}</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
+
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name=plat_label,
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:hs:all"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "hs",
+            "query": clean_query,
+            "scope_name": plat_label,
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
+        }
+
+        await status_msg.edit_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    elif plat in ("tc", "thotchicks"):
+        try:
+            results = await asyncio.to_thread(search_thotchicks, clean_query, page, 10)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:tc"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:tc")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"<blockquote>❌ No videos found on <b>ThotChicks</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
+
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name="ThotChicks",
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:tc:all"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "tc",
+            "query": clean_query,
+            "scope_name": "ThotChicks",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
+        }
+
+        await status_msg.edit_text(
+            card_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    elif plat in ("desi", "mmsdesi"):
+        try:
+            results = await asyncio.to_thread(search_mmsdesi, clean_query, page, 10)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Search error: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:desi"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Search Again", callback_data="sp_choose:desi")],
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb)],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")],
+            ])
+            context.user_data["search_query"] = clean_query
+            await status_msg.edit_text(
+                f"<blockquote>❌ No videos found on <b>MMSDesi</b> for <code>{html.escape(clean_query)}</code>.</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        total_pages = max(page + 1, 2) if len(results) == 10 else page
+        total_count = page * 10 if len(results) == 10 else (page - 1) * 10 + len(results)
+
+        card_text = format_clean_search_results_page(
+            query=clean_query,
+            scope_name="MMSDesi",
+            page=page,
+            total_pages=total_pages,
+            total_count=total_count,
+            items=results,
+            delivered_indices=set(),
+        )
+
+        page_pfx = "sp_fp:desi:all"
+        markup = build_search_results_clean_keyboard(
+            page=page,
+            total_pages=total_pages,
+            page_callback_prefix=page_pfx,
+            back_callback=back_cb,
+        )
+
+        context.user_data["active_search_results"] = {
+            "plat": "desi",
+            "query": clean_query,
+            "scope_name": "MMSDesi",
+            "forum_id": None,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": status_msg.chat_id,
+            "message_id": status_msg.message_id,
+            "back_callback": back_cb,
         }
 
         await status_msg.edit_text(
@@ -2207,7 +2562,15 @@ async def process_topic_scrape(bot, chat_id: int | str, url: str, user_id: int =
     if is_scrape_cancelled(chat_id):
         return
     try:
-        if is_mmsvibex_photo_url(url):
+        if is_leakedzone_video_url(url):
+            details = await asyncio.to_thread(get_leakedzone_video_details, url)
+        elif is_kvs_video_url(url):
+            details = await asyncio.to_thread(get_kvs_video_details, url)
+        elif is_thotchicks_video_url(url):
+            details = await asyncio.to_thread(get_thotchicks_video_details, url)
+        elif is_mmsdesi_video_url(url):
+            details = await asyncio.to_thread(get_mmsdesi_video_details, url)
+        elif is_mmsvibex_photo_url(url):
             details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
         elif is_mmsvibex_video_url(url):
             details = await asyncio.to_thread(get_mmsvibex_video_details, url)
@@ -2279,7 +2642,14 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
                 "gulabihub.com",
                 "omaal63.net",
                 "desijugar.me",
+                "mmsmaza.im",
                 "livecamrips.to",
+                "leakedzone.com",
+                "x-video.tube",
+                "hornysapiens.com",
+                "viralxxxporn.com",
+                "thotchicks.com",
+                "mmsdesi.me",
             ]
         ):
             target_url = f"https://{target_url}"
@@ -2374,12 +2744,20 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         context.user_data["awaiting_vibex_range"]["message_id"] = s_msg.message_id
         return
 
-    # 4. WordPress Locker Post (Omaal63, DesiJugar, GulabiHub)
+    # 4. WordPress Locker Post (Omaal63, DesiJugar, GulabiHub, MMSMaza)
     if is_wp_locker_post_url(target_url):
         status = await msg.reply_text("🔍 <i>Extracting streaming links...</i>", parse_mode=ParseMode.HTML)
         try:
             details = await asyncio.to_thread(get_wp_post_details, target_url)
-            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+            site_k = details.get("site", "wp")
+            back_cb = f"sp_wpsite:{site_k}" if site_k in ("mmsmaza", "omaal", "desijugar", "gulabi") else "cb_search"
+            await send_post_card(
+                context.bot,
+                chat_id,
+                details,
+                user_id=user_id,
+                reply_markup=build_back_cancel_keyboard(back_callback=back_cb, cancel_callback="sp_cancel"),
+            )
         except Exception as e:
             await status.edit_text(f"❌ Error extracting post: {html.escape(str(e))}")
         finally:
@@ -2388,6 +2766,17 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             await status.delete()
         except Exception:
             pass
+        return
+
+    # 4b. MMSMaza Home / General Hub
+    if target_url.rstrip("/") in ("https://mmsmaza.im", "http://mmsmaza.im"):
+        end_scrape_for_chat(chat_id)
+        markup = build_mmsmaza_hub_keyboard(back_callback="cb_search")
+        await msg.reply_text(
+            "<blockquote>📂 <b>MMSMaza Hub</b>\nSelect search or browse releases:</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
         return
 
     # 5. WordPress Locker Listing / Archive (Omaal63, DesiJugar, GulabiHub)
@@ -2423,6 +2812,124 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         card_text = format_listing_menu_card(title, is_category=True)
         s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["awaiting_wp_range"]["message_id"] = s_msg.message_id
+        return
+
+    # 6. LeakedZone Single Video
+    if is_leakedzone_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting LeakedZone video & direct stream...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_leakedzone_video_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id, reply_markup=build_back_cancel_keyboard(back_callback="sp_choose:lz", cancel_callback="sp_cancel"))
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting LeakedZone video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 7. LeakedZone Model Page
+    if is_leakedzone_model_url(target_url):
+        end_scrape_for_chat(chat_id)
+        model_slug = target_url.rstrip("/").split("/")[-1]
+        markup = build_leakedzone_hub_keyboard(model_slug=model_slug, back_callback="cb_search")
+        await msg.reply_text(
+            f"<blockquote>🔓 <b>LeakedZone: {html.escape(model_slug.title())}</b>\nSelect search or sorting:</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    # 8. KVS Video (X-Video, HornySapiens, ViralXXXPorn)
+    if is_kvs_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting video & direct stream...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_kvs_video_details, target_url)
+            site_k = details.get("site", "kvs")
+            back_cb = "sp_choose:xvid" if "xvideo" in site_k else "sp_choose:hs"
+            await send_post_card(context.bot, chat_id, details, user_id=user_id, reply_markup=build_back_cancel_keyboard(back_callback=back_cb, cancel_callback="sp_cancel"))
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 9. KVS Listing (X-Video, HornySapiens, ViralXXXPorn)
+    if is_kvs_listing_url(target_url):
+        end_scrape_for_chat(chat_id)
+        slug = target_url.rstrip("/").split("/")[-1]
+        if "x-video.tube" in target_url.lower():
+            markup = build_xvideo_hub_keyboard(tag_or_slug=slug, back_callback="cb_search")
+            card_title = "X-Video Tube"
+        else:
+            markup = build_hornysapiens_hub_keyboard(model_slug=slug, back_callback="cb_search")
+            card_title = "HornySapiens"
+        await msg.reply_text(
+            f"<blockquote>📺 <b>{card_title}: {html.escape(slug.title())}</b>\nSelect search or sorting:</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    # 10. ThotChicks Video
+    if is_thotchicks_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting ThotChicks video & stream...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_thotchicks_video_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id, reply_markup=build_back_cancel_keyboard(back_callback="sp_choose:tc", cancel_callback="sp_cancel"))
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting ThotChicks video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 11. ThotChicks Actor Page
+    if is_thotchicks_actor_url(target_url):
+        end_scrape_for_chat(chat_id)
+        slug = target_url.rstrip("/").split("/")[-1]
+        markup = build_thotchicks_hub_keyboard(actor_slug=slug, back_callback="cb_search")
+        await msg.reply_text(
+            f"<blockquote>💃 <b>ThotChicks: {html.escape(slug.title())}</b>\nSelect search or sorting:</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    # 12. MMSDesi Video
+    if is_mmsdesi_video_url(target_url):
+        status = await msg.reply_text("🔍 <i>Extracting MMSDesi video & photo album...</i>", parse_mode=ParseMode.HTML)
+        try:
+            details = await asyncio.to_thread(get_mmsdesi_video_details, target_url)
+            await send_post_card(context.bot, chat_id, details, user_id=user_id, reply_markup=build_back_cancel_keyboard(back_callback="sp_choose:desi", cancel_callback="sp_cancel"))
+        except Exception as e:
+            await status.edit_text(f"❌ Error extracting MMSDesi video: {html.escape(str(e))}")
+        finally:
+            end_scrape_for_chat(chat_id)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    # 13. MMSDesi Listing
+    if is_mmsdesi_listing_url(target_url):
+        end_scrape_for_chat(chat_id)
+        markup = build_mmsdesi_hub_keyboard(back_callback="cb_search")
+        await msg.reply_text(
+            "<blockquote>📹 <b>MMSDesi Hub</b>\nSelect search or browse categories:</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
         return
 
     # 1. LiveCamRips Single Video
@@ -2692,6 +3199,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 details = await asyncio.to_thread(get_mmsvibex_photo_details, url)
                             else:
                                 details = await asyncio.to_thread(get_mmsvibex_video_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        elif search_state["plat"] == "lz":
+                            details = await asyncio.to_thread(get_leakedzone_video_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        elif search_state["plat"] in ("xvid", "xvideo", "xvideotube", "hs", "hornysapiens", "viralxxxporn"):
+                            details = await asyncio.to_thread(get_kvs_video_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        elif search_state["plat"] in ("tc", "thotchicks"):
+                            details = await asyncio.to_thread(get_thotchicks_video_details, url)
+                            await send_post_card(context.bot, chat_id, details, user_id=user_id)
+                        elif search_state["plat"] in ("desi", "mmsdesi"):
+                            details = await asyncio.to_thread(get_mmsdesi_video_details, url)
                             await send_post_card(context.bot, chat_id, details, user_id=user_id)
                         elif search_state["plat"].startswith("wp_") or search_state["plat"] == "wplock":
                             details = await asyncio.to_thread(get_wp_post_details, url)
@@ -3380,6 +3899,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ],
                 [
                     InlineKeyboardButton("📁 GulabiHub", callback_data="sp_wpsite:gulabi"),
+                    InlineKeyboardButton("📁 MMSMaza", callback_data="sp_wpsite:mmsmaza"),
                 ],
                 [
                     InlineKeyboardButton("🔙 Back", callback_data="cb_search"),
@@ -3416,6 +3936,96 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(
                 f"<blockquote>🔍 <b>Searching:</b> {plat_label}\n\n"
                 f"✏️ <i>Please send the keyword or model name to search (e.g. <code>{example_q}</code>):</i></blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "lz":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_leakedzone_hub_keyboard(model_slug="", back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>🔓 <b>LeakedZone Hub</b>\nSelect search or sorting:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "xvid":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_xvideo_hub_keyboard(tag_or_slug="", back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>📺 <b>X-Video Tube Hub</b>\nSelect search or sorting:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "hs":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_hornysapiens_hub_keyboard(model_slug="", back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>🔞 <b>HornySapiens Hub</b>\nSelect search or sorting:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "tc":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_thotchicks_hub_keyboard(actor_slug="", back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>💃 <b>ThotChicks Hub</b>\nSelect search or sorting:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "desi":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_mmsdesi_hub_keyboard(back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>📹 <b>MMSDesi Hub</b>\nSelect search or browse categories:</blockquote>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
+            return
+
+        elif plat == "mmsmaza":
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            markup = build_mmsmaza_hub_keyboard(back_callback="cb_search")
+            await query.edit_message_text(
+                "<blockquote>📂 <b>MMSMaza Hub</b>\nSelect search or browse releases:</blockquote>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=markup,
             )
@@ -3637,6 +4247,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "omaal": ("Omaal63", "https://omaal63.net/"),
             "desijugar": ("DesiJugar", "https://desijugar.me/"),
             "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+            "mmsmaza": ("MMSMaza", "https://mmsmaza.im/"),
         }
         s_info = site_map.get(site_key, ("Omaal63", "https://omaal63.net/"))
         site_name, target_url = s_info
@@ -3647,7 +4258,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("active_search_results", None)
         context.user_data.pop("awaiting_search", None)
 
-        markup = build_wp_site_hub_keyboard(site_key=site_key, back_callback="cb_search")
+        if site_key == "mmsmaza":
+            markup = build_mmsmaza_hub_keyboard(back_callback="cb_search")
+        else:
+            markup = build_wp_site_hub_keyboard(site_key=site_key, back_callback="cb_search")
         card_text = (
             "<blockquote>"
             f"🌐 <b>{site_name} Hub</b>\n"
@@ -3664,6 +4278,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "omaal": "Omaal63",
             "desijugar": "DesiJugar",
             "gulabi": "GulabiHub",
+            "mmsmaza": "MMSMaza",
         }
         site_name = site_map.get(site_key, "Website")
         context.user_data.pop("awaiting_model_range", None)
@@ -3700,6 +4315,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "omaal": ("Omaal63", "https://omaal63.net/"),
             "desijugar": ("DesiJugar", "https://desijugar.me/"),
             "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+            "mmsmaza": ("MMSMaza", "https://mmsmaza.im/"),
         }
         s_info = site_map.get(site_key, ("Omaal63", "https://omaal63.net/"))
         site_name, target_url = s_info
@@ -3735,6 +4351,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             "omaal": "Omaal63",
             "desijugar": "DesiJugar",
             "gulabi": "GulabiHub",
+            "mmsmaza": "MMSMaza",
         }
         site_name = site_map.get(site_key, "Website")
         try:
@@ -4430,6 +5047,357 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             status_msg=query.message,
             user_id=query.from_user.id,
         )
+    elif data.startswith("lz_search"):
+        model_slug = data.split(":")[1] if ":" in data else ""
+        scope_name = f"LeakedZone ({model_slug.title()})" if model_slug else "LeakedZone"
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "lz",
+            "scope_name": scope_name,
+            "back_callback": "sp_choose:lz",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:lz"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {scope_name}</b>\n\n✏️ <i>Please send the keyword or title to search (e.g. <code>jasmine</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data.startswith("xvid_search"):
+        slug = data.split(":")[1] if ":" in data else ""
+        scope_name = f"X-Video ({slug})" if slug else "X-Video Tube"
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "xvid",
+            "scope_name": scope_name,
+            "back_callback": "sp_choose:xvid",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:xvid"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {scope_name}</b>\n\n✏️ <i>Please send the keyword or tag to search:</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data.startswith("hs_search"):
+        model_slug = data.split(":")[1] if ":" in data else ""
+        scope_name = f"HornySapiens ({model_slug.title()})" if model_slug else "HornySapiens"
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "hs",
+            "scope_name": scope_name,
+            "back_callback": "sp_choose:hs",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:hs"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {scope_name}</b>\n\n✏️ <i>Please send the keyword or model name to search:</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data.startswith("tc_search"):
+        actor_slug = data.split(":")[1] if ":" in data else ""
+        scope_name = f"ThotChicks ({actor_slug.title()})" if actor_slug else "ThotChicks"
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "tc",
+            "scope_name": scope_name,
+            "back_callback": "sp_choose:tc",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:tc"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            f"<blockquote>🔍 <b>Search {scope_name}</b>\n\n✏️ <i>Please send the keyword or actor name to search:</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data == "desi_search":
+        context.user_data["awaiting_search_flow"] = {
+            "plat": "desi",
+            "scope_name": "MMSDesi",
+            "back_callback": "sp_choose:desi",
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="sp_choose:desi"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
+        await query.edit_message_text(
+            "<blockquote>🔍 <b>Search MMSDesi</b>\n\n✏️ <i>Please send the keyword or title to search (e.g. <code>college</code>):</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    elif data.startswith("lz_sort:"):
+        parts = data.split(":")
+        model_slug = parts[1] if len(parts) > 1 and parts[1] else "jasminesherni"
+        sort_val = parts[2] if len(parts) > 2 else "newest"
+        try:
+            results = await asyncio.to_thread(get_leakedzone_model_videos, model_slug, sort_val, 1, 10)
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:lz"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        card_text = format_clean_search_results_page(
+            query=f"{model_slug} ({sort_val.title()})",
+            scope_name="LeakedZone",
+            page=1,
+            total_pages=1,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+        markup = build_search_results_clean_keyboard(
+            page=1,
+            total_pages=1,
+            page_callback_prefix="sp_fp:lz:all",
+            back_callback=back_cb,
+        )
+        context.user_data["active_search_results"] = {
+            "plat": "lz",
+            "query": model_slug,
+            "scope_name": "LeakedZone",
+            "forum_id": None,
+            "page": 1,
+            "total_pages": 1,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+        }
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("xvid_sort:"):
+        parts = data.split(":")
+        slug = parts[1] if len(parts) > 1 and parts[1] else "jasminesherni-onlyfans-leaked"
+        sort_val = parts[2] if len(parts) > 2 else "latest"
+        target_url = f"https://x-video.tube/tags/{slug}/videos/"
+        try:
+            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, 1, 10)
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:xvid"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        card_text = format_clean_search_results_page(
+            query=f"{slug} ({sort_val.title()})",
+            scope_name="X-Video Tube",
+            page=1,
+            total_pages=1,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+        markup = build_search_results_clean_keyboard(
+            page=1,
+            total_pages=1,
+            page_callback_prefix="sp_fp:xvid:all",
+            back_callback=back_cb,
+        )
+        context.user_data["active_search_results"] = {
+            "plat": "xvid",
+            "query": slug,
+            "scope_name": "X-Video Tube",
+            "forum_id": None,
+            "page": 1,
+            "total_pages": 1,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+        }
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("hs_sort:"):
+        parts = data.split(":")
+        slug = parts[1] if len(parts) > 1 and parts[1] else "jasmine-sherni"
+        sort_val = parts[2] if len(parts) > 2 else "latest"
+        target_url = f"https://hornysapiens.com/models/{slug}/"
+        try:
+            results = await asyncio.to_thread(get_kvs_listing_items, target_url, sort_val, 1, 10)
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:hs"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        card_text = format_clean_search_results_page(
+            query=f"{slug} ({sort_val.title()})",
+            scope_name="HornySapiens",
+            page=1,
+            total_pages=1,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+        markup = build_search_results_clean_keyboard(
+            page=1,
+            total_pages=1,
+            page_callback_prefix="sp_fp:hs:all",
+            back_callback=back_cb,
+        )
+        context.user_data["active_search_results"] = {
+            "plat": "hs",
+            "query": slug,
+            "scope_name": "HornySapiens",
+            "forum_id": None,
+            "page": 1,
+            "total_pages": 1,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+        }
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("tc_sort:"):
+        parts = data.split(":")
+        slug = parts[1] if len(parts) > 1 and parts[1] else "jasmine-sherni"
+        sort_val = parts[2] if len(parts) > 2 else "newest"
+        target_url = f"https://thotchicks.com/actor/{slug}/"
+        try:
+            results = await asyncio.to_thread(get_thotchicks_listing_items, target_url, sort_val, 1, 10)
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:tc"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text("<blockquote>❌ No videos found.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        card_text = format_clean_search_results_page(
+            query=f"{slug} ({sort_val.title()})",
+            scope_name="ThotChicks",
+            page=1,
+            total_pages=1,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+        markup = build_search_results_clean_keyboard(
+            page=1,
+            total_pages=1,
+            page_callback_prefix="sp_fp:tc:all",
+            back_callback=back_cb,
+        )
+        context.user_data["active_search_results"] = {
+            "plat": "tc",
+            "query": slug,
+            "scope_name": "ThotChicks",
+            "forum_id": None,
+            "page": 1,
+            "total_pages": 1,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+        }
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
+    elif data.startswith("desi_cat:"):
+        cat_key = data.split(":")[1]
+        cat_names = {"trending": "Trending", "desi-new": "Desi New", "desi-old": "Desi Old", "tango-strip": "Tango Strip"}
+        cat_name = cat_names.get(cat_key, "Desi New")
+        try:
+            results = await asyncio.to_thread(get_mmsdesi_category_videos, cat_key, 1, 10)
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching videos: {html.escape(str(e))}")
+            return
+
+        back_cb = "sp_choose:desi"
+        if not results:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=back_cb), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+            ])
+            await query.edit_message_text("<blockquote>❌ No videos found in this category.</blockquote>", parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+
+        card_text = format_clean_search_results_page(
+            query=f"Category: {cat_name}",
+            scope_name="MMSDesi",
+            page=1,
+            total_pages=1,
+            total_count=len(results),
+            items=results,
+            delivered_indices=set(),
+        )
+        markup = build_search_results_clean_keyboard(
+            page=1,
+            total_pages=1,
+            page_callback_prefix="sp_fp:desi:all",
+            back_callback=back_cb,
+        )
+        context.user_data["active_search_results"] = {
+            "plat": "desi",
+            "query": cat_name,
+            "scope_name": "MMSDesi",
+            "forum_id": None,
+            "page": 1,
+            "total_pages": 1,
+            "total_count": len(results),
+            "items": results,
+            "delivered_indices": set(),
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+            "back_callback": back_cb,
+        }
+        await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        return
+
     elif data == "sp_cancel":
         context.user_data.pop("awaiting_search", None)
         context.user_data.pop("search_query", None)
