@@ -2417,7 +2417,9 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
             "chat_id": chat_id,
             "message_id": None,
         }
-        markup = build_slice_selection_keyboard(short_id, [5, 10, 20], prefix="sp_wprun_id")
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="cb_main_menu"), InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel")]
+        ])
         card_text = format_listing_menu_card(title, is_category=True)
         s_msg = await msg.reply_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["awaiting_wp_range"]["message_id"] = s_msg.message_id
