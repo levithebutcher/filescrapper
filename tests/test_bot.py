@@ -776,6 +776,9 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
             "post_url": "https://mmsvibex.life/sakshi-video/",
             "tags": ["1080p"],
             "streaming_links": ["https://cdn.mmsvibex.fit/processed/1900438950_final.mp4"],
+            "attached_videos": [
+                {"title": "Sakshi Part 2", "url": "https://mmsvibex.life/sakshi-part-2/"},
+            ],
             "attached_photo_albums": [
                 {"title": "Sakshi Album 1 (12 photos)", "url": "https://mmsvibex.life/photos/sakshi-1/"},
                 {"title": "Sakshi Album 2 (98 photos)", "url": "https://mmsvibex.life/photos/sakshi-2/"},
@@ -788,7 +791,8 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<code>https://mmsvibex.life/photos/sakshi-1/</code>", card_vibex)
         self.assertIn("<code>https://mmsvibex.life/photos/sakshi-2/</code>", card_vibex)
         self.assertIn("<blockquote>📹 <b>Attached Video Parts:</b></blockquote>", card_vibex)
-        self.assertIn("<code>https://mmsvibex.life/actor/sakshi/</code>", card_vibex)
+        self.assertIn("<code>https://mmsvibex.life/sakshi-part-2/</code>", card_vibex)
+        self.assertNotIn("actor/sakshi", card_vibex)
         self.assertIn("🔗 <code>https://mmsvibex.life/sakshi-video/</code>", card_vibex)
         self.assertNotIn("Original Video Page", card_vibex)
         self.assertNotIn("cdn.mmsvibex.fit", card_vibex)

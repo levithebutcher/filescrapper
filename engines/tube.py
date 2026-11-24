@@ -141,22 +141,43 @@ def get_mmsvibex_video_details(video_url: str) -> dict:
     collection_url = None
     collection_name = None
     attached_videos = []
-    seen_vids = {video_url}
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        full_href = urljoin(video_url, href)
-        text = a.get_text(strip=True)
-        if "/actor/" in href or "view full album" in text.lower():
-            if not collection_url:
-                collection_url = full_href
-                collection_name = text if text and "view" not in text.lower() else "All Parts Collection"
-        elif re.search(r"\b(?:part|pt|episode|ep)[\s._-]*\d+\b", text, re.I):
-            if full_href not in seen_vids and full_href.startswith("http"):
-                seen_vids.add(full_href)
-                attached_videos.append({
-                    "title": text,
-                    "url": full_href,
-                })
+    seen_vids = {video_url.rstrip("/")}
+
+    # Extract other genuine video parts from the same album container
+    album_preview = soup.find("div", class_=re.compile(r"mms-video-album-preview", re.I))
+    if album_preview:
+        for art in album_preview.find_all(["article", "div"], class_=re.compile(r"thumb-block|video-preview-item", re.I)):
+            a = art.find("a", href=True)
+            if not a:
+                continue
+            full_href = urljoin(video_url, a["href"].strip())
+            if full_href.rstrip("/") in seen_vids or not full_href.startswith("http"):
+                continue
+            seen_vids.add(full_href.rstrip("/"))
+            title_el = art.find("span", class_="title") or a
+            raw_title = (title_el.get_text(strip=True) if title_el else "") or a.get("title", "")
+            clean_title = re.sub(r"^\d{1,2}:\d{2}\s*", "", raw_title).strip()
+            clean_title = re.sub(r"\d+K\d+%$", "", clean_title).strip()
+            attached_videos.append({
+                "title": clean_title or raw_title,
+                "url": full_href,
+            })
+
+        more_btn = album_preview.find("a", href=True)
+        if more_btn and "/actor/" in more_btn.get("href", ""):
+            collection_url = urljoin(video_url, more_btn["href"].strip())
+
+    # Fallback check for actor/collection link if not found above
+    if not collection_url:
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if "/actor/" in href and not href.rstrip("/").endswith("/actors"):
+                collection_url = urljoin(video_url, href)
+                break
+
+    if collection_url:
+        slug = collection_url.rstrip("/").split("/")[-1]
+        collection_name = slug.replace("-", " ").title()
 
     dt_ist, post_date_ist = UniversalDateResolver.resolve(
         soup=soup,

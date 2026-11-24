@@ -1041,6 +1041,16 @@ class TestScraper(unittest.TestCase):
             <video poster="https://cdn.mmsvibex.fit/thumbnails/1900438950_thumb_960.jpg">
                 <source src="https://cdn.mmsvibex.fit/processed/1900438950_final.mp4?v=123" type="video/mp4">
             </video>
+            <div class="wpst-video-info-card mms-video-album-preview">
+                <div class="mms-video-album-grid">
+                    <article class="thumb-block video-preview-item">
+                        <a href="https://mmsvibex.life/sakshi-part-2/" title="Sakshi Part 2">
+                            <span class="title">Sakshi Part 2</span>
+                        </a>
+                    </article>
+                </div>
+                <a class="button mms-video-album-more-button" href="https://mmsvibex.life/actor/sakshi/">View full album</a>
+            </div>
             <a href="https://mmsvibex.life/photos/sakshi-sexy-chubby-fun/">View Photos</a>
             <time datetime="2026-11-20T12:00:00Z">Nov 20</time>
         </body>
@@ -1060,6 +1070,9 @@ class TestScraper(unittest.TestCase):
         self.assertIn("https://cdn.mmsvibex.fit/processed/1900438950_final.mp4?v=123", details["streaming_links"])
         self.assertEqual(details["duration"], "04:36")
         self.assertEqual(details["attached_album_url"], "https://mmsvibex.life/photos/sakshi-sexy-chubby-fun/")
+        self.assertEqual(len(details["attached_videos"]), 1)
+        self.assertEqual(details["attached_videos"][0]["url"], "https://mmsvibex.life/sakshi-part-2/")
+        self.assertEqual(details["collection_url"], "https://mmsvibex.life/actor/sakshi/")
 
     @patch("scraper._fetch_soup")
     def test_mmsvibex_photo_details(self, mock_fetch):

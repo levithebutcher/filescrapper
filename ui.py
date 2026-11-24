@@ -159,18 +159,27 @@ def format_post_card(details: dict, user_pref: str = "streamtape") -> str:
     # Attached Video Parts (Quoted header with unhidden visible URLs or 'Not present')
     attached_vids = details.get("attached_videos") or []
     collection_url = details.get("collection_url")
-    if attached_vids:
-        caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>")
-        for idx, v in enumerate(attached_vids, 1):
-            raw_t = v.get("title", f"Part {idx}")
-            clean_t = re.sub(r"^\d{1,2}:\d{2}\s*", "", raw_t).strip() or f"Part {idx}"
-            v_url = v.get("url", "").strip()
-            caption_lines.append(f"<b>{idx}. {html.escape(clean_t)}</b>\n🔗 <code>{html.escape(v_url)}</code>")
-    elif collection_url and not details.get("hide_collection_link"):
-        col_name = html.escape(details.get("collection_name") or "All Parts Collection")
-        caption_lines.append(f"\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>\n📁 <b>{col_name}</b>\n🔗 <code>{html.escape(collection_url)}</code>")
-    elif is_vibex:
-        caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b> Not present</blockquote>")
+    if is_vibex:
+        if attached_vids:
+            caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>")
+            for idx, v in enumerate(attached_vids, 1):
+                raw_t = v.get("title", f"Part {idx}")
+                clean_t = re.sub(r"^\d{1,2}:\d{2}\s*", "", raw_t).strip() or f"Part {idx}"
+                v_url = v.get("url", "").strip()
+                caption_lines.append(f"<b>{idx}. {html.escape(clean_t)}</b>\n🔗 <code>{html.escape(v_url)}</code>")
+        else:
+            caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b> Not present</blockquote>")
+    else:
+        if attached_vids:
+            caption_lines.append("\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>")
+            for idx, v in enumerate(attached_vids, 1):
+                raw_t = v.get("title", f"Part {idx}")
+                clean_t = re.sub(r"^\d{1,2}:\d{2}\s*", "", raw_t).strip() or f"Part {idx}"
+                v_url = v.get("url", "").strip()
+                caption_lines.append(f"<b>{idx}. {html.escape(clean_t)}</b>\n🔗 <code>{html.escape(v_url)}</code>")
+        elif collection_url and not details.get("hide_collection_link"):
+            col_name = html.escape(details.get("collection_name") or "All Parts Collection")
+            caption_lines.append(f"\n<blockquote>📹 <b>Attached Video Parts:</b></blockquote>\n📁 <b>{col_name}</b>\n🔗 <code>{html.escape(collection_url)}</code>")
 
     # Attached Photo Albums (Quoted header with unhidden visible URLs or 'Not present')
     photo_albums = details.get("attached_photo_albums") or []
