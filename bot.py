@@ -8,7 +8,7 @@ import time
 import asyncio
 import logging
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote, quote_plus
 
 from telegram import (
     Update,
@@ -1827,7 +1827,7 @@ async def execute_platform_search(
             delivered_indices=set(),
         )
 
-        page_pfx = f"sp_wppag_search:{site_key}:{clean_query}"
+        page_pfx = f"sp_wppag_search:{site_key}"
         markup = build_search_results_clean_keyboard(
             page=page,
             total_pages=total_pages,
@@ -1835,6 +1835,7 @@ async def execute_platform_search(
             back_callback=back_cb,
         )
 
+        context.user_data["search_query"] = clean_query
         context.user_data["active_search_results"] = {
             "plat": f"wp_{site_key}",
             "query": clean_query,
@@ -1848,6 +1849,7 @@ async def execute_platform_search(
             "chat_id": status_msg.chat_id,
             "message_id": status_msg.message_id,
             "back_callback": back_cb,
+            "page_callback_prefix": page_pfx,
         }
 
         await status_msg.edit_text(
@@ -3942,8 +3944,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data.startswith("sp_wppag_search:"):
         parts = data.split(":")
         site_key = parts[1]
-        s_query = parts[2]
-        page = int(parts[3])
+        page = int(parts[2])
+        search_state = context.user_data.get("active_search_results", {})
+        s_query = search_state.get("query") or context.user_data.get("search_query", "")
+        if not s_query:
+            await query.edit_message_text(
+                "<blockquote>⚠️ Search query expired. Please search again.</blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
         await execute_platform_search(
             update=update,
             context=context,

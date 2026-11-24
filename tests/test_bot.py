@@ -1452,6 +1452,47 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_state["plat"], "wp_omaal")
         self.assertTrue(search_state.get("is_category_browse"))
 
+    @patch("bot.get_wp_listing_posts")
+    async def test_execute_platform_search_wordpress(self, mock_listing):
+        """Test searching on WordPress platform handles quote_plus cleanly and displays numbered results."""
+        from bot import execute_platform_search
+
+        mock_listing.return_value = [
+            {"title": "Aditi Viral MMS 1", "url": "https://omaal63.net/aditi-1/"},
+            {"title": "Aditi Viral MMS 2", "url": "https://omaal63.net/aditi-2/"},
+        ]
+
+        context = MagicMock()
+        context.user_data = {}
+
+        status_msg = AsyncMock()
+        status_msg.chat_id = 12345
+        status_msg.message_id = 888
+        status_msg.edit_text.return_value = status_msg
+
+        update = MagicMock()
+
+        await execute_platform_search(
+            update=update,
+            context=context,
+            plat="omaal",
+            query="Aditi Sharma",
+            edit_msg=status_msg,
+            page=1,
+        )
+
+        mock_listing.assert_called_once()
+        called_url = mock_listing.call_args[0][0]
+        self.assertIn("https://omaal63.net/?s=Aditi+Sharma", called_url)
+
+        self.assertEqual(status_msg.edit_text.call_count, 2)
+        last_args, kwargs = status_msg.edit_text.call_args
+        self.assertIn("Aditi Viral MMS 1", last_args[0])
+        self.assertIn("<blockquote>", last_args[0])
+        self.assertIn("active_search_results", context.user_data)
+        self.assertEqual(context.user_data["active_search_results"]["plat"], "wp_omaal")
+        self.assertEqual(context.user_data["active_search_results"]["page_callback_prefix"], "sp_wppag_search:omaal")
+
 
 if __name__ == "__main__":
     unittest.main()
