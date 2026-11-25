@@ -77,9 +77,45 @@ def get_kvs_video_details(video_url: str) -> dict:
         site_key = "hornysapiens"
         platform_name = "HornySapiens"
 
-    # Title extraction
-    h1 = soup.find("h1") or soup.find("span", class_=re.compile(r"headline|title", re.I))
-    title = h1.get_text(strip=True) if h1 else (soup.title.get_text(strip=True) if soup.title else "Untitled Video")
+    # Title extraction: Prioritize og:title, schema.org VideoObject, and content title (avoid logo <h1>)
+    title = ""
+    og_title = soup.find("meta", property="og:title")
+    if og_title and og_title.get("content"):
+        cand_t = og_title["content"].strip()
+        if cand_t and not any(cand_t.lower() == x for x in ("x-video", "x -video", "hornysapiens", "viralxxxporn")):
+            title = cand_t
+
+    if not title:
+        h1_cand = soup.find(["h1", "h2", "span"], class_=re.compile(r"\btitle\b|\bheadline\b|video-title", re.I))
+        if h1_cand:
+            cand_t = h1_cand.get_text(strip=True)
+            if cand_t and not any(cand_t.lower() == x for x in ("x-video", "x -video", "hornysapiens", "viralxxxporn")):
+                title = cand_t
+
+    if not title:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                import json
+                data = json.loads(script.string or "")
+                if isinstance(data, dict) and data.get("name"):
+                    title = data["name"].strip()
+                    break
+            except Exception:
+                pass
+
+    if not title:
+        if soup.title and soup.title.get_text():
+            raw_t = soup.title.get_text(strip=True)
+            raw_t = re.sub(r"^Watch\s+online\s+", "", raw_t, flags=re.I)
+            raw_t = re.sub(r"\s+on\s+X-video.*$", "", raw_t, flags=re.I)
+            raw_t = re.sub(r"\s*[-–|]\s*(?:X-Video Tube|HornySapiens|ViralXXXPorn|X-VIDEO).*$", "", raw_t, flags=re.I)
+            if raw_t:
+                title = raw_t.strip()
+
+    if not title:
+        h1 = soup.find("h1") or soup.find("span", class_=re.compile(r"headline|title", re.I))
+        title = h1.get_text(strip=True) if h1 else (soup.title.get_text(strip=True) if soup.title else "Untitled Video")
+
     clean_title, tags = extract_tags_and_quality(title)
 
     # Model / Actor or Tag extraction
@@ -94,18 +130,45 @@ def get_kvs_video_details(video_url: str) -> dict:
 
     # Duration extraction
     duration = None
-    dur_elem = soup.find(class_=re.compile(r"duration|time", re.I))
-    if dur_elem:
-        duration = dur_elem.get_text(strip=True)
+    meta_dur = soup.find("meta", property="video:duration")
+    if meta_dur and meta_dur.get("content"):
+        try:
+            secs = int(meta_dur["content"].strip())
+            duration = f"{secs // 60:02d}:{secs % 60:02d}"
+        except Exception:
+            pass
+
+    if not duration:
+        m_iso = re.search(r'duration":\s*["\']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["\']', page_html)
+        if m_iso:
+            h = int(m_iso.group(1) or 0)
+            m = int(m_iso.group(2) or 0)
+            s = int(m_iso.group(3) or 0)
+            total_s = h * 3600 + m * 60 + s
+            if total_s > 0:
+                duration = f"{total_s // 60:02d}:{total_s % 60:02d}"
+
+    if not duration:
+        m_sec = re.search(r"video_duration:\s*['\"]?(\d+)['\"]?", page_html)
+        if m_sec:
+            secs = int(m_sec.group(1))
+            duration = f"{secs // 60:02d}:{secs % 60:02d}"
+
+    if not duration:
+        dur_elem = soup.find(class_=re.compile(r"duration|time", re.I))
+        if dur_elem and dur_elem.get_text(strip=True):
+            d_raw = dur_elem.get_text(strip=True)
+            if re.search(r"\d+:\d+|\d+m|\d+s", d_raw):
+                duration = d_raw
+
     if not duration:
         m_dur = re.search(r"duration:\s*['\"]([^'\"]+)['\"]", page_html)
         if m_dur:
             duration = m_dur.group(1)
-        else:
-            m_sec = re.search(r"video_duration:\s*['\"]?(\d+)['\"]?", page_html)
-            if m_sec:
-                secs = int(m_sec.group(1))
-                duration = f"{secs // 60:02d}m {secs % 60:02d}s"
+
+    if duration and str(duration).isdigit():
+        secs = int(duration)
+        duration = f"{secs // 60:02d}:{secs % 60:02d}"
 
     # Quality extraction
     quality = "1080p Full HD" if "1080p" in page_html or "1080" in title else ("720p HD" if "720" in page_html else None)
@@ -155,19 +218,40 @@ def get_kvs_video_details(video_url: str) -> dict:
 
     # Thumbnail extraction
     thumbnail = None
+    thumbnail_candidates = []
+    og_img = soup.find("meta", property="og:image")
+    if og_img and og_img.get("content"):
+        og_url = og_img["content"].strip()
+        if not any(x in og_url.lower() for x in ["logo.png", "logo.jpg", "favicon"]):
+            thumbnail = og_url
+            thumbnail_candidates.append(og_url)
+
     preview_match = re.search(r"preview_url:\s*['\"]([^'\"]+)['\"]", page_html)
     if preview_match:
-        thumbnail = preview_match.group(1).strip()
-    if not thumbnail:
-        og_img = soup.find("meta", property="og:image")
-        if og_img and og_img.get("content"):
-            thumbnail = og_img["content"].strip()
-    if not thumbnail:
-        v_tag = soup.find("video")
-        if v_tag and v_tag.get("poster"):
-            thumbnail = v_tag["poster"].strip()
+        p_url = preview_match.group(1).strip()
+        if p_url not in thumbnail_candidates and not any(x in p_url.lower() for x in ["logo.png", "logo.jpg"]):
+            thumbnail_candidates.append(p_url)
+        if not thumbnail:
+            thumbnail = p_url
+
+    v_tag = soup.find("video")
+    if v_tag and v_tag.get("poster"):
+        pos_url = v_tag["poster"].strip()
+        if pos_url not in thumbnail_candidates:
+            thumbnail_candidates.append(pos_url)
+        if not thumbnail:
+            thumbnail = pos_url
+
+    # Check for screenshot thumbs in HTML
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        if "/videos_screenshots/" in src and src not in thumbnail_candidates:
+            thumbnail_candidates.append(src)
 
     thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
+    thumbnail_candidates = [_clean_highres_image_url(t) for t in thumbnail_candidates if t]
+    if thumbnail and thumbnail not in thumbnail_candidates:
+        thumbnail_candidates.insert(0, thumbnail)
 
     # Date resolution
     dt_ist, date_display = UniversalDateResolver.resolve(
@@ -186,7 +270,7 @@ def get_kvs_video_details(video_url: str) -> dict:
         "duration": duration,
         "views": views,
         "thumbnail": thumbnail,
-        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "thumbnail_candidates": thumbnail_candidates if thumbnail_candidates else ([thumbnail] if thumbnail else []),
         "streaming_link": streaming_link,
         "streaming_links": [streaming_link] if streaming_link else [],
         "post_url": video_url,
@@ -236,49 +320,52 @@ def get_kvs_listing_items(
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if "/video/" in href or "/videos/" in href:
-            full_url = urljoin(target_url, href)
-            if full_url in seen or full_url.endswith("/videos/"):
-                continue
-            seen.add(full_url)
+        # Strictly match individual video pages with video ID numbers
+        # (e.g. /video/12345/ or /videos/12345/) and reject navigation links (/videos/?by=duration)
+        if not re.search(r"/videos?/(?:[a-zA-Z0-9_-]+/)?\d+", href):
+            continue
+        full_url = urljoin(target_url, href)
+        if full_url in seen or full_url.endswith("/videos/") or full_url.endswith("/video/"):
+            continue
+        seen.add(full_url)
 
-            # Title
-            title = a.get("title") or a.get_text(strip=True)
-            if not title:
-                parent = a.find_parent(["div", "article", "li"])
-                if parent:
-                    t_el = parent.find(["strong", "span", "h3", "h4"])
-                    if t_el:
-                        title = t_el.get_text(strip=True)
-            if not title or title.lower() in ("video", "watch"):
-                continue
-
-            # Thumbnail
-            thumb = None
-            img = a.find("img")
-            if img:
-                thumb = img.get("data-src") or img.get("data-original") or img.get("src")
-            if thumb:
-                thumb = urljoin(target_url, thumb)
-
-            # Duration
-            duration = None
+        # Title
+        title = a.get("title") or a.get_text(strip=True)
+        if not title:
             parent = a.find_parent(["div", "article", "li"])
             if parent:
-                dur_el = parent.find(class_=re.compile(r"duration|time", re.I))
-                if dur_el:
-                    duration = dur_el.get_text(strip=True)
+                t_el = parent.find(["strong", "span", "h3", "h4"])
+                if t_el:
+                    title = t_el.get_text(strip=True)
+        if not title or title.lower() in ("video", "watch"):
+            continue
 
-            items.append({
-                "title": title,
-                "url": full_url,
-                "thumbnail": thumb,
-                "duration": duration,
-                "date": None,
-                "date_ist": None,
-            })
-            if len(items) >= limit:
-                break
+        # Thumbnail
+        thumb = None
+        img = a.find("img")
+        if img:
+            thumb = img.get("data-src") or img.get("data-original") or img.get("src")
+        if thumb:
+            thumb = urljoin(target_url, thumb)
+
+        # Duration
+        duration = None
+        parent = a.find_parent(["div", "article", "li"])
+        if parent:
+            dur_el = parent.find(class_=re.compile(r"duration|time", re.I))
+            if dur_el:
+                duration = dur_el.get_text(strip=True)
+
+        items.append({
+            "title": title,
+            "url": full_url,
+            "thumbnail": thumb,
+            "duration": duration,
+            "date": None,
+            "date_ist": None,
+        })
+        if len(items) >= limit:
+            break
 
     return items
 

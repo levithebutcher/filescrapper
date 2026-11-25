@@ -689,6 +689,70 @@ class TestEngines(unittest.TestCase):
         self.assertIn("https://luluvido.com/ryrvym3ce2c4", card_fallback)
         self.assertNotIn("https://cloudfam.io/e/8x9q21az", card_fallback)
 
+    def test_kvs_video_title_ignores_logo_h1(self):
+        """Verify KVS video title extraction ignores header logo <h1 class='logo'> and uses real title."""
+        from engines.kvs import get_kvs_video_details
+        mock_html = """
+        <html>
+        <head>
+            <title>Watch online Jasmine Sherni - 09-18-2024 Video on X-video</title>
+            <meta property="og:title" content="Jasmine Sherni - 09-18-2024 Video" />
+            <meta property="video:duration" content="20" />
+            <meta property="og:image" content="https://x-video.tube/contents/videos_screenshots/640000/640561/preview.jpg" />
+        </head>
+        <body>
+            <h1 class="logo"><a href="https://x-video.tube/">X -VIDEO</a></h1>
+            <h1 class="title">Jasmine Sherni - 09-18-2024 Video</h1>
+            <script>var video_duration = '20';</script>
+        </body>
+        </html>
+        """
+        with patch("engines.kvs._fetch_soup", return_value=BeautifulSoup(mock_html, "html.parser")):
+            details = get_kvs_video_details("https://x-video.tube/video/640561/test-video/")
+            self.assertEqual(details["title"], "Jasmine Sherni - 09-18-2024 Video")
+            self.assertNotEqual(details["title"], "X-VIDEO")
+            self.assertNotEqual(details["title"], "X -VIDEO")
+            self.assertEqual(details["duration"], "00:20")
+            self.assertIn("https://x-video.tube/contents/videos_screenshots/640000/640561/preview.jpg", details["thumbnail_candidates"])
+
+    def test_kvs_listing_ignores_navigation_links(self):
+        """Verify get_kvs_listing_items excludes navigation and sorting links like /videos/?by=duration."""
+        from engines.kvs import get_kvs_listing_items
+        mock_html = """
+        <html>
+        <body>
+            <a href="https://x-video.tube/tags/model/videos/?by=duration">Longest</a>
+            <a href="https://x-video.tube/tags/model/videos/?by=post_date">Recent</a>
+            <div class="item">
+                <a href="https://x-video.tube/video/341006/real-video-clip/" title="Real Video Clip">Real Video Clip</a>
+                <span class="duration">05:20</span>
+            </div>
+        </body>
+        </html>
+        """
+        with patch("engines.kvs._fetch_soup", return_value=BeautifulSoup(mock_html, "html.parser")):
+            items = get_kvs_listing_items("https://x-video.tube/tags/model/videos/")
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["url"], "https://x-video.tube/video/341006/real-video-clip/")
+            self.assertEqual(items[0]["title"], "Real Video Clip")
+            self.assertEqual(items[0]["duration"], "05:20")
+
+    def test_post_card_sites_1_to_4_code_block_no_sourcewebpage(self):
+        """Verify format_post_card for sites 1-4 uses <code> block and contains no Source Webpage link."""
+        from ui import format_post_card
+        for site_key in ["leakedzone", "xvideotube", "hornysapiens", "thotchicks"]:
+            details = {
+                "site": site_key,
+                "title": "Model Performance Video",
+                "model_name": "Test Star",
+                "duration": "03:45",
+                "date_ist": "Today",
+                "post_url": f"https://{site_key}.com/video/123/",
+            }
+            card = format_post_card(details)
+            self.assertIn(f"<code>https://{site_key}.com/video/123/</code>", card)
+            self.assertNotIn("Source Webpage", card)
+
 
 if __name__ == "__main__":
     unittest.main()

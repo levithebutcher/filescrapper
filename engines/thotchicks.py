@@ -255,6 +255,7 @@ def search_thotchicks_actors(query: str, limit: int = 10) -> list[dict]:
         })
 
     # 2. Search query page extraction for actor links
+    query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
     if len(actors) < limit:
         search_url = f"https://thotchicks.com/?s={quote_plus(clean_q)}"
         s_soup = _fetch_soup(search_url)
@@ -268,8 +269,10 @@ def search_thotchicks_actors(query: str, limit: int = 10) -> list[dict]:
                     slug = full_url.rstrip("/").split("/")[-1]
                     if not slug or slug in seen:
                         continue
-                    seen.add(slug)
                     name = a.get_text(strip=True) or slug.replace("-", " ").title()
+                    if query_tokens and not any(t in slug.lower() or t in name.lower() for t in query_tokens):
+                        continue
+                    seen.add(slug)
                     actors.append({
                         "name": name,
                         "url": full_url,

@@ -248,22 +248,39 @@ def get_leakedzone_model_videos(
 
 
 def search_leakedzone(query: str, page: int = 1, limit: int = 25) -> list[dict]:
-    """Search videos on LeakedZone."""
-    encoded_q = quote_plus(query.strip())
-    search_url = f"https://leakedzone.com/search?search={encoded_q}"
-    if page > 1:
-        search_url += f"&page={page}"
-    try:
-        return get_leakedzone_model_videos(search_url, page=1, limit=limit)
-    except Exception as e:
-        logger.debug(f"Direct LeakedZone search note: {e}. Trying candidate profile...")
-        cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", query.strip().lower().replace(" ", ""))
-        if cand_slug:
+    """Search videos on LeakedZone with WAF-safe candidate resolution."""
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    # 1. First probe candidate direct model profiles to avoid Cloudflare 403 WAF blocks on /search
+    candidate_slugs = [
+        re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "")),
+        re.sub(r"[^a-zA-Z0-9_-]", "-", clean_q.lower()),
+        re.sub(r"[^a-zA-Z0-9_-]", "_", clean_q.lower()),
+    ]
+    for slug in candidate_slugs:
+        if slug:
             try:
-                return get_leakedzone_model_videos(cand_slug, page=page, limit=limit)
+                items = get_leakedzone_model_videos(slug, page=page, limit=limit)
+                if items:
+                    return items
             except Exception:
                 pass
-        return []
+
+    # 2. Try creator search if direct slug was not found
+    models = search_leakedzone_models(clean_q, limit=3)
+    for m in models:
+        slug = m.get("slug")
+        if slug:
+            try:
+                items = get_leakedzone_model_videos(slug, page=page, limit=limit)
+                if items:
+                    return items
+            except Exception:
+                pass
+
+    return []
 
 
 def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
@@ -305,32 +322,37 @@ def search_leakedzone_models(query: str, limit: int = 10) -> list[dict]:
             except Exception as e:
                 logger.debug(f"Candidate slug check failed for {model_url}: {e}")
 
-    # 2. Search query page extraction
+    # 2. Creators directory scan (WAF-safe, avoids /search 403 block)
     query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
     if len(models) < limit:
-        search_url = f"https://leakedzone.com/search?search={quote_plus(clean_q)}"
-        try:
-            soup = _fetch_soup(search_url)
-            if soup:
-                for a in soup.find_all("a", href=True):
-                    href = a["href"].strip()
-                    m = re.search(r"^/([a-zA-Z0-9_-]+)(?:/video/)?", href)
-                    if m:
-                        cand_slug = m.group(1).lower()
-                        if cand_slug not in seen and not any(x in cand_slug for x in ["search", "login", "register", "terms", "privacy", "dmca"]):
-                            name = a.get_text(strip=True) or cand_slug.replace("-", " ").title()
-                            if query_tokens and not any(t in cand_slug or t in name.lower() for t in query_tokens):
-                                continue
-                            seen.add(cand_slug)
-                            models.append({
-                                "name": name,
-                                "url": f"https://leakedzone.com/{cand_slug}",
-                                "slug": cand_slug,
-                            })
-                            if len(models) >= limit:
-                                break
-        except Exception as e:
-            logger.debug(f"LeakedZone search query page extraction note: {e}")
+        for creators_path in ["creators", f"creators?search={quote_plus(clean_q)}"]:
+            creators_url = f"https://leakedzone.com/{creators_path}"
+            try:
+                soup = _fetch_soup(creators_url)
+                if soup:
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"].strip()
+                        m = re.search(r"https?://leakedzone\.com/([a-zA-Z0-9_-]+)$", href)
+                        if not m:
+                            m = re.search(r"^/([a-zA-Z0-9_-]+)$", href)
+                        if m:
+                            cand_slug = m.group(1).lower()
+                            if cand_slug not in seen and not any(x in cand_slug for x in ["search", "login", "register", "terms", "privacy", "dmca", "creators", "videos", "shorts", "feed", "request"]):
+                                name = a.get_text(strip=True) or cand_slug.replace("-", " ").title()
+                                if query_tokens and not any(t in cand_slug or t in name.lower() for t in query_tokens):
+                                    continue
+                                seen.add(cand_slug)
+                                models.append({
+                                    "name": name,
+                                    "url": f"https://leakedzone.com/{cand_slug}",
+                                    "slug": cand_slug,
+                                })
+                                if len(models) >= limit:
+                                    break
+            except Exception as e:
+                logger.debug(f"LeakedZone creators directory scan note: {e}")
+            if len(models) >= limit:
+                break
 
     return models
 
