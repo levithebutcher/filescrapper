@@ -85,36 +85,84 @@ def get_leakedzone_video_details(video_url: str) -> dict:
         if m:
             model_name = m.group(1).replace("-", " ").title()
 
-    # Thumbnail extraction
+    # Thumbnail extraction - Prioritize real video image over model avatar
     thumbnail = None
-    og_img = soup.find("meta", property="og:image")
-    if og_img and og_img.get("content"):
-        thumbnail = og_img["content"].strip()
+    thumbnail_candidates = []
+
+    v_id_match = re.search(r"/video/(\d+)", video_url)
+    video_id = v_id_match.group(1) if v_id_match else ""
+
+    def is_avatar_or_profile(url_str: str) -> bool:
+        if not url_str:
+            return True
+        u_low = url_str.lower()
+        return any(x in u_low for x in ["/storage/models/", "avatar", "profile", "userphoto", "member", "logo", "icon"])
+
+    # 1. Search page <img> tags for actual video thumbnail (in /storage/images/ or matching video_id)
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        if not src or is_avatar_or_profile(src):
+            continue
+        if "/storage/images/" in src or (video_id and video_id in src):
+            full_img = urljoin("https://leakedzone.com", src)
+            highres_img = _clean_highres_image_url(full_img)
+            if highres_img not in thumbnail_candidates:
+                thumbnail_candidates.append(highres_img)
+            if full_img != highres_img and full_img not in thumbnail_candidates:
+                thumbnail_candidates.append(full_img)
+            if not thumbnail:
+                thumbnail = highres_img
+
+    # 2. Check for player poster or image attribute in HTML or video tag
+    if not thumbnail:
+        v_tag = soup.find("video")
+        if v_tag and v_tag.get("poster"):
+            poster_url = v_tag["poster"].strip()
+            if not is_avatar_or_profile(poster_url):
+                full_poster = urljoin("https://leakedzone.com", poster_url)
+                highres_poster = _clean_highres_image_url(full_poster)
+                if highres_poster not in thumbnail_candidates:
+                    thumbnail_candidates.append(highres_poster)
+                thumbnail = highres_poster
 
     if not thumbnail:
-        poster_m = re.search(r'image:\s*["\']([^"\']+)["\']', page_html)
-        if poster_m:
-            thumbnail = poster_m.group(1)
+        poster_matches = re.findall(r'["\'](https?://[^"\']*(?:/storage/images/|video)[^"\']*\.(?:webp|jpg|jpeg|png))["\']', page_html)
+        for p in poster_matches:
+            if not is_avatar_or_profile(p):
+                full_p = urljoin("https://leakedzone.com", p)
+                highres_p = _clean_highres_image_url(full_p)
+                if highres_p not in thumbnail_candidates:
+                    thumbnail_candidates.append(highres_p)
+                if not thumbnail:
+                    thumbnail = highres_p
 
+    # 3. Check og:image ONLY if it is not an avatar or model profile photo
     if not thumbnail:
-        img_thumb = soup.find("img", class_=re.compile(r"thumb|poster|player", re.I))
-        if img_thumb:
-            thumbnail = img_thumb.get("src") or img_thumb.get("data-src")
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            og_url = og_img["content"].strip()
+            if not is_avatar_or_profile(og_url):
+                full_og = urljoin("https://leakedzone.com", og_url)
+                highres_og = _clean_highres_image_url(full_og)
+                thumbnail = highres_og
+                if highres_og not in thumbnail_candidates:
+                    thumbnail_candidates.append(highres_og)
 
-    thumbnail = _clean_highres_image_url(thumbnail) if thumbnail else None
+    if not thumbnail_candidates and thumbnail:
+        thumbnail_candidates = [thumbnail]
 
     # Duration & Views extraction
     duration = None
     views = None
     added_date = None
 
-    dur_elem = soup.find(text=re.compile(r"\b\d{1,2}m\s*\d{1,2}s\b|\b\d{1,2}:\d{2}\b"))
+    dur_elem = soup.find(string=re.compile(r"\b\d{1,2}m\s*\d{1,2}s\b|\b\d{1,2}:\d{2}\b"))
     if dur_elem:
         m_dur = re.search(r"\b(\d{1,2}m\s*\d{1,2}s|\d{1,2}:\d{2})\b", str(dur_elem))
         if m_dur:
             duration = m_dur.group(1)
 
-    views_elem = soup.find(text=re.compile(r"\b\d+[\d,.]*\s*(?:K|M|views)\b", re.I))
+    views_elem = soup.find(string=re.compile(r"\b\d+[\d,.]*\s*(?:K|M|views)\b", re.I))
     if views_elem:
         m_v = re.search(r"([\d,.]+\s*(?:K|M|views)?)", str(views_elem), re.I)
         if m_v:
@@ -153,7 +201,7 @@ def get_leakedzone_video_details(video_url: str) -> dict:
         "duration": duration,
         "views": views,
         "thumbnail": thumbnail,
-        "thumbnail_candidates": [thumbnail] if thumbnail else [],
+        "thumbnail_candidates": thumbnail_candidates if thumbnail_candidates else ([thumbnail] if thumbnail else []),
         "streaming_link": streaming_link,
         "streaming_links": [streaming_link] if streaming_link else [],
         "post_url": video_url,
@@ -224,6 +272,7 @@ def get_leakedzone_model_videos(
                 thumb = img.get("data-src") or img.get("src")
             if thumb:
                 thumb = urljoin("https://leakedzone.com", thumb)
+                thumb = _clean_highres_image_url(thumb)
 
             # Duration
             duration = None

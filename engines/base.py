@@ -974,6 +974,7 @@ def _is_valid_thumbnail_url(url: str) -> bool:
     blacklisted = [
         "blank.gif", "blank.png", "spacer.gif", "spacer.png", "transparent",
         "1x1", "pixel.gif", "default_og", "default_avatar", "avatar",
+        "/storage/models/", "storage/models",
         "userphoto", "ipsuserphoto", "profile", "member", "emoticons",
         "smile", "reaction", "react", "site_logo", "logo.png", "logo.jpg",
         "logo.svg", "loading.gif", "placeholder", "svg+xml", "attachment-icon",
@@ -1004,6 +1005,9 @@ def _clean_highres_image_url(url: str) -> str:
 
     if "postimg.cc" in cleaned and "/t/" in cleaned:
         cleaned = cleaned.replace("/t/", "/")
+
+    if "leakedzone.com" in cleaned:
+        cleaned = re.sub(r'(_300)(\.webp)$', r'\2', cleaned, flags=re.I)
 
     cleaned = re.sub(r'-\d+x\d+\.(jpg|jpeg|png|webp)', r'.\1', cleaned, flags=re.I)
     return cleaned

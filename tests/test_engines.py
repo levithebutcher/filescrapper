@@ -376,6 +376,42 @@ class TestEngines(unittest.TestCase):
         self.assertIn("<code>https://leakedzone.com/jasminesherni/video/22079644</code>", card)
         self.assertNotIn("Source Webpage", card)
 
+    def test_leakedzone_video_thumbnail_extraction_ignores_avatar(self):
+        """Verify get_leakedzone_video_details extracts actual video thumbnail and ignores model avatar."""
+        from engines.leakedzone import get_leakedzone_video_details
+        from bs4 import BeautifulSoup
+        from unittest.mock import patch
+
+        mock_html = """
+        <html>
+        <head>
+            <title>Jasmine Sherni Video #22079644</title>
+            <meta property="og:image" content="https://image-cdn.leakedzone.com/storage/models/65439/avatar.webp"/>
+            <meta property="twitter:image" content="https://image-cdn.leakedzone.com/storage/models/65439/avatar.webp"/>
+        </head>
+        <body>
+            <h1>Jasmine Sherni Video #22079644</h1>
+            <img class="logo" src="/logo-v2.png"/>
+            <img class="avatar" src="https://image-cdn.leakedzone.com/storage/models/65439/avatar.webp"/>
+            <img class="w-full h-full object-contain" src="https://image-cdn.leakedzone.com/storage/images/65439/22079644/22079644_300.webp"/>
+        </body>
+        </html>
+        """
+        with patch("engines.leakedzone._fetch_soup", return_value=BeautifulSoup(mock_html, "html.parser")):
+            details = get_leakedzone_video_details("https://leakedzone.com/jasminesherni/video/22079644")
+            self.assertEqual(
+                details["thumbnail"],
+                "https://image-cdn.leakedzone.com/storage/images/65439/22079644/22079644.webp"
+            )
+            self.assertIn(
+                "https://image-cdn.leakedzone.com/storage/images/65439/22079644/22079644_300.webp",
+                details["thumbnail_candidates"]
+            )
+            self.assertNotIn("avatar.webp", details["thumbnail"])
+            for cand in details["thumbnail_candidates"]:
+                self.assertNotIn("avatar.webp", cand)
+                self.assertNotIn("/storage/models/", cand)
+
     def test_kvs_card_format(self):
         """Test KVS post card formatting for X-Video Tube and HornySapiens."""
         from ui import format_post_card
