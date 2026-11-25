@@ -236,50 +236,63 @@ def search_thotchicks_actors(query: str, limit: int = 10) -> list[dict]:
 
     actors = []
     seen = set()
+    seen_names = set()
 
     # 1. Candidate direct slug
     cand_slug = re.sub(r"[^a-zA-Z0-9_-]", "", clean_q.lower().replace(" ", "-"))
     cand_url = f"https://thotchicks.com/actor/{cand_slug}/"
-    soup = _fetch_soup(cand_url)
-    if soup and soup.title and "404" not in soup.title.get_text() and "not found" not in soup.title.get_text().lower():
-        name = clean_q.title()
-        if soup.title:
-            t_raw = soup.title.get_text(strip=True)
-            if "OnlyFans" in t_raw:
-                name = t_raw.split("OnlyFans")[0].strip(" –-")
-        seen.add(cand_slug)
-        actors.append({
-            "name": name,
-            "url": cand_url,
-            "slug": cand_slug,
-        })
+    try:
+        soup = _fetch_soup(cand_url)
+        if soup and soup.title and "404" not in soup.title.get_text() and "not found" not in soup.title.get_text().lower():
+            name = clean_q.title()
+            if soup.title:
+                t_raw = soup.title.get_text(strip=True)
+                if "OnlyFans" in t_raw:
+                    name = t_raw.split("OnlyFans")[0].strip(" –-")
+            norm_name = re.sub(r"\s+", " ", name.lower().strip())
+            seen.add(cand_slug)
+            seen_names.add(norm_name)
+            actors.append({
+                "name": name,
+                "url": cand_url,
+                "slug": cand_slug,
+            })
+    except Exception as e:
+        logger.debug(f"Candidate actor check failed for {cand_url}: {e}")
 
     # 2. Search query page extraction for actor links
     query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
     if len(actors) < limit:
         search_url = f"https://thotchicks.com/?s={quote_plus(clean_q)}"
-        s_soup = _fetch_soup(search_url)
-        if s_soup:
-            for a in s_soup.find_all("a", href=True):
-                href = a["href"].strip()
-                if "/actor/" in href:
-                    full_url = urljoin("https://thotchicks.com", href).split("?")[0].rstrip("/") + "/"
-                    if full_url.endswith("/actors/"):
-                        continue
-                    slug = full_url.rstrip("/").split("/")[-1]
-                    if not slug or slug in seen:
-                        continue
-                    name = a.get_text(strip=True) or slug.replace("-", " ").title()
-                    if query_tokens and not any(t in slug.lower() or t in name.lower() for t in query_tokens):
-                        continue
-                    seen.add(slug)
-                    actors.append({
-                        "name": name,
-                        "url": full_url,
-                        "slug": slug,
-                    })
-                    if len(actors) >= limit:
-                        break
+        try:
+            s_soup = _fetch_soup(search_url)
+            if s_soup:
+                for a in s_soup.find_all("a", href=True):
+                    href = a["href"].strip()
+                    if "/actor/" in href:
+                        full_url = urljoin("https://thotchicks.com", href).split("?")[0].rstrip("/") + "/"
+                        if full_url.endswith("/actors/"):
+                            continue
+                        slug = full_url.rstrip("/").split("/")[-1]
+                        if not slug or slug in seen:
+                            continue
+                        name = a.get_text(strip=True) or slug.replace("-", " ").title()
+                        norm_name = re.sub(r"\s+", " ", name.lower().strip())
+                        if norm_name in seen_names:
+                            continue
+                        if query_tokens and not any(t in slug.lower() or t in name.lower() for t in query_tokens):
+                            continue
+                        seen.add(slug)
+                        seen_names.add(norm_name)
+                        actors.append({
+                            "name": name,
+                            "url": full_url,
+                            "slug": slug,
+                        })
+                        if len(actors) >= limit:
+                            break
+        except Exception as e:
+            logger.debug(f"Search actor check failed for {search_url}: {e}")
 
     return actors
 

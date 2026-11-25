@@ -147,11 +147,11 @@ async def searchmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if context.args:
         chosen = context.args[0].lower().strip()
         if chosen in ("model", "models", "profile", "actor", "1"):
-            set_search_mode("model")
+            set_search_mode("model", context=context)
         elif chosen in ("video", "videos", "direct", "2"):
-            set_search_mode("video")
+            set_search_mode("video", context=context)
 
-    current = get_search_mode()
+    current = get_search_mode(context=context)
     m_check = " ✅" if current == "model" else ""
     v_check = " ✅" if current == "video" else ""
     markup = InlineKeyboardMarkup([

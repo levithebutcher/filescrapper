@@ -390,6 +390,7 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
 
     models = []
     seen = set()
+    seen_names = set()
     query_tokens = [w.lower() for w in re.findall(r"\w+", clean_q) if len(w) > 1]
 
     if site_key == "xvideotube":
@@ -406,9 +407,9 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
     candidate_paths = []
     if site_key == "xvideotube":
         candidate_paths = [
-            (f"/tags/{slug_compact}-onlyfans-leaked/videos/", f"{clean_q.title()} OnlyFans Leaked", f"{slug_compact}-onlyfans-leaked"),
             (f"/models/{slug_hyphen}/", clean_q.title(), slug_hyphen),
             (f"/tags/{slug_hyphen}-onlyfans-leaked/videos/", f"{clean_q.title()} OnlyFans Leaked", f"{slug_hyphen}-onlyfans-leaked"),
+            (f"/tags/{slug_compact}-onlyfans-leaked/videos/", f"{clean_q.title()} OnlyFans Leaked", f"{slug_compact}-onlyfans-leaked"),
             (f"/tags/{slug_hyphen}/videos/", clean_q.title(), slug_hyphen),
         ]
     else:
@@ -420,7 +421,8 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
 
     for rel_path, display_name, cand_slug in candidate_paths:
         full_cand_url = urljoin(base_domain, rel_path)
-        if full_cand_url in seen or cand_slug in seen:
+        norm_name = re.sub(r"\s+", " ", display_name.lower().strip())
+        if full_cand_url in seen or cand_slug in seen or norm_name in seen_names:
             continue
         try:
             cand_soup = _fetch_soup(full_cand_url)
@@ -442,6 +444,7 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
 
                 seen.add(full_cand_url)
                 seen.add(cand_slug)
+                seen_names.add(norm_name)
                 models.append({
                     "name": display_name,
                     "url": full_cand_url,
@@ -483,12 +486,17 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
                 if not name or len(name) < 2:
                     name = slug.replace("-", " ").title()
 
+                norm_name = re.sub(r"\s+", " ", name.lower().strip())
+                if norm_name in seen_names:
+                    continue
+
                 # Strict validation: Must match at least one token from search query
                 if query_tokens and not any(t in slug.lower() or t in name.lower() for t in query_tokens):
                     continue
 
                 seen.add(slug)
                 seen.add(full_url)
+                seen_names.add(norm_name)
                 models.append({
                     "name": name,
                     "url": full_url,

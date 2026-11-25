@@ -498,6 +498,8 @@ class TestEngines(unittest.TestCase):
 
     def test_hub_keyboards_structure(self):
         """Verify Hub Keyboards have Search on top row and follow exact button specs."""
+        from handlers.session import set_search_mode
+        set_search_mode("model")
         from keyboards import (
             build_leakedzone_hub_keyboard,
             build_xvideo_hub_keyboard,

@@ -83,6 +83,43 @@ class TestGlobalSearch(unittest.TestCase):
         self.assertIn("X-Video Tube", mirror_plats)
         self.assertIn("HornySapiens", mirror_plats)
 
+    def test_kvs_model_search_deduplication(self):
+        """Test KVS model candidate probing strictly deduplicates buttons with identical names."""
+        from unittest.mock import patch
+        from bs4 import BeautifulSoup
+        from engines.kvs import search_kvs_models
+
+        mock_soup = BeautifulSoup("""
+        <html>
+        <head><title>Jasmine Sherni - Videos</title></head>
+        <body>
+            <a href="/video/123/clip-1/">Video 1</a>
+        </body>
+        </html>
+        """, "html.parser")
+
+        with patch("engines.kvs._fetch_soup", return_value=mock_soup):
+            models = search_kvs_models("xvideotube", "Jasmine Sherni", limit=10)
+            names = [m["name"] for m in models]
+            # Ensure no duplicate names exist in model selection buttons
+            self.assertEqual(len(names), len(set(names)))
+            # Ensure official model profile is prioritized first
+            self.assertEqual(models[0]["name"], "Jasmine Sherni")
+            self.assertEqual(models[0]["url"], "https://x-video.tube/models/jasmine-sherni/")
+
+    def test_search_mode_persistence(self):
+        """Test search mode is saved in db and retained across calls."""
+        from handlers.session import set_search_mode, get_search_mode
+        import db
+
+        set_search_mode("video")
+        self.assertEqual(get_search_mode(), "video")
+        self.assertEqual(db.get_setting("search_mode"), "video")
+
+        set_search_mode("model")
+        self.assertEqual(get_search_mode(), "model")
+        self.assertEqual(db.get_setting("search_mode"), "model")
+
 
 if __name__ == "__main__":
     unittest.main()

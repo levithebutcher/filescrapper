@@ -271,7 +271,7 @@ async def execute_platform_search(
         )
 
     elif plat == "lz":
-        mode = get_search_mode()
+        mode = get_search_mode(context=context)
         back_cb = "sp_choose:lz"
         if mode == "model":
             try:
@@ -378,7 +378,7 @@ async def execute_platform_search(
             await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
     elif plat in ("xvid", "xvideo", "xvideotube"):
-        mode = get_search_mode()
+        mode = get_search_mode(context=context)
         back_cb = "sp_choose:xvid"
         if mode == "model":
             try:
@@ -485,7 +485,7 @@ async def execute_platform_search(
             await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
     elif plat in ("hs", "hornysapiens", "viralxxxporn"):
-        mode = get_search_mode()
+        mode = get_search_mode(context=context)
         plat_label = "ViralXXXPorn" if plat == "viralxxxporn" else "HornySapiens"
         site_k = "viralxxxporn" if plat == "viralxxxporn" else "hornysapiens"
         back_cb = "sp_choose:hs"
@@ -594,7 +594,7 @@ async def execute_platform_search(
             await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
     elif plat in ("tc", "thotchicks"):
-        mode = get_search_mode()
+        mode = get_search_mode(context=context)
         back_cb = "sp_choose:tc"
         if mode == "model":
             try:

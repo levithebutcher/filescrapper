@@ -13,16 +13,36 @@ logger = logging.getLogger(__name__)
 ACTIVE_SEARCH_MODE = DEFAULT_SEARCH_MODE if DEFAULT_SEARCH_MODE in ("model", "video") else "model"
 
 
-def get_search_mode() -> str:
+def get_search_mode(context=None) -> str:
     """Get active search mode for sites 1-4: 'model' (LiveCam profile search) or 'video' (direct video keyword search)."""
+    global ACTIVE_SEARCH_MODE
+    if context and hasattr(context, "user_data") and isinstance(context.user_data, dict):
+        u_mode = context.user_data.get("search_mode")
+        if u_mode in ("model", "video"):
+            return u_mode
+    try:
+        import db
+        val = db.get_setting("search_mode")
+        if val in ("model", "video"):
+            ACTIVE_SEARCH_MODE = val
+            return val
+    except Exception:
+        pass
     return ACTIVE_SEARCH_MODE
 
 
-def set_search_mode(mode: str):
-    """Set active search mode for sites 1-4."""
+def set_search_mode(mode: str, context=None):
+    """Set active search mode for sites 1-4 and persist across bot restarts."""
     global ACTIVE_SEARCH_MODE
     if mode in ("model", "video"):
         ACTIVE_SEARCH_MODE = mode
+        if context and hasattr(context, "user_data") and isinstance(context.user_data, dict):
+            context.user_data["search_mode"] = mode
+        try:
+            import db
+            db.set_setting("search_mode", mode)
+        except Exception:
+            pass
 
 
 # Active scrape tracking & cancellation flags

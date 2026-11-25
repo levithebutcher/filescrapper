@@ -8,6 +8,7 @@ ALL callback_data strings are strictly preserved for 100% handler compatibility.
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from engines.base import filter_links_by_preference, PROVIDER_PRIORITY, get_host_display_name
+from handlers.session import get_search_mode
 import db
 
 
@@ -288,9 +289,10 @@ def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") 
     )
 
 
-def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search", mode: str = None) -> InlineKeyboardMarkup:
     """Hub keyboard for LeakedZone (Search top if no model, Newest/Most Viewed/Longest, Back/Cancel)."""
-    s_label = "🔍 Search Models" if not model_slug else ""
+    s_mode = mode if mode else get_search_mode()
+    s_label = ("🔍 Search Videos" if s_mode == "video" else "🔍 Search Models") if not model_slug else ""
     s_cb = "sp_choose:lz" if not model_slug else ""
     return build_standard_hub_keyboard(
         search_label=s_label,
@@ -306,9 +308,10 @@ def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb
     )
 
 
-def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_search", mode: str = None) -> InlineKeyboardMarkup:
     """Hub keyboard for X-Video Tube (Search top if no model, Latest/Longest, Back/Cancel)."""
-    s_label = "🔍 Search Models" if not tag_or_slug else ""
+    s_mode = mode if mode else get_search_mode()
+    s_label = ("🔍 Search Videos" if s_mode == "video" else "🔍 Search Models") if not tag_or_slug else ""
     s_cb = "sp_choose:xvid" if not tag_or_slug else ""
     return build_standard_hub_keyboard(
         search_label=s_label,
@@ -323,9 +326,10 @@ def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_se
     )
 
 
-def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search", mode: str = None) -> InlineKeyboardMarkup:
     """Hub keyboard for HornySapiens & ViralXXXPorn (Search top if no model, Latest/Most Viewed/Longest, Back/Cancel)."""
-    s_label = "🔍 Search Models" if not model_slug else ""
+    s_mode = mode if mode else get_search_mode()
+    s_label = ("🔍 Search Videos" if s_mode == "video" else "🔍 Search Models") if not model_slug else ""
     s_cb = "sp_choose:hs" if not model_slug else ""
     return build_standard_hub_keyboard(
         search_label=s_label,
@@ -341,9 +345,10 @@ def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "
     )
 
 
-def build_thotchicks_hub_keyboard(actor_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
+def build_thotchicks_hub_keyboard(actor_slug: str = "", back_callback: str = "cb_search", mode: str = None) -> InlineKeyboardMarkup:
     """Hub keyboard for ThotChicks (Search top if no actor, Newest/Most Viewed/Longest, Back/Cancel)."""
-    s_label = "🔍 Search Actors" if not actor_slug else ""
+    s_mode = mode if mode else get_search_mode()
+    s_label = ("🔍 Search Videos" if s_mode == "video" else "🔍 Search Actors") if not actor_slug else ""
     s_cb = "sp_choose:tc" if not actor_slug else ""
     return build_standard_hub_keyboard(
         search_label=s_label,

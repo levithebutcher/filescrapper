@@ -52,6 +52,11 @@ from scraper import (
     get_mmsdesi_video_details,
     get_wp_post_details,
 )
+from engines.leakedzone import is_leakedzone_url
+from engines.kvs import is_kvs_url
+from engines.thotchicks import is_thotchicks_url
+from engines.mmsdesi import is_mmsdesi_url
+from engines.wordpress import is_wp_url
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +172,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     topic = items[idx - 1]
                     url = topic["url"]
                     try:
-                        if search_state["plat"] == "vibex":
+                        if search_state["plat"] in ("all", "global"):
+                            if is_leakedzone_url(url):
+                                target_lz_fn = _get_target_func("get_leakedzone_video_details", get_leakedzone_video_details)
+                                details = await asyncio.to_thread(target_lz_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif is_kvs_url(url):
+                                target_kvs_fn = _get_target_func("get_kvs_video_details", get_kvs_video_details)
+                                details = await asyncio.to_thread(target_kvs_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif is_thotchicks_url(url):
+                                target_tc_fn = _get_target_func("get_thotchicks_video_details", get_thotchicks_video_details)
+                                details = await asyncio.to_thread(target_tc_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif is_mmsdesi_url(url):
+                                target_desi_fn = _get_target_func("get_mmsdesi_video_details", get_mmsdesi_video_details)
+                                details = await asyncio.to_thread(target_desi_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif is_wp_url(url):
+                                target_wp_fn = _get_target_func("get_wp_post_details", get_wp_post_details)
+                                details = await asyncio.to_thread(target_wp_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif is_mmsvibex_photo_url(url):
+                                target_photo_fn = _get_target_func("get_mmsvibex_photo_details", get_mmsvibex_photo_details)
+                                details = await asyncio.to_thread(target_photo_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            elif "mmsvibex" in url.lower():
+                                target_vid_fn = _get_target_func("get_mmsvibex_video_details", get_mmsvibex_video_details)
+                                details = await asyncio.to_thread(target_vid_fn, url)
+                                await target_send_card(context.bot, chat_id, details, user_id=user_id)
+                            else:
+                                await target_proc_topic(
+                                    bot=context.bot,
+                                    chat_id=chat_id,
+                                    url=url,
+                                    user_id=user_id,
+                                    topic_meta=topic,
+                                )
+                        elif search_state["plat"] == "vibex":
                             if is_mmsvibex_photo_url(url):
                                 target_photo_fn = _get_target_func("get_mmsvibex_photo_details", get_mmsvibex_photo_details)
                                 details = await asyncio.to_thread(target_photo_fn, url)

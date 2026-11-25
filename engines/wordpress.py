@@ -35,6 +35,9 @@ def is_wp_locker_url(url: str) -> bool:
     return any(dom in u for dom in ["omaal63.net", "desijugar.me", "gulabihub.com", "mmsmaza.im"])
 
 
+is_wp_url = is_wp_locker_url
+
+
 def is_wp_locker_listing_url(url: str) -> bool:
     """Check if URL is a WordPress category, tag, author, search, or home archive page."""
     if not url or not is_wp_locker_url(url):

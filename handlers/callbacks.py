@@ -131,11 +131,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop("awaiting_search", None)
         plat = data.split(":")[1]
         if plat == "all":
-            context.user_data["awaiting_search_query"] = "all"
+            context.user_data.pop("awaiting_model_range", None)
+            context.user_data.pop("awaiting_vibex_range", None)
+            context.user_data.pop("awaiting_category_range", None)
+            context.user_data.pop("awaiting_wp_range", None)
+            context.user_data.pop("active_search_results", None)
+            context.user_data.pop("awaiting_search", None)
+            context.user_data["awaiting_search_flow"] = {
+                "plat": "all",
+                "scope_name": "All Sites (Global Search)",
+                "back_callback": "cb_search",
+                "chat_id": query.message.chat_id,
+                "message_id": query.message.message_id,
+            }
+            context.user_data["active_card_msg_id"] = query.message.message_id
             prompt_text = (
                 "<blockquote>"
                 "🌐 <b>Search All Sites (Global Search)</b>\n\n"
-                "Enter a search keyword or model name to search across all supported platforms simultaneously:"
+                "✏️ <i>Please send the keyword or model name to search across all supported platforms simultaneously:</i>"
                 "</blockquote>"
             )
             markup = InlineKeyboardMarkup([
@@ -308,7 +321,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 "tc": ("💃 ThotChicks", "Jasmine Sherni"),
             }[plat]
             plat_base, example_q = meta
-            mode = get_search_mode()
+            mode = get_search_mode(context=context)
             plat_label = f"{plat_base} Models" if mode == "model" else f"{plat_base} Videos"
             prompt_instruction = f"Please send the model name to search (e.g. <code>{example_q}</code>):" if mode == "model" else f"Please send the video keyword or title to search (e.g. <code>{example_q}</code>):"
 
@@ -1933,7 +1946,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             pass
     elif data.startswith("setmode_"):
         new_mode = data.split("_")[1]
-        set_search_mode(new_mode)
+        set_search_mode(new_mode, context=context)
         m_check = " ✅" if new_mode == "model" else ""
         v_check = " ✅" if new_mode == "video" else ""
         markup = InlineKeyboardMarkup([
