@@ -782,10 +782,9 @@ async def execute_platform_search(
             )
             return
 
-        total_pages = max((len(all_results) + 9) // 10, 1)
-        total_count = len(all_results)
-        start_idx = (page - 1) * 10
-        paged_results = all_results[start_idx : start_idx + 10]
+        total_pages = max(page + 1, 2) if len(all_results) >= 6 else page
+        total_count = (page - 1) * 10 + len(all_results) + (10 if len(all_results) >= 6 else 0)
+        paged_results = all_results[:10]
 
         card_text = format_clean_search_results_page(
             query=clean_query,

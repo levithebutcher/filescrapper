@@ -291,6 +291,10 @@ def get_kvs_listing_items(
     base_url = listing_url.split("?")[0].rstrip("/")
     u_low = base_url.lower()
 
+    if "x-video.tube" in u_low and "/models/" in u_low and not u_low.endswith("/videos") and "/videos/" not in u_low:
+        base_url = f"{base_url.rstrip('/')}/videos"
+        u_low = base_url.lower()
+
     params = []
     if "x-video.tube" in u_low:
         if sort == "longest":
@@ -307,14 +311,21 @@ def get_kvs_listing_items(
 
     if page > 1:
         if "x-video.tube" in u_low:
-            base_url = f"{base_url}/{page}"
+            base_url = f"{base_url.rstrip('/')}/{page}"
+        elif "/search/" in u_low:
+            params.append(f"from_videos={page:02d}")
+            params.append(f"from={page:02d}")
         else:
             params.append(f"from={page:02d}")
 
     query_str = ("?" + "&".join(params)) if params else ""
-    target_url = f"{base_url}/{query_str}"
+    target_url = f"{base_url.rstrip('/')}/{query_str}" if query_str else f"{base_url.rstrip('/')}/"
 
-    soup = _fetch_soup(target_url)
+    try:
+        soup = _fetch_soup(target_url)
+    except Exception as e:
+        logger.debug(f"KVS listing fetch failed for {target_url}: {e}")
+        return []
     items = []
     seen = set()
 

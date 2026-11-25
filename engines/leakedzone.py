@@ -233,8 +233,7 @@ def get_leakedzone_model_videos(
         params.append("sort=views")
     elif sort == "longest":
         params.append("sort=longest")
-    elif sort == "newest":
-        params.append("sort=latest")
+    # Note: LeakedZone defaults to newest/latest; adding sort=latest breaks ?page=2 pagination
 
     if page > 1:
         params.append(f"page={page}")

@@ -120,6 +120,57 @@ class TestGlobalSearch(unittest.TestCase):
         self.assertEqual(get_search_mode(), "model")
         self.assertEqual(db.get_setting("search_mode"), "model")
 
+    def test_global_search_passes_page_number(self):
+        """Verify execute_global_search passes the page parameter to underlying scraper engines."""
+        from handlers.global_search import execute_global_search
+        from unittest.mock import patch
+        import asyncio
+
+        with patch("handlers.global_search.search_kvs", return_value=[]) as mock_kvs, \
+             patch("handlers.global_search.search_leakedzone", return_value=[]) as mock_lz, \
+             patch("handlers.global_search.search_thotchicks", return_value=[]) as mock_tc, \
+             patch("handlers.global_search.get_wp_listing_posts", return_value=[]) as mock_wp, \
+             patch("handlers.global_search.search_mmsdesi", return_value=[]) as mock_desi, \
+             patch("handlers.global_search.search_mmsvibex", return_value=[]) as mock_vibex, \
+             patch("handlers.global_search.search_forum", return_value=[]) as mock_forum:
+
+            asyncio.run(execute_global_search("test query", page=3, limit_per_engine=5))
+
+            # Check page=3 was passed to search_kvs (args: site_key, query, page, limit)
+            self.assertEqual(mock_kvs.call_args_list[0][0][2], 3)
+            # Check page=3 was passed to search_leakedzone (args: query, page, limit)
+            self.assertEqual(mock_lz.call_args_list[0][0][1], 3)
+            # Check page=3 was passed to search_thotchicks (args: query, page, limit)
+            self.assertEqual(mock_tc.call_args_list[0][0][1], 3)
+
+    def test_kvs_and_leakedzone_pagination_urls(self):
+        """Verify KVS and LeakedZone construct correct URL query parameters for page 2."""
+        from engines.kvs import get_kvs_listing_items
+        from engines.leakedzone import get_leakedzone_model_videos
+        from bs4 import BeautifulSoup
+        from unittest.mock import patch
+
+        dummy_soup = BeautifulSoup("<html><body></body></html>", "html.parser")
+
+        with patch("engines.kvs._fetch_soup") as mock_kvs_soup:
+            mock_kvs_soup.return_value = dummy_soup
+            # Test HornySapiens search page 2
+            get_kvs_listing_items("https://hornysapiens.com/search/desi/", page=2)
+            called_url = mock_kvs_soup.call_args[0][0]
+            self.assertIn("from_videos=02", called_url)
+
+            # Test X-Video Tube model page 2
+            get_kvs_listing_items("https://x-video.tube/models/jasmine-sherni/", page=2)
+            xv_called_url = mock_kvs_soup.call_args[0][0]
+            self.assertIn("videos/2", xv_called_url)
+
+        with patch("engines.leakedzone._fetch_soup") as mock_lz_soup:
+            mock_lz_soup.return_value = dummy_soup
+            get_leakedzone_model_videos("jasminesherni", page=2)
+            lz_called_url = mock_lz_soup.call_args[0][0]
+            self.assertIn("page=2", lz_called_url)
+            self.assertNotIn("sort=latest", lz_called_url)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -156,16 +156,20 @@ def get_thotchicks_listing_items(
         params.append("filter=most-viewed")
     elif sort == "longest":
         params.append("filter=longest")
-    elif sort == "newest":
-        params.append("filter=latest")
+    elif sort == "popular":
+        params.append("filter=popular")
 
     if page > 1:
         base_url = f"{base_url}/page/{page}"
 
     query_str = ("?" + "&".join(params)) if params else ""
-    target_url = f"{base_url}/{query_str}"
+    target_url = f"{base_url.rstrip('/')}/{query_str}" if query_str else f"{base_url.rstrip('/')}/"
 
-    soup = _fetch_soup(target_url)
+    try:
+        soup = _fetch_soup(target_url)
+    except Exception as e:
+        logger.debug(f"ThotChicks listing fetch failed for {target_url}: {e}")
+        return []
     items = []
     seen = set()
 
