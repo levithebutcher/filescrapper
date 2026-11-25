@@ -1336,44 +1336,47 @@ class TestBot(unittest.IsolatedAsyncioTestCase):
         query.edit_message_text.assert_called_once()
 
     def test_build_search_platform_keyboard_3_columns(self):
-        """Test build_search_platform_keyboard has 3 buttons per row and Back + Cancel."""
+        """Test build_search_platform_keyboard has Global search on top, 3 buttons per row and Back + Cancel."""
         from keyboards import build_search_platform_keyboard
 
         kb = build_search_platform_keyboard()
         grid = kb.inline_keyboard
+        # Row 0: Global Search All Sites
+        self.assertEqual(len(grid[0]), 1)
+        self.assertEqual(grid[0][0].callback_data, "sp_choose:all")
+
         # Row 1: DropMMS, MMSTown, MMSVibex
-        self.assertEqual(len(grid[0]), 3)
-        self.assertEqual(grid[0][0].callback_data, "sp_choose:fm")
-        self.assertEqual(grid[0][1].callback_data, "sp_choose:mmst")
-        self.assertEqual(grid[0][2].callback_data, "sp_choose:vibex")
+        self.assertEqual(len(grid[1]), 3)
+        self.assertEqual(grid[1][0].callback_data, "sp_choose:fm")
+        self.assertEqual(grid[1][1].callback_data, "sp_choose:mmst")
+        self.assertEqual(grid[1][2].callback_data, "sp_choose:vibex")
 
         # Row 2: LiveCam, Omaal63, DesiJugar
-        self.assertEqual(len(grid[1]), 3)
-        self.assertEqual(grid[1][0].callback_data, "sp_choose:lc")
-        self.assertEqual(grid[1][1].callback_data, "sp_wpsite:omaal")
-        self.assertEqual(grid[1][2].callback_data, "sp_wpsite:desijugar")
+        self.assertEqual(len(grid[2]), 3)
+        self.assertEqual(grid[2][0].callback_data, "sp_choose:lc")
+        self.assertEqual(grid[2][1].callback_data, "sp_wpsite:omaal")
+        self.assertEqual(grid[2][2].callback_data, "sp_wpsite:desijugar")
 
         # Row 3: GulabiHub, MMSMaza, MMSDesi
-        self.assertEqual(len(grid[2]), 3)
-        self.assertEqual(grid[2][0].callback_data, "sp_wpsite:gulabi")
-        self.assertEqual(grid[2][1].callback_data, "sp_wpsite:mmsmaza")
-        self.assertEqual(grid[2][2].callback_data, "sp_choose:desi")
+        self.assertEqual(len(grid[3]), 3)
+        self.assertEqual(grid[3][0].callback_data, "sp_wpsite:gulabi")
+        self.assertEqual(grid[3][1].callback_data, "sp_wpsite:mmsmaza")
+        self.assertEqual(grid[3][2].callback_data, "sp_choose:desi")
 
         # Row 4: LeakedZone, X-Video, HornySapiens
-        self.assertEqual(len(grid[3]), 3)
-        self.assertEqual(grid[3][0].callback_data, "sp_choose:lz")
-        self.assertEqual(grid[3][1].callback_data, "sp_choose:xvid")
-        self.assertEqual(grid[3][2].callback_data, "sp_choose:hs")
+        self.assertEqual(len(grid[4]), 3)
+        self.assertEqual(grid[4][0].callback_data, "sp_choose:lz")
+        self.assertEqual(grid[4][1].callback_data, "sp_choose:xvid")
+        self.assertEqual(grid[4][2].callback_data, "sp_choose:hs")
 
         # Row 5: ThotChicks
-        self.assertEqual(len(grid[4]), 1)
-        self.assertEqual(grid[4][0].callback_data, "sp_choose:tc")
+        self.assertEqual(len(grid[5]), 1)
+        self.assertEqual(grid[5][0].callback_data, "sp_choose:tc")
 
         # Last Row: Back, Cancel
         last_row = grid[-1]
         self.assertEqual(len(last_row), 2)
         self.assertEqual(last_row[0].text, "🔙 Back")
-        self.assertEqual(last_row[0].callback_data, "sp_cancel")
         self.assertEqual(last_row[1].text, "❌ Cancel")
         self.assertEqual(last_row[1].callback_data, "sp_cancel")
 

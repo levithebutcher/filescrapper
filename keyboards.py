@@ -174,9 +174,37 @@ def get_link_mode_keyboard(current_mode: str = "streaming") -> InlineKeyboardMar
 
 # --- Search & Platform Selection Keyboards ---
 
+def build_standard_hub_keyboard(
+    search_label: str = "",
+    search_callback: str = "",
+    action_rows: list[list[InlineKeyboardButton]] | None = None,
+    back_callback: str = "cb_search",
+    cancel_callback: str = "sp_cancel",
+) -> InlineKeyboardMarkup:
+    """Standardized 3-tier hub keyboard builder for all current and future platforms.
+    Row 1: Dedicated Search Action Button (e.g. [🔍 Search Models])
+    Middle Rows: Platform Sorting, Categories, Action Buttons
+    Bottom Row: Fixed [🔙 Back] and [❌ Cancel] controls
+    """
+    rows = []
+    if search_label and search_callback:
+        rows.append([InlineKeyboardButton(search_label, callback_data=search_callback)])
+    if action_rows:
+        for row in action_rows:
+            rows.append(row)
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
+        InlineKeyboardButton("❌ Cancel", callback_data=cancel_callback),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_search_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform selection keyboard for /search with no args (3 buttons per row, with WordPress & Tube sites displayed)."""
+    """Platform selection keyboard for /search with no args (Global search on top, followed by 3-column platforms)."""
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🌐 Search All Sites", callback_data="sp_choose:all"),
+        ],
         [
             InlineKeyboardButton("💬 DropMMS", callback_data="sp_choose:fm"),
             InlineKeyboardButton("💬 MMSTown", callback_data="sp_choose:mmst"),
@@ -201,15 +229,18 @@ def build_search_platform_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("💃 ThotChicks", callback_data="sp_choose:tc"),
         ],
         [
-            InlineKeyboardButton("🔙 Back", callback_data="sp_cancel"),
+            InlineKeyboardButton("🔙 Back", callback_data="cb_main_menu"),
             InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
         ],
     ])
 
 
 def build_search_execute_platform_keyboard() -> InlineKeyboardMarkup:
-    """Platform execution keyboard for /search with query (3 buttons per row, with WordPress & Tube sites displayed)."""
+    """Platform execution keyboard for /search with query (Global search on top, followed by 3-column platforms)."""
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🌐 Search All Sites", callback_data="sp_do:all"),
+        ],
         [
             InlineKeyboardButton("💬 DropMMS", callback_data="sp_do:fm"),
             InlineKeyboardButton("💬 MMSTown", callback_data="sp_do:mmst"),
@@ -244,124 +275,122 @@ def build_wp_site_hub_keyboard(site_key: str, back_callback: str = "cb_search") 
     """Hub keyboard for WordPress locker sites (Card 2)."""
     if site_key == "mmsmaza":
         return build_mmsmaza_hub_keyboard(back_callback)
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data=f"sp_wpsearch:{site_key}"),
+    return build_standard_hub_keyboard(
+        search_label="🔍 Search Videos",
+        search_callback=f"sp_wpsearch:{site_key}",
+        action_rows=[
+            [
+                InlineKeyboardButton("⚡ Newest Posts", callback_data=f"sp_wplatest:{site_key}"),
+                InlineKeyboardButton("📁 Categories", callback_data=f"sp_wpcats:{site_key}"),
+            ]
         ],
-        [
-            InlineKeyboardButton("⚡ Newest Posts", callback_data=f"sp_wplatest:{site_key}"),
-            InlineKeyboardButton("📁 Categories", callback_data=f"sp_wpcats:{site_key}"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
-    ])
+        back_callback=back_callback,
+    )
 
 
 def build_leakedzone_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for LeakedZone (Search top if no model, Newest/Most Viewed/Longest, Back/Cancel)."""
-    rows = []
-    if not model_slug:
-        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:lz")])
-    rows.append([
-        InlineKeyboardButton("🆕 Newest", callback_data=f"lz_sort:{model_slug}:newest"),
-        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"lz_sort:{model_slug}:views"),
-        InlineKeyboardButton("⏱️ Longest", callback_data=f"lz_sort:{model_slug}:longest"),
-    ])
-    rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-    ])
-    return InlineKeyboardMarkup(rows)
+    s_label = "🔍 Search Models" if not model_slug else ""
+    s_cb = "sp_choose:lz" if not model_slug else ""
+    return build_standard_hub_keyboard(
+        search_label=s_label,
+        search_callback=s_cb,
+        action_rows=[
+            [
+                InlineKeyboardButton("🆕 Newest", callback_data=f"lz_sort:{model_slug}:newest"),
+                InlineKeyboardButton("👁️ Most Viewed", callback_data=f"lz_sort:{model_slug}:views"),
+                InlineKeyboardButton("⏱️ Longest", callback_data=f"lz_sort:{model_slug}:longest"),
+            ]
+        ],
+        back_callback=back_callback,
+    )
 
 
 def build_xvideo_hub_keyboard(tag_or_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for X-Video Tube (Search top if no model, Latest/Longest, Back/Cancel)."""
-    rows = []
-    if not tag_or_slug:
-        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:xvid")])
-    rows.append([
-        InlineKeyboardButton("🆕 Latest", callback_data=f"xvid_sort:{tag_or_slug}:latest"),
-        InlineKeyboardButton("⏱️ Longest", callback_data=f"xvid_sort:{tag_or_slug}:longest"),
-    ])
-    rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-    ])
-    return InlineKeyboardMarkup(rows)
+    s_label = "🔍 Search Models" if not tag_or_slug else ""
+    s_cb = "sp_choose:xvid" if not tag_or_slug else ""
+    return build_standard_hub_keyboard(
+        search_label=s_label,
+        search_callback=s_cb,
+        action_rows=[
+            [
+                InlineKeyboardButton("🆕 Latest", callback_data=f"xvid_sort:{tag_or_slug}:latest"),
+                InlineKeyboardButton("⏱️ Longest", callback_data=f"xvid_sort:{tag_or_slug}:longest"),
+            ]
+        ],
+        back_callback=back_callback,
+    )
 
 
 def build_hornysapiens_hub_keyboard(model_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for HornySapiens & ViralXXXPorn (Search top if no model, Latest/Most Viewed/Longest, Back/Cancel)."""
-    rows = []
-    if not model_slug:
-        rows.append([InlineKeyboardButton("🔍 Search Models", callback_data="sp_choose:hs")])
-    rows.append([
-        InlineKeyboardButton("🆕 Latest", callback_data=f"hs_sort:{model_slug}:latest"),
-        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"hs_sort:{model_slug}:views"),
-        InlineKeyboardButton("⏱️ Longest", callback_data=f"hs_sort:{model_slug}:longest"),
-    ])
-    rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-    ])
-    return InlineKeyboardMarkup(rows)
+    s_label = "🔍 Search Models" if not model_slug else ""
+    s_cb = "sp_choose:hs" if not model_slug else ""
+    return build_standard_hub_keyboard(
+        search_label=s_label,
+        search_callback=s_cb,
+        action_rows=[
+            [
+                InlineKeyboardButton("🆕 Latest", callback_data=f"hs_sort:{model_slug}:latest"),
+                InlineKeyboardButton("👁️ Most Viewed", callback_data=f"hs_sort:{model_slug}:views"),
+                InlineKeyboardButton("⏱️ Longest", callback_data=f"hs_sort:{model_slug}:longest"),
+            ]
+        ],
+        back_callback=back_callback,
+    )
 
 
 def build_thotchicks_hub_keyboard(actor_slug: str = "", back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for ThotChicks (Search top if no actor, Newest/Most Viewed/Longest, Back/Cancel)."""
-    rows = []
-    if not actor_slug:
-        rows.append([InlineKeyboardButton("🔍 Search Actors", callback_data="sp_choose:tc")])
-    rows.append([
-        InlineKeyboardButton("🆕 Newest", callback_data=f"tc_sort:{actor_slug}:newest"),
-        InlineKeyboardButton("👁️ Most Viewed", callback_data=f"tc_sort:{actor_slug}:views"),
-        InlineKeyboardButton("⏱️ Longest", callback_data=f"tc_sort:{actor_slug}:longest"),
-    ])
-    rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-        InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-    ])
-    return InlineKeyboardMarkup(rows)
+    s_label = "🔍 Search Actors" if not actor_slug else ""
+    s_cb = "sp_choose:tc" if not actor_slug else ""
+    return build_standard_hub_keyboard(
+        search_label=s_label,
+        search_callback=s_cb,
+        action_rows=[
+            [
+                InlineKeyboardButton("🆕 Newest", callback_data=f"tc_sort:{actor_slug}:newest"),
+                InlineKeyboardButton("👁️ Most Viewed", callback_data=f"tc_sort:{actor_slug}:views"),
+                InlineKeyboardButton("⏱️ Longest", callback_data=f"tc_sort:{actor_slug}:longest"),
+            ]
+        ],
+        back_callback=back_callback,
+    )
 
 
 def build_mmsdesi_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for MMSDesi (Search top, 4 Categories, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search Videos", callback_data="desi_search"),
+    return build_standard_hub_keyboard(
+        search_label="🔍 Search Videos",
+        search_callback="desi_search",
+        action_rows=[
+            [
+                InlineKeyboardButton("🔥 Trending", callback_data="desi_cat:trending"),
+                InlineKeyboardButton("⚡ Desi New", callback_data="desi_cat:desi-new"),
+            ],
+            [
+                InlineKeyboardButton("📦 Desi Old", callback_data="desi_cat:desi-old"),
+                InlineKeyboardButton("💃 Tango Strip", callback_data="desi_cat:tango-strip"),
+            ],
         ],
-        [
-            InlineKeyboardButton("🔥 Trending", callback_data="desi_cat:trending"),
-            InlineKeyboardButton("⚡ Desi New", callback_data="desi_cat:desi-new"),
-        ],
-        [
-            InlineKeyboardButton("📦 Desi Old", callback_data="desi_cat:desi-old"),
-            InlineKeyboardButton("💃 Tango Strip", callback_data="desi_cat:tango-strip"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
-    ])
+        back_callback=back_callback,
+    )
 
 
 def build_mmsmaza_hub_keyboard(back_callback: str = "cb_search") -> InlineKeyboardMarkup:
     """Hub keyboard for MMSMaza (Search top, Newest Releases, Categories, Back/Cancel)."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Search MMS", callback_data="sp_wpsearch:mmsmaza"),
+    return build_standard_hub_keyboard(
+        search_label="🔍 Search MMS",
+        search_callback="sp_wpsearch:mmsmaza",
+        action_rows=[
+            [
+                InlineKeyboardButton("🆕 Newest Releases", callback_data="sp_wplatest:mmsmaza"),
+                InlineKeyboardButton("📂 Categories", callback_data="sp_wpcats:mmsmaza"),
+            ]
         ],
-        [
-            InlineKeyboardButton("🆕 Newest Releases", callback_data="sp_wplatest:mmsmaza"),
-            InlineKeyboardButton("📂 Categories", callback_data="sp_wpcats:mmsmaza"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data=back_callback),
-            InlineKeyboardButton("❌ Cancel", callback_data="sp_cancel"),
-        ],
-    ])
+        back_callback=back_callback,
+    )
 
 
 def build_wp_categories_keyboard(

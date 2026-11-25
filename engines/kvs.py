@@ -339,16 +339,29 @@ def search_kvs_models(site_key: str, query: str, limit: int = 10) -> list[dict]:
             cand_soup = _fetch_soup(full_cand_url)
             if cand_soup and cand_soup.title:
                 t_str = cand_soup.title.get_text().lower()
-                if "404" not in t_str and "not found" not in t_str and "error" not in t_str:
-                    seen.add(full_cand_url)
-                    seen.add(cand_slug)
-                    models.append({
-                        "name": display_name,
-                        "url": full_cand_url,
-                        "slug": cand_slug,
-                    })
-                    if len(models) >= limit:
-                        return models
+                # Ensure it's not an error page or a generic fallback redirect to all models
+                if "404" in t_str or "not found" in t_str or "error" in t_str:
+                    continue
+                # Page title or slug must match query tokens, not generic index pages
+                if query_tokens and not any(t in t_str or t in cand_slug for t in query_tokens):
+                    continue
+                # Verify that the page has actual video/content links
+                has_content = any(
+                    "/video/" in a.get("href", "") or "/videos/" in a.get("href", "")
+                    for a in cand_soup.find_all("a", href=True)
+                )
+                if not has_content and "onlyfans" not in cand_slug:
+                    continue
+
+                seen.add(full_cand_url)
+                seen.add(cand_slug)
+                models.append({
+                    "name": display_name,
+                    "url": full_cand_url,
+                    "slug": cand_slug,
+                })
+                if len(models) >= limit:
+                    return models
         except Exception:
             pass
 
