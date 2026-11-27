@@ -19,6 +19,68 @@ from handlers.session import is_scrape_cancelled
 
 logger = logging.getLogger(__name__)
 
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_SAFE_CHUNK = 3900
+
+
+def _split_html_chunks(text: str, max_len: int = TELEGRAM_SAFE_CHUNK) -> list[str]:
+    """Split a long Telegram HTML message along line boundaries under max_len."""
+    if len(text) <= TELEGRAM_TEXT_LIMIT:
+        return [text]
+
+    chunks = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) > max_len:
+            if current:
+                chunks.append(current.rstrip("\n"))
+                current = ""
+            while len(line) > max_len:
+                chunks.append(line[:max_len])
+                line = line[max_len:]
+        current += line
+    if current:
+        chunks.append(current.rstrip("\n"))
+    return chunks or [text[:max_len]]
+
+
+async def _send_text_with_retry(
+    bot,
+    chat_id: int | str,
+    text: str,
+    reply_markup=None,
+    disable_web_page_preview: bool = True,
+    error_context: str = "card",
+):
+    """Send text (chunked if >4096 chars) with RetryAfter handling and cancellation checks."""
+    chunks = _split_html_chunks(text)
+    for idx, chunk in enumerate(chunks):
+        if is_scrape_cancelled(chat_id):
+            return
+        chunk_markup = reply_markup if idx == len(chunks) - 1 else None
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=disable_web_page_preview,
+                reply_markup=chunk_markup,
+            )
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            if is_scrape_cancelled(chat_id):
+                return
+            await bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=disable_web_page_preview,
+                reply_markup=chunk_markup,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send {error_context} to {chat_id}: {e}")
+            break
+
 
 async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = None, reply_markup=None):
     """Deliver a clean post card with downloaded thumbnail bytes and copyable link(s)."""
@@ -104,27 +166,14 @@ async def send_post_card(bot, chat_id: int | str, details: dict, user_id: int = 
         return
 
     # 3. Fallback to text message
-    try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=reply_markup,
-        )
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after + 1)
-        if is_scrape_cancelled(chat_id):
-            return
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=reply_markup,
-        )
-    except Exception as e:
-        logger.error(f"Failed to send post card to {chat_id}: {e}")
+    await _send_text_with_retry(
+        bot,
+        chat_id,
+        caption,
+        reply_markup=reply_markup,
+        disable_web_page_preview=True,
+        error_context="post card",
+    )
 
 
 async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int | str = None, reply_markup=None):
@@ -216,27 +265,14 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
     if is_scrape_cancelled(chat_id):
         return
 
-    try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=False,
-            reply_markup=reply_markup,
-        )
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after + 1)
-        if is_scrape_cancelled(chat_id):
-            return
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=False,
-            reply_markup=reply_markup,
-        )
-    except Exception as e:
-        logger.error(f"Failed to send LiveCam card: {e}")
+    await _send_text_with_retry(
+        bot,
+        chat_id,
+        caption,
+        reply_markup=reply_markup,
+        disable_web_page_preview=False,
+        error_context="LiveCam card",
+    )
 
 
 async def send_resurfaced_active_listing(bot, chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:

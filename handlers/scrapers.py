@@ -227,18 +227,15 @@ async def run_livecam_model_scrape(
         await status_msg.edit_text(extracting_text, parse_mode=ParseMode.HTML, reply_markup=stop_markup)
 
         target_proc_fn = _get_target_func("process_livecam_scrape", process_livecam_scrape)
-        for idx, v in enumerate(videos, start=1):
+        delivered_count = 0
+        for v in videos:
             if is_scrape_cancelled(cid):
                 logger.info(f"Model scrape cancelled by user in chat {cid}")
-                await bot.send_message(
-                    chat_id=cid,
-                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(videos)} videos.</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                )
                 break
             await target_proc_fn(bot, cid, v, user_id=uid)
             if is_scrape_cancelled(cid):
                 break
+            delivered_count += 1
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
         # 1. Ephemeral cleanup: Delete progress message so it does not linger above posts
@@ -252,7 +249,6 @@ async def run_livecam_model_scrape(
 
         # 2. Resurface Card 4 at bottom of chat
         stopped = is_scrape_cancelled(cid)
-        delivered_count = idx if not stopped else max(0, idx - 1)
         status_header = (
             f"🛑 <b>Scraping stopped!</b> Delivered: <b>{delivered_count}</b> video(s)"
             if stopped
@@ -481,18 +477,15 @@ async def run_forum_category_scrape(
         await status_msg.edit_text(extracting_text, parse_mode=ParseMode.HTML, reply_markup=stop_markup)
 
         target_proc_topic = _get_target_func("process_topic_scrape", process_topic_scrape)
-        for idx, t in enumerate(topics, start=1):
+        delivered_count = 0
+        for t in topics:
             if is_scrape_cancelled(cid):
                 logger.info(f"Category scrape cancelled by user in chat {cid}")
-                await bot.send_message(
-                    chat_id=cid,
-                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(topics)} topics.</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                )
                 break
             await target_proc_topic(bot, cid, t["url"], user_id=uid, topic_meta=t)
             if is_scrape_cancelled(cid):
                 break
+            delivered_count += 1
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
         # 1. Ephemeral cleanup: Delete top progress message so it does not clutter above posts
@@ -510,7 +503,6 @@ async def run_forum_category_scrape(
         total_str = cached_stats.get("total_str") or "Available"
         sort_val = sort_by or "start_date"
         stopped = is_scrape_cancelled(cid)
-        delivered_count = idx if not stopped else max(0, idx - 1)
 
         end_card_text = format_category_completion_card(
             delivered_count=delivered_count,
@@ -622,13 +614,9 @@ async def run_mmsvibex_listing_scrape(
         )
 
         target_send_card = _get_target_func("send_post_card", send_post_card)
-        for idx, it in enumerate(items, 1):
+        delivered_count = 0
+        for it in items:
             if is_scrape_cancelled(cid):
-                await bot.send_message(
-                    chat_id=cid,
-                    text=f"<blockquote>🛑 <b>Scraping stopped!</b> Delivered {idx-1}/{len(items)} items.</blockquote>",
-                    parse_mode=ParseMode.HTML,
-                )
                 break
 
             url = it["url"]
@@ -642,6 +630,7 @@ async def run_mmsvibex_listing_scrape(
             await target_send_card(bot, cid, details, user_id=uid)
             if is_scrape_cancelled(cid):
                 break
+            delivered_count += 1
             await cancellable_sleep(POST_SEND_DELAY, cid)
 
         # 1. Ephemeral cleanup: Delete progress message so it does not linger above posts
@@ -655,7 +644,6 @@ async def run_mmsvibex_listing_scrape(
 
         # 2. Resurface Card 2 at bottom of chat
         stopped = is_scrape_cancelled(cid)
-        delivered_count = idx if not stopped else max(0, idx - 1)
         status_header = (
             f"🛑 <b>Scraping stopped!</b> Delivered: <b>{delivered_count}</b> item(s)"
             if stopped

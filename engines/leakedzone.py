@@ -212,6 +212,40 @@ def get_leakedzone_video_details(video_url: str) -> dict:
     }
 
 
+def _extract_lz_card_title_and_duration(a_tag, parent) -> tuple[str, str | None]:
+    """Extract clean video title and duration from a LeakedZone listing card."""
+    duration = None
+    dur_search_root = parent or a_tag
+    if dur_search_root:
+        dur_el = dur_search_root.find(class_=re.compile(r"duration|time|badge|length", re.I))
+        if dur_el:
+            cand_dur = dur_el.get_text(strip=True)
+            if re.match(r"^\d{1,2}:\d{2}(?::\d{2})?$", cand_dur):
+                duration = cand_dur
+
+    title = a_tag.get("title")
+    if not title and parent:
+        t_el = parent.find(["h2", "h3", "h4"]) or parent.find(class_=re.compile(r"title|name", re.I))
+        if t_el:
+            title = t_el.get_text(" ", strip=True)
+    if not title:
+        img = a_tag.find("img")
+        if img and img.get("alt"):
+            title = img["alt"].strip()
+    if not title:
+        raw_txt = a_tag.get_text(" ", strip=True)
+        if not duration:
+            m_dur = re.match(r"^\s*(\d{1,2}:\d{2}(?::\d{2})?)(?![:\d])", raw_txt)
+            if m_dur:
+                duration = m_dur.group(1)
+        cleaned = re.sub(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s*", "", raw_txt)
+        cleaned = re.sub(r"\s*@[A-Za-z0-9_.-]+.*$", "", cleaned)
+        cleaned = re.sub(r"\s*[·•]\s*#\d+.*$", "", cleaned)
+        cleaned = re.sub(r"\s*\d+\s+views?.*$", "", cleaned, flags=re.I).strip(" ·•-")
+        title = cleaned
+    return (title or "LeakedZone Video"), duration
+
+
 def get_leakedzone_model_videos(
     model_or_url: str,
     sort: str = "newest",
@@ -253,16 +287,8 @@ def get_leakedzone_model_videos(
                 continue
             seen.add(full_url)
 
-            # Find title
-            title = a.get("title") or a.get_text(strip=True)
-            if not title:
-                parent = a.find_parent(["div", "article", "li"])
-                if parent:
-                    t_el = parent.find(["h2", "h3", "h4", "span", "p"])
-                    if t_el:
-                        title = t_el.get_text(strip=True)
-            if not title:
-                title = "LeakedZone Video"
+            parent = a.find_parent(["div", "article", "li"])
+            title, duration = _extract_lz_card_title_and_duration(a, parent)
 
             # Thumbnail
             thumb = None
@@ -272,14 +298,6 @@ def get_leakedzone_model_videos(
             if thumb:
                 thumb = urljoin("https://leakedzone.com", thumb)
                 thumb = _clean_highres_image_url(thumb)
-
-            # Duration
-            duration = None
-            parent = a.find_parent(["div", "article", "li"])
-            if parent:
-                dur_el = parent.find(class_=re.compile(r"duration|time", re.I))
-                if dur_el:
-                    duration = dur_el.get_text(strip=True)
 
             items.append({
                 "title": title,

@@ -389,6 +389,85 @@ class TestBugFixes(unittest.IsolatedAsyncioTestCase):
             await setchannel_command(update, context)
             update.effective_message.reply_text.assert_awaited_once()
 
+    def test_leakedzone_listing_card_extracts_clean_title_and_duration(self):
+        """Verify listing card parser separates glued duration and metadata from video titles."""
+        from bs4 import BeautifulSoup
+        from engines.leakedzone import get_leakedzone_model_videos
+
+        sample_html = """
+        <html><body>
+            <div class="card">
+                <a href="/samplecreator/video/22079644">
+                    <img src="/storage/thumb.webp"/>02:06Sample Clip Title@samplecreator · #22079644 · 846 views · 1 year ago
+                </a>
+            </div>
+        </body></html>
+        """
+        with patch("engines.leakedzone._fetch_soup", return_value=BeautifulSoup(sample_html, "html.parser")):
+            items = get_leakedzone_model_videos("samplecreator", limit=5)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["title"], "Sample Clip Title")
+            self.assertEqual(items[0]["duration"], "02:06")
+
+    async def test_delivery_chunks_messages_over_4096(self):
+        """Verify send_post_card splits captions over Telegram 4096-char limit without losing markup."""
+        from handlers.delivery import send_post_card
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+        bot_mock = MagicMock()
+        bot_mock.send_message = AsyncMock()
+        links = [f"https://streamtape.com/e/part_{i:02d}_" + ("x" * 55) for i in range(60)]
+        details = {
+            "title": "Multi Link Collection",
+            "post_url": "https://dropmms.com/topic/1-collection/",
+            "streaming_links": links,
+        }
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="cb_search")]])
+
+        await send_post_card(bot_mock, 12345, details, reply_markup=markup)
+        self.assertGreater(bot_mock.send_message.await_count, 1)
+        calls = bot_mock.send_message.await_args_list
+        for idx, c in enumerate(calls):
+            self.assertLessEqual(len(c.kwargs["text"]), 4096)
+            if idx < len(calls) - 1:
+                self.assertIsNone(c.kwargs.get("reply_markup"))
+            else:
+                self.assertIs(c.kwargs.get("reply_markup"), markup)
+
+    async def test_livecam_scrape_sends_single_stop_notification(self):
+        """Verify mid-scrape cancellation sends only one Scraping stopped notification card."""
+        from handlers.scrapers import run_livecam_model_scrape
+        from handlers.session import cancel_scrape_for_chat
+
+        status_msg = AsyncMock()
+        status_msg.message_id = 900
+        bot_mock = MagicMock()
+        bot_mock.send_message = AsyncMock(return_value=MagicMock(message_id=901))
+        videos = [
+            {"title": "V1", "video_url": "https://livecamrips.to/video/1"},
+            {"title": "V2", "video_url": "https://livecamrips.to/video/2"},
+        ]
+
+        async def _proc_cancel(b, cid, v, user_id=None):
+            cancel_scrape_for_chat(cid)
+
+        with patch("bot.get_livecam_model_videos", return_value=videos), \
+             patch("bot.process_livecam_scrape", side_effect=_proc_cancel):
+            await run_livecam_model_scrape(
+                bot=bot_mock,
+                chat_id=12345,
+                target_url="https://livecamrips.to/model/1/Creator",
+                status_msg=status_msg,
+            )
+
+        stop_msgs = [
+            c.kwargs["text"]
+            for c in bot_mock.send_message.await_args_list
+            if "Scraping stopped!" in c.kwargs.get("text", "")
+        ]
+        self.assertEqual(len(stop_msgs), 1)
+        self.assertIn("Delivered: <b>0</b>", stop_msgs[0])
+
 
 if __name__ == "__main__":
     unittest.main()
