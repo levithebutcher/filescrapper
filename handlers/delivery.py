@@ -199,6 +199,23 @@ async def send_livecam_card(bot, chat_id: int | str, details: dict, user_id: int
     if is_scrape_cancelled(chat_id):
         return
 
+    if image_bytes and len(caption) > 1024:
+        try:
+            photo_file = io.BytesIO(image_bytes)
+            photo_file.name = "thumb.jpg"
+            short_caption = f"<blockquote>📹 <b>{html.escape(details.get('title', 'LiveCam Video'))}</b></blockquote>"
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=short_caption,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.warning(f"Detached LiveCam photo send failed: {e}")
+
+    if is_scrape_cancelled(chat_id):
+        return
+
     try:
         await bot.send_message(
             chat_id=chat_id,

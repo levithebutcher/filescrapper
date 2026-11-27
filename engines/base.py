@@ -50,6 +50,23 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_SITE_DOMAINS = (
+    "dropmms.com",
+    "mmstown.com",
+    "mmsvibex.life",
+    "gulabihub.com",
+    "omaal63.net",
+    "desijugar.me",
+    "mmsmaza.im",
+    "livecamrips.to",
+    "leakedzone.com",
+    "x-video.tube",
+    "hornysapiens.com",
+    "viralxxxporn.com",
+    "thotchicks.com",
+    "mmsdesi.me",
+)
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1221,18 +1238,7 @@ def parse_slicing_args(args: list[str]) -> tuple[str | None, int | None, int | N
 
     for arg in args:
         a = arg.strip()
-        if re.match(r"^https?://", a, re.I) or any(
-            d in a.lower()
-            for d in [
-                "dropmms.com",
-                "mmstown.com",
-                "mmsvibex.life",
-                "gulabihub.com",
-                "omaal63.net",
-                "desijugar.me",
-                "livecamrips.to",
-            ]
-        ):
+        if re.match(r"^https?://", a, re.I) or any(d in a.lower() for d in SUPPORTED_SITE_DOMAINS):
             target_url = a
         else:
             remaining.append(a)

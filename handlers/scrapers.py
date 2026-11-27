@@ -556,6 +556,7 @@ async def run_mmsvibex_listing_scrape(
     target_url: str,
     start_idx: int | None = None,
     end_idx: int | None = None,
+    page_num: int | None = None,
     is_last_n: bool = False,
     status_msg=None,
     user_id: int | str = None,
@@ -598,8 +599,11 @@ async def run_mmsvibex_listing_scrape(
         else:
             status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
 
+        if context and status_msg and hasattr(status_msg, "message_id"):
+            context.user_data[f"active_progress_msg_{cid}"] = status_msg.message_id
+
         target_items_fn = _get_target_func("get_mmsvibex_listing_items", get_mmsvibex_listing_items)
-        items = await asyncio.to_thread(target_items_fn, target_url, page=1, limit=limit)
+        items = await asyncio.to_thread(target_items_fn, target_url, page=page_num or 1, limit=limit)
         items = apply_slice(items, start_idx=start_idx, end_idx=end_idx, is_last_n=is_last_n)
 
         if not items:
@@ -701,6 +705,7 @@ async def run_wp_listing_scrape(
     target_url: str,
     start_idx: int | None = None,
     end_idx: int | None = None,
+    page_num: int | None = None,
     is_last_n: bool = False,
     status_msg=None,
     user_id: int | str = None,
@@ -743,8 +748,11 @@ async def run_wp_listing_scrape(
         else:
             status_msg = await bot.send_message(chat_id=cid, text=loading_text, parse_mode=ParseMode.HTML)
 
+        if context and status_msg and hasattr(status_msg, "message_id"):
+            context.user_data[f"active_progress_msg_{cid}"] = status_msg.message_id
+
         target_listing_fn = _get_target_func("get_wp_listing_posts", get_wp_listing_posts)
-        posts = await asyncio.to_thread(target_listing_fn, target_url, page=1, limit=limit)
+        posts = await asyncio.to_thread(target_listing_fn, target_url, page=page_num or 1, limit=limit)
         posts = apply_slice(posts, start_idx=start_idx, end_idx=end_idx, is_last_n=is_last_n)
 
         if not posts:
@@ -778,6 +786,9 @@ async def run_wp_listing_scrape(
             if is_scrape_cancelled(cid):
                 break
             await cancellable_sleep(POST_SEND_DELAY, cid)
+
+        if context:
+            context.user_data.pop(f"active_progress_msg_{cid}", None)
 
         if not is_scrape_cancelled(cid):
             back_cb = "cb_search"

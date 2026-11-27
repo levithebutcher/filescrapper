@@ -11,7 +11,7 @@ Extracts direct CDN MP4 streams, quality tags, models, duration, and handles sor
 import re
 import html
 import logging
-from urllib.parse import urljoin, quote_plus
+from urllib.parse import urljoin, urlparse, quote_plus
 from bs4 import BeautifulSoup
 
 from engines.base import (
@@ -39,8 +39,14 @@ def is_kvs_video_url(url: str) -> bool:
     """Check if URL is an individual video page on KVS sites."""
     if not is_kvs_url(url):
         return False
-    u = url.lower()
-    return "/video/" in u or "/videos/" in u
+    path = urlparse(url.lower()).path.rstrip("/")
+    # Exclude tag, model, category, or search listing routes even when suffixed with /videos
+    if re.search(r"^/(tags?|models?|categor(?:y|ies)|search)/", path):
+        return False
+    # Exclude paginated listing index like /videos or /videos/2
+    if re.fullmatch(r"/videos(?:/\d{1,2})?", path):
+        return False
+    return bool(re.match(r"^/videos?/[^/]+", path))
 
 
 def is_kvs_listing_url(url: str) -> bool:

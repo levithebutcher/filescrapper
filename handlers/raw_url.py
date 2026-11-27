@@ -27,6 +27,7 @@ from handlers.scrapers import (
     process_topic_scrape,
 )
 
+from engines.base import SUPPORTED_SITE_DOMAINS
 from ui import format_listing_menu_card
 from keyboards import (
     build_mmsvibex_mode_keyboard,
@@ -98,25 +99,7 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
         return
 
     if not target_url.startswith("http://") and not target_url.startswith("https://"):
-        if any(
-            d in target_url.lower()
-            for d in [
-                "dropmms.com",
-                "mmstown.com",
-                "mmsvibex.life",
-                "gulabihub.com",
-                "omaal63.net",
-                "desijugar.me",
-                "mmsmaza.im",
-                "livecamrips.to",
-                "leakedzone.com",
-                "x-video.tube",
-                "hornysapiens.com",
-                "viralxxxporn.com",
-                "thotchicks.com",
-                "mmsdesi.me",
-            ]
-        ):
+        if any(d in target_url.lower() for d in SUPPORTED_SITE_DOMAINS):
             target_url = f"https://{target_url}"
         else:
             return
@@ -338,15 +321,21 @@ async def handle_raw_url(update: Update, context: ContextTypes.DEFAULT_TYPE, raw
     # 9. KVS Listing (X-Video, HornySapiens, ViralXXXPorn)
     if is_kvs_listing_url(target_url):
         end_scrape_for_chat(chat_id)
-        slug = target_url.rstrip("/").split("/")[-1]
+        parts_u = [
+            p
+            for p in target_url.split("?")[0].strip("/").split("/")
+            if p and p.lower() not in ("videos", "video", "tags", "models", "categories")
+        ]
+        slug = parts_u[-1] if parts_u else target_url.rstrip("/").split("/")[-1]
+        short_id = db.get_or_create_short_id(target_url)
         if "x-video.tube" in target_url.lower():
-            markup = build_xvideo_hub_keyboard(tag_or_slug=slug, back_callback="cb_search")
+            markup = build_xvideo_hub_keyboard(tag_or_slug=str(short_id), back_callback="cb_search")
             card_title = "X-Video Tube"
         else:
-            markup = build_hornysapiens_hub_keyboard(model_slug=slug, back_callback="cb_search")
+            markup = build_hornysapiens_hub_keyboard(model_slug=str(short_id), back_callback="cb_search")
             card_title = "HornySapiens"
         await msg.reply_text(
-            f"<blockquote>📺 <b>{card_title}: {html.escape(slug.title())}</b>\nSelect search or sorting:</blockquote>",
+            f"<blockquote>📺 <b>{card_title}: {html.escape(slug.replace('-', ' ').title())}</b>\nSelect search or sorting:</blockquote>",
             parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )

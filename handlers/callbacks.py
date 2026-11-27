@@ -30,6 +30,7 @@ from handlers.commands import (
     search_command,
     sethost_command,
     setlink_command,
+    channels_command,
 )
 from handlers.feed import (
     today_command,
@@ -90,6 +91,75 @@ from scraper import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_WP_SITE_INFO = {
+    "omaal": ("Omaal63", "https://omaal63.net/"),
+    "desijugar": ("DesiJugar", "https://desijugar.me/"),
+    "gulabi": ("GulabiHub", "https://gulabihub.com/"),
+    "mmsmaza": ("MMSMaza", "https://mmsmaza.im/"),
+}
+_WP_SITE_NAMES = {k: v[0] for k, v in _WP_SITE_INFO.items()}
+
+_TRANSIENT_RANGE_KEYS = (
+    "awaiting_model_range",
+    "awaiting_category_range",
+    "awaiting_vibex_range",
+    "awaiting_wp_range",
+)
+
+
+def _clear_transient_states(context: ContextTypes.DEFAULT_TYPE, include_search_results: bool = True):
+    """Clear active prompt/selection states to prevent cross-flow input collisions."""
+    if not context or not hasattr(context, "user_data") or not isinstance(context.user_data, dict):
+        return
+    for key in _TRANSIENT_RANGE_KEYS:
+        context.user_data.pop(key, None)
+    context.user_data.pop("awaiting_search", None)
+    context.user_data.pop("awaiting_search_flow", None)
+    if include_search_results:
+        context.user_data.pop("active_search_results", None)
+
+
+async def _handle_mv_all(query, context: ContextTypes.DEFAULT_TYPE, sid: int):
+    """Extract all parts belonging to a multi-part MMSVibex collection."""
+    target_url = db.get_url_from_short_id(sid)
+    details = context.user_data.get(f"mv_dt_{sid}")
+    if not details and target_url:
+        details = await asyncio.to_thread(_get_target_func("get_mmsvibex_video_details", get_mmsvibex_video_details), target_url)
+
+    col_url = details.get("collection_url") if details else None
+    if not col_url and target_url:
+        col_url = target_url
+
+    chat_id = query.message.chat_id
+    start_scrape_for_chat(chat_id)
+    status_msg = await query.message.reply_text("🚀 <i>Extracting all collection parts...</i>", parse_mode=ParseMode.HTML)
+    try:
+        col_items = await asyncio.to_thread(_get_target_func("get_mmsvibex_actor_videos", get_mmsvibex_actor_videos), col_url) if col_url else []
+        if not col_items and details:
+            col_items = [{"title": details.get("title", "Video"), "url": target_url}]
+
+        await status_msg.edit_text(
+            f"<blockquote>📦 <b>Found {len(col_items)} part(s) in collection!</b>\n<i>Extracting direct MP4s...</i></blockquote>",
+            parse_mode=ParseMode.HTML,
+        )
+
+        for item in col_items:
+            if is_scrape_cancelled(chat_id):
+                break
+            p_details = await asyncio.to_thread(_get_target_func("get_mmsvibex_video_details", get_mmsvibex_video_details), item["url"])
+            p_details["hide_collection_link"] = True
+            await _get_target_func("send_post_card", send_post_card)(context.bot, chat_id, p_details, user_id=query.from_user.id)
+            if is_scrape_cancelled(chat_id):
+                break
+            await cancellable_sleep(POST_SEND_DELAY, chat_id)
+    finally:
+        end_scrape_for_chat(chat_id)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
 
 
 def _get_target_func(name: str, fallback):
@@ -157,6 +227,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(prompt_text, parse_mode=ParseMode.HTML, reply_markup=markup)
             return
         if plat == "fm":
+            _clear_transient_states(context)
             try:
                 await query.edit_message_text(
                     "<blockquote>💬 <b>DropMMS Forums</b>\n⏳ <i>Fetching forum categories...</i></blockquote>",
@@ -203,6 +274,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif plat == "mmst":
+            _clear_transient_states(context)
             try:
                 await query.edit_message_text(
                     "<blockquote>💬 <b>MMSTown Forums</b>\n⏳ <i>Fetching forum categories...</i></blockquote>",
@@ -264,6 +336,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif plat == "wplock":
+            _clear_transient_states(context)
             buttons = [
                 [
                     InlineKeyboardButton("📁 Omaal63", callback_data="sp_wpsite:omaal"),
@@ -526,6 +599,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
     elif data.startswith("sp_vsort:"):
         _, sort_key = data.split(":")
+        _clear_transient_states(context)
         v_sort_labels = {
             "latest": "Newest Videos",
             "most-viewed": "Most Viewed",
@@ -558,7 +632,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("sp_vapply:"):
         _, sort_key, r_str = data.split(":")
-        target_url = "https://mmsvibex.life/photos/" if sort_key == "photos" else f"https://mmsvibex.life/?filter={sort_key}"
+        vibex_flow = context.user_data.get("awaiting_vibex_range") or {}
+        if sort_key == "custom" and vibex_flow.get("url"):
+            target_url = vibex_flow["url"]
+        elif sort_key == "photos":
+            target_url = "https://mmsvibex.life/photos/"
+        else:
+            target_url = f"https://mmsvibex.life/?filter={sort_key}"
         start_idx, end_idx, page_num = parse_model_range_input(r_str)
         context.user_data.pop("awaiting_vibex_range", None)
         await _get_target_func("run_mmsvibex_listing_scrape", run_mmsvibex_listing_scrape)(
@@ -567,9 +647,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             target_url=target_url,
             start_idx=start_idx or 1,
             end_idx=end_idx,
+            page_num=page_num,
             status_msg=query.message,
             user_id=query.from_user.id,
-            listing_title=f"MMSVibex ({sort_key})",
+            listing_title=vibex_flow.get("sort_label") or f"MMSVibex ({sort_key})",
+            context=context,
+            sort_key=sort_key,
         )
         return
 
@@ -660,13 +743,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("sp_wplatest:"):
         _, site_key = data.split(":")
-        site_map = {
-            "omaal": ("Omaal63", "https://omaal63.net/"),
-            "desijugar": ("DesiJugar", "https://desijugar.me/"),
-            "gulabi": ("GulabiHub", "https://gulabihub.com/"),
-            "mmsmaza": ("MMSMaza", "https://mmsmaza.im/"),
-        }
-        s_info = site_map.get(site_key, ("Omaal63", "https://omaal63.net/"))
+        _clear_transient_states(context)
+        s_info = _WP_SITE_INFO.get(site_key, ("Omaal63", "https://omaal63.net/"))
         site_name, target_url = s_info
         context.user_data["awaiting_wp_range"] = {
             "url": target_url,
@@ -749,17 +827,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         site_key = parts[1]
         cat_sid = int(parts[2])
         page = 1
+        _clear_transient_states(context, include_search_results=False)
 
         cat_info = context.user_data.get(f"wpcat_{cat_sid}")
         cat_url = cat_info["url"] if cat_info else db.get_url_from_short_id(cat_sid)
         cat_name = cat_info.get("name", "Category") if cat_info else "Category"
 
-        site_map = {
-            "omaal": "Omaal63",
-            "desijugar": "DesiJugar",
-            "gulabi": "GulabiHub",
-        }
-        site_name = site_map.get(site_key, "WordPress")
+        site_name = _WP_SITE_NAMES.get(site_key, "WordPress")
 
         try:
             await query.edit_message_text(
@@ -840,12 +914,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         cat_url = cat_info["url"] if cat_info else db.get_url_from_short_id(cat_sid)
         cat_name = cat_info.get("name", "Category") if cat_info else "Category"
 
-        site_map = {
-            "omaal": "Omaal63",
-            "desijugar": "DesiJugar",
-            "gulabi": "GulabiHub",
-        }
-        site_name = site_map.get(site_key, "WordPress")
+        site_name = _WP_SITE_NAMES.get(site_key, "WordPress")
 
         try:
             await query.edit_message_text(
@@ -857,11 +926,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         results = await asyncio.to_thread(_get_target_func("get_wp_listing_posts", get_wp_listing_posts), cat_url, page, 10)
         back_cb = f"sp_wpcats:{site_key}"
-        if not results:
+        hit_end = False
+        if not results and page > 1:
+            hit_end = True
             page = max(1, page - 1)
             results = await asyncio.to_thread(_get_target_func("get_wp_listing_posts", get_wp_listing_posts), cat_url, page, 10)
 
-        total_pages = max(page + 1, page) if len(results) == 10 else page
+        total_pages = page if (hit_end or len(results) < 10) else max(page + 1, page)
         card_text = format_clean_category_posts_page(
             site_name=site_name,
             cat_name=cat_name,
@@ -934,12 +1005,12 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("sp_wpapply:"):
         _, site_key, r_str = data.split(":")
-        site_map = {
-            "omaal": ("Omaal63", "https://omaal63.net/"),
-            "desijugar": ("DesiJugar", "https://desijugar.me/"),
-            "gulabi": ("GulabiHub", "https://gulabihub.com/"),
-        }
-        site_name, target_url = site_map.get(site_key, ("Archive", "https://desijugar.me/"))
+        wp_flow = context.user_data.get("awaiting_wp_range") or {}
+        if site_key == "custom" and wp_flow.get("url"):
+            site_name = wp_flow.get("site_name", "Archive")
+            target_url = wp_flow["url"]
+        else:
+            site_name, target_url = _WP_SITE_INFO.get(site_key, ("Archive", "https://desijugar.me/"))
         start_idx, end_idx, page_num = parse_model_range_input(r_str)
         context.user_data.pop("awaiting_wp_range", None)
         await _get_target_func("run_wp_listing_scrape", run_wp_listing_scrape)(
@@ -948,9 +1019,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             target_url=target_url,
             start_idx=start_idx or 1,
             end_idx=end_idx,
+            page_num=page_num,
             status_msg=query.message,
             user_id=query.from_user.id,
             listing_title=f"{site_name} Latest",
+            context=context,
         )
         return
 
@@ -989,79 +1062,31 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 col_markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton("📦 Extract All Collection Parts", callback_data=f"mv_all:{sid}")
                 ]])
-            await _get_target_func("send_post_card", send_post_card)(
-                context.bot,
-                query.message.chat_id,
-                details,
-                user_id=query.from_user.id,
-                reply_markup=col_markup,
-            )
+            chat_id = query.message.chat_id
+            start_scrape_for_chat(chat_id)
+            try:
+                await _get_target_func("send_post_card", send_post_card)(
+                    context.bot,
+                    chat_id,
+                    details,
+                    user_id=query.from_user.id,
+                    reply_markup=col_markup,
+                )
+            finally:
+                end_scrape_for_chat(chat_id)
             try:
                 await query.message.delete()
             except Exception:
                 pass
             return
-        else:
-            # Advance mode: proceed to mv_all
-            data = f"mv_all:{sid}"
-
-    if data.startswith("mv_all:"):
-        _, sid_str = data.split(":")
-        sid = int(sid_str)
-        target_url = db.get_url_from_short_id(sid)
-        details = context.user_data.get(f"mv_dt_{sid}")
-        if not details and target_url:
-            details = await asyncio.to_thread(_get_target_func("get_mmsvibex_video_details", get_mmsvibex_video_details), target_url)
-
-        col_url = details.get("collection_url") if details else None
-        if not col_url and target_url:
-            col_url = target_url
-
-        chat_id = query.message.chat_id
-        start_scrape_for_chat(chat_id)
-        status_msg = await query.message.reply_text("🚀 <i>Extracting all collection parts...</i>", parse_mode=ParseMode.HTML)
-        try:
-            col_items = await asyncio.to_thread(_get_target_func("get_mmsvibex_actor_videos", get_mmsvibex_actor_videos), col_url) if col_url else []
-            if not col_items and details:
-                col_items = [{"title": details.get("title", "Video"), "url": target_url}]
-
-            await status_msg.edit_text(
-                f"<blockquote>📦 <b>Found {len(col_items)} part(s) in collection!</b>\n<i>Extracting direct MP4s...</i></blockquote>",
-                parse_mode=ParseMode.HTML,
-            )
-
-            for idx, item in enumerate(col_items, 1):
-                if is_scrape_cancelled(chat_id):
-                    break
-                p_details = await asyncio.to_thread(_get_target_func("get_mmsvibex_video_details", get_mmsvibex_video_details), item["url"])
-                p_details["hide_collection_link"] = True
-                await _get_target_func("send_post_card", send_post_card)(context.bot, chat_id, p_details, user_id=query.from_user.id)
-                if is_scrape_cancelled(chat_id):
-                    break
-                await cancellable_sleep(POST_SEND_DELAY, chat_id)
-        finally:
-            end_scrape_for_chat(chat_id)
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
+        await _handle_mv_all(query, context, sid)
         return
-    elif data.startswith("sp_wprun_id:"):
-        _, sid_str, lim_str = data.split(":")
-        sid = int(sid_str)
-        lim = int(lim_str)
-        wpurl = context.user_data.get(f"wp_url_{sid}") or db.get_url_from_short_id(sid) or "https://desijugar.me/"
-        await _get_target_func("run_wp_listing_scrape", run_wp_listing_scrape)(
-            bot=context.bot,
-            chat_id=query.message.chat_id,
-            target_url=wpurl,
-            start_idx=1,
-            end_idx=lim,
-            status_msg=query.message,
-            user_id=query.from_user.id,
-        )
+    elif data.startswith("mv_all:"):
+        _, sid_str = data.split(":")
+        await _handle_mv_all(query, context, int(sid_str))
+        return
     elif data.startswith("sp_cat:"):
-        context.user_data.pop("awaiting_category_range", None)
+        _clear_transient_states(context)
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)
         if not url:
@@ -1106,6 +1131,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         context.user_data["active_card_msg_id"] = query.message.message_id
     elif data.startswith("sp_csort:"):
+        _clear_transient_states(context)
         _, short_id_str, sort_val = data.split(":")
         short_id = int(short_id_str)
         url = db.get_url_from_short_id(short_id)
@@ -1178,6 +1204,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             context=context,
         )
     elif data.startswith("sp_cstm:"):
+        _clear_transient_states(context)
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)
         if not url:
@@ -1243,13 +1270,16 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             cat_title=cat_title,
             context=context,
         )
-    elif data == "noop":
+    elif data in ("noop", "sp_noop"):
         await query.answer()
         return
     elif data.startswith("sp_p:"):
-        _, plat, page_str = data.split(":")
-        page = int(page_str)
-        query_text = context.user_data.get("search_query", "").strip()
+        parts = data.split(":")
+        plat = parts[1]
+        page = int(parts[-1])
+        query_text = ":".join(parts[2:-1]).strip() if len(parts) >= 4 else ""
+        if not query_text:
+            query_text = context.user_data.get("search_query", "").strip()
         if not query_text:
             await query.edit_message_text("⚠️ Search query expired. Please run <code>/search</code> again.", parse_mode=ParseMode.HTML)
             return
@@ -1356,7 +1386,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
     elif data.startswith("sp_mdl:"):
-        context.user_data.pop("awaiting_model_range", None)
+        _clear_transient_states(context)
         short_id = int(data.split(":")[1])
         url = db.get_url_from_short_id(short_id)
         if not url:
@@ -1399,6 +1429,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=markup,
         )
     elif data.startswith("sp_sort:"):
+        _clear_transient_states(context)
         _, short_id_str, sort_val = data.split(":")
         short_id = int(short_id_str)
         url = db.get_url_from_short_id(short_id)
@@ -1910,6 +1941,25 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await domains_command(update, context)
     elif data == "cb_channel_help":
         await setchannel_command(update, context)
+    elif data == "cb_channels":
+        await channels_command(update, context)
+    elif data == "cb_channel_add":
+        await setchannel_command(update, context)
+    elif data == "cb_channel_rm":
+        channels = db.get_all_active_channels()
+        if not channels:
+            await query.edit_message_text("📢 No active channels to remove.")
+            return
+        rm_buttons = [
+            [InlineKeyboardButton(f"🗑️ {ch.get('title') or ch['channel_id']}", callback_data=f"unlink_{ch['channel_id']}")]
+            for ch in channels
+        ]
+        rm_buttons.append([InlineKeyboardButton("🔙 Back", callback_data="cb_channels")])
+        await query.edit_message_text(
+            "🗑️ <b>Select a channel to unlink from auto-feed:</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(rm_buttons),
+        )
     elif data == "cb_sethost":
         await sethost_command(update, context)
     elif data == "cb_setlink":
@@ -1976,8 +2026,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             target_url = target_id
 
         if target_url:
+            chat_id = query.message.chat_id
+            start_scrape_for_chat(chat_id)
             target_proc_topic = _get_target_func("process_topic_scrape", process_topic_scrape)
-            await target_proc_topic(context.bot, query.message.chat_id, target_url, user_id=query.from_user.id)
+            try:
+                await target_proc_topic(context.bot, chat_id, target_url, user_id=query.from_user.id)
+            finally:
+                end_scrape_for_chat(chat_id)
             re_sent = False
             active = context.user_data.get("active_listing")
             if active:
@@ -1997,6 +2052,33 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                     pass
         else:
             await query.message.reply_text("⚠️ This link has expired or is invalid. Please search or extract again.")
+    elif data.startswith("sp_ftoday:"):
+        sid_str = data.split(":")[1]
+        url = db.get_url_from_short_id(int(sid_str)) if sid_str.isdigit() else sid_str
+        if url:
+            await _get_target_func("run_forum_category_scrape", run_forum_category_scrape)(
+                bot=context.bot,
+                chat_id=query.message.chat_id,
+                target_url=url,
+                only_today=True,
+                date_filter="today",
+                status_msg=query.message,
+                user_id=query.from_user.id,
+                context=context,
+            )
+    elif data.startswith("sp_mtoday:") or data.startswith("sp_mall:"):
+        prefix, sid_str = data.split(":")
+        url = db.get_url_from_short_id(int(sid_str)) if sid_str.isdigit() else sid_str
+        if url:
+            await _get_target_func("run_livecam_model_scrape", run_livecam_model_scrape)(
+                bot=context.bot,
+                chat_id=query.message.chat_id,
+                target_url=url,
+                only_today=(prefix == "sp_mtoday"),
+                status_msg=query.message,
+                user_id=query.from_user.id,
+                context=context,
+            )
     elif data.startswith("unlink_"):
         try:
             ch_id = int(data[7:])

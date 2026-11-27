@@ -52,6 +52,7 @@ from scraper import (
     get_mmsdesi_video_details,
     get_wp_post_details,
 )
+from engines.base import SUPPORTED_SITE_DOMAINS
 from engines.leakedzone import is_leakedzone_url
 from engines.kvs import is_kvs_url
 from engines.thotchicks import is_thotchicks_url
@@ -124,9 +125,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 1. Number selection from active search results (HIGHEST PRIORITY AFTER KEYWORD FLOW)
+    # 1. Number selection from active search results (yields to explicit active range prompts)
+    has_active_range = any(
+        context.user_data.get(k)
+        for k in ("awaiting_model_range", "awaiting_category_range", "awaiting_vibex_range", "awaiting_wp_range")
+    )
     search_state = context.user_data.get("active_search_results")
-    if search_state and search_state.get("items"):
+    if search_state and search_state.get("items") and not has_active_range:
         items = search_state["items"]
         selection_indices = parse_search_selection(text, len(items))
         if selection_indices:
@@ -675,6 +680,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_url=vibex_flow["url"],
             start_idx=start_idx or 1,
             end_idx=end_idx,
+            page_num=page_num,
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
             listing_title=vibex_flow.get("sort_label", "MMSVibex Videos"),
@@ -757,24 +763,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_url=wp_flow["url"],
             start_idx=start_idx or 1,
             end_idx=end_idx,
+            page_num=page_num,
             status_msg=status_msg,
             user_id=update.effective_user.id if update.effective_user else None,
             listing_title=wp_flow.get("site_name", "Archive Posts"),
+            context=context,
         )
         return
 
     # 7. Raw URL detection
     if text.startswith("http://") or text.startswith("https://") or any(
-        d in text.lower()
-        for d in [
-            "dropmms.com",
-            "mmstown.com",
-            "mmsvibex.life",
-            "gulabihub.com",
-            "omaal63.net",
-            "desijugar.me",
-            "livecamrips.to",
-        ]
+        d in text.lower() for d in SUPPORTED_SITE_DOMAINS
     ):
         target_raw_fn = _get_target_func("handle_raw_url", handle_raw_url)
         await target_raw_fn(update, context, text)

@@ -355,7 +355,7 @@ async def setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if success:
             await msg.reply_text(
                 "✅ <b>Channel Linked Successfully!</b>\n\n"
-                f"📢 <b>Channel:</b> {html.escape(chat.title)}\n"
+                f"📢 <b>Channel:</b> {html.escape(chat.title or 'Connected Channel')}\n"
                 f"🎯 <b>Monitoring:</b> <code>{html.escape(target_category)}</code>\n"
                 "⏱️ <b>Auto-Feed:</b> Active (New drops will post here automatically)",
                 parse_mode=ParseMode.HTML,
@@ -392,7 +392,7 @@ async def setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             added_by=user.id,
         )
         await msg.reply_text(
-            f"✅ <b>Linked to Channel:</b> {html.escape(chat_info.title)}\n"
+            f"✅ <b>Linked to Channel:</b> {html.escape(chat_info.title or str(chat_info.id))}\n"
             f"🎯 <b>Category:</b> <code>{html.escape(custom_cat)}</code>\n"
             "🚀 Auto-feed activated!",
             parse_mode=ParseMode.HTML,

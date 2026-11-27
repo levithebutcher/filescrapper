@@ -766,9 +766,12 @@ def search_forum_advanced(
     }
 
 
-def search_forum(query: str, limit: int = 5, base_url: str = BASE_URL) -> list[dict]:
+def search_forum(query: str, limit: int = 5, base_url: str = BASE_URL, page: int = 1) -> list[dict]:
     """Search an IPS forum (DropMMS or MMSTown) by keyword and return top matching topics."""
-    res = search_forum_advanced(query=query, page=1, limit=limit, base_url=base_url)
+    if isinstance(base_url, int):
+        # Recover if positional arguments (query, page, limit) were provided
+        page, limit, base_url = limit, base_url, BASE_URL
+    res = search_forum_advanced(query=query, page=page, limit=limit, base_url=base_url)
     return res.get("topics", [])
 
 

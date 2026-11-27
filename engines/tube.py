@@ -384,4 +384,4 @@ class MediaTubeEngine(BaseEngine):
         return get_mmsvibex_listing_items(url, **kwargs)
 
     def search(self, query: str, limit: int = 10, **kwargs) -> list[dict]:
-        return search_mmsvibex(query, limit=limit)
+        return search_mmsvibex(query, page=kwargs.get("page", 1), limit=limit)

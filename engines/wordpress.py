@@ -8,7 +8,7 @@ and other WordPress-based lockers and tube blogs.
 import re
 import html
 import logging
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote_plus
 from bs4 import BeautifulSoup
 
 from engines.base import (
@@ -291,5 +291,5 @@ class WordPressLockerEngine(BaseEngine):
 
     def search(self, query: str, limit: int = 10, **kwargs) -> list[dict]:
         base_domain = kwargs.get("base_domain", "https://desijugar.me")
-        search_url = f"{base_domain.rstrip('/')}/?s={query.strip()}"
-        return get_wp_listing_posts(search_url, page=1, limit=limit)
+        search_url = f"{base_domain.rstrip('/')}/?s={quote_plus(query.strip())}"
+        return get_wp_listing_posts(search_url, page=kwargs.get("page", 1), limit=limit)

@@ -31,15 +31,19 @@ logger = logging.getLogger(__name__)
 
 async def cleanup_ephemeral_progress(context: ContextTypes.DEFAULT_TYPE, chat_id: int | str):
     """Clean up any ephemeral progress messages for the chat."""
-    if not context:
+    if not context or not hasattr(context, "user_data"):
         return
     key = f"active_progress_msg_{chat_id}"
     old_msg = context.user_data.pop(key, None)
-    if old_msg:
-        try:
+    if not old_msg:
+        return
+    try:
+        if hasattr(old_msg, "delete"):
             await old_msg.delete()
-        except Exception:
-            pass
+        elif isinstance(old_msg, int) and getattr(context, "bot", None):
+            await context.bot.delete_message(chat_id=int(chat_id), message_id=old_msg)
+    except Exception:
+        pass
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,6 +75,16 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await cleanup_ephemeral_progress(context, chat_id)
+    if context and hasattr(context, "user_data") and isinstance(context.user_data, dict):
+        for state_key in (
+            "awaiting_search_flow",
+            "awaiting_search",
+            "awaiting_model_range",
+            "awaiting_category_range",
+            "awaiting_vibex_range",
+            "awaiting_wp_range",
+        ):
+            context.user_data.pop(state_key, None)
     logger.info(f"🛑 [/stop] Stop requested by user in chat {chat_id}")
     cancel_scrape_for_chat(chat_id)
     await update.effective_message.reply_text(
@@ -186,11 +200,12 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View and manage auto-feed target channels."""
     uid = update.effective_user.id if update.effective_user else 0
-    if OWNER_ID and uid != OWNER_ID:
+    owner_id_str = str(OWNER_ID).strip() if OWNER_ID is not None else ""
+    if owner_id_str and str(uid) != owner_id_str:
         await update.effective_message.reply_text("⛔ This command is restricted to the bot owner.")
         return
 
-    channels = db.get_active_feed_channels()
+    channels = db.get_all_active_channels()
     if not channels:
         text = "📢 <b>Channel Auto-Feed:</b> No active channels registered."
     else:

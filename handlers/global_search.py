@@ -151,18 +151,20 @@ async def execute_global_search(
     if not clean_q:
         return []
 
-    async def _safe_search(engine_name: str, coro_func, *args) -> list[dict]:
+    async def _safe_search(engine_name: str, coro_func, *args, **kwargs) -> list[dict]:
         try:
             res = await asyncio.wait_for(
-                asyncio.to_thread(coro_func, *args),
+                asyncio.to_thread(coro_func, *args, **kwargs),
                 timeout=timeout_sec,
             )
             items = []
             for itm in (res or []):
                 # Standardize common fields
                 p_item = dict(itm)
-                p_item.setdefault("platform_name", engine_name)
-                p_item.setdefault("url", itm.get("post_url") or itm.get("url") or "")
+                if not p_item.get("platform_name"):
+                    p_item["platform_name"] = engine_name
+                if not p_item.get("url"):
+                    p_item["url"] = itm.get("post_url") or itm.get("video_url") or ""
                 items.append(p_item)
             return items
         except asyncio.TimeoutError:
@@ -181,7 +183,7 @@ async def execute_global_search(
         _safe_search("MMSMaza", get_wp_listing_posts, maza_url, page, limit_per_engine),
         _safe_search("MMSDesi", search_mmsdesi, clean_q, page, limit_per_engine),
         _safe_search("MMSVibex", search_mmsvibex, clean_q, page, limit_per_engine),
-        _safe_search("DropMMS", search_forum, clean_q, limit_per_engine),
+        _safe_search("DropMMS", search_forum, clean_q, limit=limit_per_engine, page=page),
     ]
 
     all_engine_results = await asyncio.gather(*tasks, return_exceptions=True)
